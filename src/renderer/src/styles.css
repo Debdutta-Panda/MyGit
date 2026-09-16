@@ -1,0 +1,413 @@
+:root {
+  color: #d7dee8;
+  background: #0d1117;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* { box-sizing: border-box; }
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+button,
+input,
+textarea { font: inherit; }
+
+.app-frame {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  background:
+    radial-gradient(circle at 78% -12%, rgba(32, 201, 151, 0.07), transparent 34%),
+    #0d1117;
+}
+
+.sidebar {
+  width: 244px;
+  min-width: 244px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #252b35;
+  background: rgba(16, 21, 28, 0.96);
+}
+
+.brand {
+  height: 72px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 0 17px;
+  -webkit-app-region: drag;
+}
+
+.app-frame[data-platform='darwin'] .brand {
+  padding-left: 78px;
+}
+
+.brand-mark {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 9px;
+  overflow: hidden;
+  filter: drop-shadow(0 5px 10px rgba(0, 0, 0, 0.24));
+}
+
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.nav-section-title {
+  margin: 4px 10px 8px;
+  color: #727d8c;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+}
+
+.nav-item {
+  width: 100%;
+  height: 36px;
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  margin-bottom: 4px;
+  color: #9da8b7;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+}
+
+.nav-item:hover { background: rgba(255, 255, 255, 0.035); }
+
+.nav-item[data-active] {
+  color: #dffcf3;
+  border-color: rgba(47, 158, 122, 0.25);
+  background: linear-gradient(90deg, rgba(32, 201, 151, 0.16), rgba(32, 201, 151, 0.07));
+}
+
+.nav-item[data-active] svg { color: #63e6be; }
+
+.nav-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+.sidebar-spacer { flex: 1; }
+
+.provider-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 12px;
+  padding: 10px;
+  border: 1px solid #272e38;
+  border-radius: 10px;
+  background: #151a22;
+}
+
+.main-area {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  height: 72px;
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  border-bottom: 1px solid #252b35;
+  background: rgba(14, 18, 24, 0.88);
+  -webkit-app-region: drag;
+}
+
+.topbar button { -webkit-app-region: no-drag; }
+
+.content-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+
+.accounts-content,
+.repositories-content,
+.settings-content {
+  width: min(920px, calc(100% - 64px));
+  margin: 0 auto;
+  padding: 52px 0;
+}
+
+.repositories-content { padding-top: 12px; }
+
+.settings-card {
+  padding: 22px;
+  border: 1px solid #29323d;
+  background: linear-gradient(110deg, rgba(22, 29, 37, 0.96), rgba(16, 21, 28, 0.9));
+}
+
+.intro-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.page-title { letter-spacing: -0.5px; }
+
+.empty-state {
+  min-height: 350px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 28px;
+  padding: 40px;
+  border: 1px dashed #343d49;
+  background:
+    radial-gradient(circle at 50% 20%, rgba(32, 201, 151, 0.06), transparent 38%),
+    rgba(17, 22, 29, 0.72);
+}
+
+.empty-icon-wrap {
+  width: 68px;
+  height: 68px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 5px;
+  color: #c9d1dc;
+  border: 1px solid #303844;
+  border-radius: 20px;
+  background: linear-gradient(145deg, #1c232c, #12171e);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.security-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 13px;
+  margin-top: 18px;
+  padding: 17px 18px;
+  border: 1px solid #252e37;
+  border-radius: 12px;
+  background: rgba(18, 24, 31, 0.7);
+}
+
+.account-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 18px;
+  border: 1px solid #29323d;
+  background: linear-gradient(110deg, rgba(22, 29, 37, 0.96), rgba(16, 21, 28, 0.9));
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.12);
+}
+
+.account-identity { min-width: 0; }
+
+.repository-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(170px, 220px) minmax(220px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.repository-sticky-controls {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  margin: 0;
+  padding: 8px 0 10px;
+  border-bottom: 1px solid rgba(37, 43, 53, 0.92);
+  background: rgba(13, 17, 23, 0.96);
+  box-shadow: 0 9px 18px rgba(6, 9, 13, 0.16);
+  backdrop-filter: blur(14px);
+}
+
+.topbar-tabs {
+  height: 100%;
+  margin-right: auto;
+  -webkit-app-region: no-drag;
+}
+
+.topbar-tabs .mantine-Tabs-list {
+  height: 100%;
+  align-items: stretch;
+  border-bottom: 0;
+}
+
+.topbar-tabs .mantine-Tabs-tab {
+  min-width: 112px;
+  height: 100%;
+  padding: 0 17px;
+  color: #919dab;
+  font-weight: 650;
+}
+
+.topbar-tabs .mantine-Tabs-tab[data-active] {
+  color: #8ce9cc;
+  border-bottom-color: #20c997;
+  background: linear-gradient(0deg, rgba(32, 201, 151, 0.09), transparent 60%);
+}
+
+.tab-count {
+  display: inline-flex;
+  min-width: 20px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.07);
+  font-size: 10px;
+}
+
+.repository-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px;
+  padding: 17px 18px;
+  border: 1px solid #29323d;
+  background: linear-gradient(110deg, rgba(22, 29, 37, 0.96), rgba(16, 21, 28, 0.9));
+}
+
+.repository-details { min-width: 0; }
+
+.repository-meta { color: #84909f; }
+
+.git-status-row {
+  color: #93a0af;
+}
+
+.git-loading {
+  min-height: 150px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid #29323d;
+  background: #11171e;
+}
+
+.git-file-list {
+  max-height: 280px;
+  overflow: auto;
+  padding-right: 3px;
+}
+
+.git-file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 12px;
+  border: 1px solid #29323d;
+  background: #11171e;
+}
+
+.git-file-name { min-width: 0; }
+
+.git-diff-panel {
+  padding: 13px;
+  border: 1px solid #29323d;
+  background: #0b0f14;
+}
+
+.git-diff-panel pre {
+  max-height: 300px;
+  margin: 0;
+  overflow: auto;
+  color: #c6d0dc;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.repository-empty { min-height: 300px; }
+
+.repository-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 8px;
+  padding: 15px 2px 2px;
+}
+
+.clone-path {
+  max-width: 560px;
+  overflow: hidden;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-option {
+  padding: 14px;
+  border: 1px solid rgba(47, 158, 122, 0.42);
+  background: rgba(32, 201, 151, 0.065);
+}
+
+.permission-note {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 9px;
+  padding: 12px;
+  color: #8f9baa;
+  border: 1px solid #2a313b;
+  border-radius: 9px;
+  background: #12171e;
+}
+
+.device-code-panel {
+  padding: 20px;
+  border: 1px solid rgba(47, 158, 122, 0.42);
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(32, 201, 151, 0.1), transparent 58%),
+    #12171e;
+}
+
+.device-code {
+  margin: 8px 0 16px;
+  color: #8ce9cc;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 25px;
+  font-weight: 750;
+  letter-spacing: 0.12em;
+}
+
+@media (max-width: 840px) {
+  .sidebar { width: 205px; min-width: 205px; }
+  .accounts-content,
+  .repositories-content,
+  .settings-content { width: calc(100% - 36px); padding: 32px 0; }
+  .repositories-content { padding-top: 8px; }
+  .topbar { padding: 0 18px; }
+  .repository-toolbar {
+    grid-template-columns: auto minmax(150px, 190px) minmax(180px, 1fr) auto;
+    gap: 8px;
+  }
+  .repository-pagination { align-items: flex-start; flex-direction: column; }
+}
