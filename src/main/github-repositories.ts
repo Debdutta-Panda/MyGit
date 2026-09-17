@@ -23,6 +23,7 @@ interface CloneRecord {
   fullName: string
   path: string
   clonedAt: string
+  lastSyncedAt?: string | null
 }
 
 interface RefreshTokenResponse {
@@ -116,22 +117,48 @@ const hasMatchingGitHubOrigin = async (path: string, fullName: string): Promise<
 
 const recordClone = async (accountId: number, fullName: string, path: string): Promise<void> => {
   const records = await readCloneRecords()
+  const existing = records.find(
+    (record) => record.accountId === accountId && record.fullName === fullName,
+  )
   const remaining = records.filter(
     (record) => !(record.accountId === accountId && record.fullName === fullName),
   )
-  remaining.push({ accountId, fullName, path, clonedAt: new Date().toISOString() })
+  remaining.push({
+    accountId,
+    fullName,
+    path,
+    clonedAt: existing?.clonedAt ?? new Date().toISOString(),
+    lastSyncedAt: existing?.lastSyncedAt ?? null,
+  })
   await writeCloneRecords(remaining)
 }
 
-const clonePathsForAccount = async (accountId: number): Promise<Map<string, string>> => {
+export const markRepositorySynced = async (path: string): Promise<string> => {
   const records = await readCloneRecords()
-  const paths = new Map<string, string>()
+  const record = records.find((item) => resolve(item.path) === resolve(path))
+  if (!record) throw new Error('The repository is not registered as a local clone.')
+  const syncedAt = new Date().toISOString()
+  record.lastSyncedAt = syncedAt
+  await writeCloneRecords(records)
+  return syncedAt
+}
+
+const clonePathsForAccount = async (
+  accountId: number,
+): Promise<Map<string, { path: string; lastSyncedAt: string | null }>> => {
+  const records = await readCloneRecords()
+  const paths = new Map<string, { path: string; lastSyncedAt: string | null }>()
 
   await Promise.all(
     records
       .filter((record) => record.accountId === accountId)
       .map(async (record) => {
-        if (await isGitRepository(record.path)) paths.set(record.fullName, record.path)
+        if (await isGitRepository(record.path)) {
+          paths.set(record.fullName, {
+            path: record.path,
+            lastSyncedAt: record.lastSyncedAt ?? null,
+          })
+        }
       }),
   )
   return paths
@@ -248,6 +275,7 @@ const fetchRepositories = async (
         updatedAt: repository.updated_at,
         profileUrl: repository.html_url,
         localPath: null,
+        lastSyncedAt: null,
         metadataLoaded: true,
       })),
     )
@@ -275,7 +303,8 @@ const listRepositories = async (accountId: number): Promise<GitHubRepository[]> 
     ...repository,
     accountId,
     accountLogin: auth.accountLogin,
-    localPath: clonePaths.get(repository.fullName) ?? null,
+    localPath: clonePaths.get(repository.fullName)?.path ?? null,
+    lastSyncedAt: clonePaths.get(repository.fullName)?.lastSyncedAt ?? null,
   }))
 }
 
@@ -334,6 +363,7 @@ const listClonedRepositoriesForSelection = async (
         updatedAt: record.clonedAt,
         profileUrl: `https://github.com/${record.fullName}`,
         localPath: record.path,
+        lastSyncedAt: record.lastSyncedAt ?? null,
         metadataLoaded: false,
       }
     })
@@ -371,6 +401,84 @@ const pathExists = async (path: string): Promise<boolean> => {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
     throw error
+  }
+}
+
+const gitOrigin = async (repositoryPath: string): Promise<string> =>
+  await new Promise((resolvePromise, reject) => {
+    const git = spawn('git', ['-C', repositoryPath, 'remote', 'get-url', 'origin'], {
+      shell: false,
+      windowsHide: true,
+    })
+    let output = ''
+    let errorOutput = ''
+    git.stdout.on('data', (chunk: Buffer) => { output += chunk.toString() })
+    git.stderr.on('data', (chunk: Buffer) => { errorOutput += chunk.toString() })
+    git.once('error', () => reject(new Error('Git is not installed or is not available in PATH.')))
+    git.once('close', (code) => {
+      if (code === 0) resolvePromise(output.trim())
+      else reject(new Error(errorOutput.trim() || 'The repository does not have an origin remote.'))
+    })
+  })
+
+const githubFullNameFromRemote = (remote: string): string | null => {
+  const match = remote.match(/^(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i)
+  return match ? `${match[1]}/${match[2]}` : null
+}
+
+const addLocalRepository = async (
+  event: Electron.IpcMainInvokeEvent,
+  requestedAccountId: number | null,
+): Promise<GitHubRepository | null> => {
+  const ownerWindow = BrowserWindow.fromWebContents(event.sender)
+  const options: Electron.OpenDialogOptions = {
+    title: 'Add local repository',
+    buttonLabel: 'Add repository',
+    defaultPath: app.getPath('documents'),
+    message: 'Select a local GitHub repository folder.',
+    properties: ['openDirectory'],
+  }
+  const selection = ownerWindow
+    ? await dialog.showOpenDialog(ownerWindow, options)
+    : await dialog.showOpenDialog(options)
+  if (selection.canceled || !selection.filePaths[0]) return null
+
+  const path = resolve(selection.filePaths[0])
+  if (!(await isGitRepository(path))) throw new Error('The selected folder is not a Git repository.')
+
+  const fullName = githubFullNameFromRemote(await gitOrigin(path))
+  if (!fullName || !repositoryNamePattern.test(fullName)) {
+    throw new Error('The origin remote is not a supported GitHub repository URL.')
+  }
+
+  const accounts = await listAccounts()
+  let account = requestedAccountId === null
+    ? accounts.find((item) => item.login.toLowerCase() === fullName.split('/')[0].toLowerCase())
+    : accounts.find((item) => item.id === requestedAccountId)
+  if (!account && accounts.length === 1) account = accounts[0]
+  if (!account) {
+    throw new Error('Choose the repository account from the account filter, then add it again.')
+  }
+
+  await recordClone(account.id, fullName, path)
+  return {
+    id: 0,
+    accountId: account.id,
+    accountLogin: account.login,
+    name: fullName.split('/')[1],
+    fullName,
+    description: null,
+    private: false,
+    fork: false,
+    archived: false,
+    language: null,
+    stars: 0,
+    defaultBranch: '',
+    updatedAt: new Date().toISOString(),
+    profileUrl: `https://github.com/${fullName}`,
+    localPath: path,
+    lastSyncedAt: null,
+    metadataLoaded: false,
   }
 }
 
@@ -558,6 +666,9 @@ export const registerRepositoryHandlers = (): void => {
   )
   ipcMain.handle('repositories:locate', (event, accountId: number, fullName: string) =>
     locateRepository(event, accountId, fullName),
+  )
+  ipcMain.handle('repositories:add-local', (event, accountId: number | null) =>
+    addLocalRepository(event, accountId),
   )
   ipcMain.handle('repositories:open-folder', async (_event, path: unknown) => {
     const resolvedPath = await verifiedClonePath(path)

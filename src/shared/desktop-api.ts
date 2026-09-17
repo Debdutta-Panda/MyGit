@@ -31,6 +31,7 @@ export interface GitHubRepository {
   updatedAt: string
   profileUrl: string
   localPath: string | null
+  lastSyncedAt: string | null
   metadataLoaded: boolean
 }
 
@@ -45,6 +46,7 @@ export interface AppSettings {
 export interface RepositoryGitStatus {
   path: string
   branch: string | null
+  upstream: string | null
   ahead: number
   behind: number
   staged: number
@@ -96,6 +98,7 @@ export interface DesktopApi {
     list: (accountId: number | null) => Promise<GitHubRepository[]>
     clone: (accountId: number, fullName: string) => Promise<CloneResult | null>
     locate: (accountId: number, fullName: string) => Promise<CloneResult | null>
+    addLocal: (accountId: number | null) => Promise<GitHubRepository | null>
     openFolder: (path: string) => Promise<void>
     openInVSCode: (path: string) => Promise<void>
     monitor: (paths: string[]) => Promise<RepositoryGitStatus[]>

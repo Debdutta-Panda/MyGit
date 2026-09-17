@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
 import {
   askPassPath,
+  markRepositorySynced,
   readCloneRecords,
   refreshedCredentials,
   verifiedClonePath,
@@ -190,7 +191,7 @@ export const registerRepositoryActionHandlers = (): void => {
   })
   ipcMain.handle('repositories:git-fetch', async (_event, path: unknown) => {
     const repositoryPath = await verifiedClonePath(path)
-    await runGit(repositoryPath, ['fetch', '--prune', 'origin'], {
+    await runGit(repositoryPath, ['-c', 'credential.helper=', 'fetch', '--prune', 'origin'], {
       env: await authenticatedEnvironment(repositoryPath),
       timeoutMs: 120_000,
     })
@@ -198,7 +199,7 @@ export const registerRepositoryActionHandlers = (): void => {
   })
   ipcMain.handle('repositories:git-pull', async (_event, path: unknown) => {
     const repositoryPath = await verifiedClonePath(path)
-    await runGit(repositoryPath, ['pull', '--ff-only'], {
+    await runGit(repositoryPath, ['-c', 'credential.helper=', 'pull', '--ff-only'], {
       env: await authenticatedEnvironment(repositoryPath),
       timeoutMs: 120_000,
     })
@@ -213,10 +214,21 @@ export const registerRepositoryActionHandlers = (): void => {
     } catch {
       hasUpstream = false
     }
-    await runGit(repositoryPath, hasUpstream ? ['push'] : ['push', '-u', 'origin', 'HEAD'], {
+    await runGit(repositoryPath, hasUpstream
+      ? ['-c', 'credential.helper=', 'push']
+      : ['-c', 'credential.helper=', 'push', '-u', 'origin', 'HEAD'], {
       env,
       timeoutMs: 120_000,
     })
-    return await refreshedDetails(repositoryPath)
+    const details = await refreshedDetails(repositoryPath)
+    if (
+      details.status.clean &&
+      details.status.upstream &&
+      details.status.ahead === 0 &&
+      details.status.behind === 0
+    ) {
+      await markRepositorySynced(repositoryPath)
+    }
+    return details
   })
 }

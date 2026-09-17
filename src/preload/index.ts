@@ -27,6 +27,7 @@ const desktopApi: DesktopApi = {
     list: (accountId) => ipcRenderer.invoke('repositories:list', accountId),
     clone: (accountId, fullName) => ipcRenderer.invoke('repositories:clone', accountId, fullName),
     locate: (accountId, fullName) => ipcRenderer.invoke('repositories:locate', accountId, fullName),
+    addLocal: (accountId) => ipcRenderer.invoke('repositories:add-local', accountId),
     openFolder: (path) => ipcRenderer.invoke('repositories:open-folder', path),
     openInVSCode: (path) => ipcRenderer.invoke('repositories:open-vscode', path),
     monitor: (paths) => ipcRenderer.invoke('repositories:monitor', paths),

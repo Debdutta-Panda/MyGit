@@ -26,6 +26,7 @@ export const readRepositoryStatus = async (repositoryPath: string): Promise<Repo
       resolvePromise({
         path: repositoryPath,
         branch: null,
+        upstream: null,
         ahead: 0,
         behind: 0,
         staged: 0,
@@ -41,6 +42,7 @@ export const readRepositoryStatus = async (repositoryPath: string): Promise<Repo
         resolvePromise({
           path: repositoryPath,
           branch: null,
+          upstream: null,
           ahead: 0,
           behind: 0,
           staged: 0,
@@ -54,6 +56,7 @@ export const readRepositoryStatus = async (repositoryPath: string): Promise<Repo
       }
 
       let branch: string | null = null
+      let upstream: string | null = null
       let ahead = 0
       let behind = 0
       let staged = 0
@@ -63,6 +66,7 @@ export const readRepositoryStatus = async (repositoryPath: string): Promise<Repo
 
       for (const line of output.split('\n')) {
         if (line.startsWith('# branch.head ')) branch = line.slice(14).trim()
+        else if (line.startsWith('# branch.upstream ')) upstream = line.slice(18).trim()
         else if (line.startsWith('# branch.ab ')) {
           const match = line.match(/\+(\d+)\s+-(\d+)/)
           if (match) {
@@ -80,6 +84,7 @@ export const readRepositoryStatus = async (repositoryPath: string): Promise<Repo
       resolvePromise({
         path: repositoryPath,
         branch,
+        upstream,
         ahead,
         behind,
         staged,

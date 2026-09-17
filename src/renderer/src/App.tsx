@@ -60,7 +60,7 @@ import myReposIcon from './assets/myrepos-icon.png'
 
 type AuthorizationState = 'idle' | 'starting' | 'waiting'
 type ActiveView = 'accounts' | 'repositories' | 'settings'
-type RepositoryTab = 'cloned' | 'new'
+type RepositoryTab = 'local' | 'github'
 const repositoriesPerPage = 15
 
 const errorMessage = (error: unknown): string => {
@@ -68,6 +68,17 @@ const errorMessage = (error: unknown): string => {
   return message
     .replace(/^Error invoking remote method '[^']+': Error: /, '')
     .replace(/^Error: /, '')
+}
+
+const timeAgo = (value: string, now: number): string => {
+  const seconds = Math.max(0, Math.floor((now - new Date(value).getTime()) / 1000))
+  if (seconds < 60) return 'just now'
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  return `${days}d ago`
 }
 
 const mergeRepositoryDetails = (
@@ -96,7 +107,7 @@ export function App() {
   const [repositoriesError, setRepositoriesError] = useState<string | null>(null)
   const [gitStatuses, setGitStatuses] = useState<Record<string, RepositoryGitStatus>>({})
   const [repositorySearch, setRepositorySearch] = useState('')
-  const [repositoryTab, setRepositoryTab] = useState<RepositoryTab>('cloned')
+  const [repositoryTab, setRepositoryTab] = useState<RepositoryTab>('local')
   const [repositoryPage, setRepositoryPage] = useState(1)
   const [cloningRepository, setCloningRepository] = useState<string | null>(null)
   const [cloneResult, setCloneResult] = useState<{ fullName: string; path: string } | null>(null)
@@ -115,13 +126,25 @@ export function App() {
   const [gitDetails, setGitDetails] = useState<RepositoryGitDetails | null>(null)
   const [gitPanelLoading, setGitPanelLoading] = useState(false)
   const [gitAction, setGitAction] = useState<string | null>(null)
+  const [cardGitAction, setCardGitAction] = useState<string | null>(null)
+  const [cardCommitRepository, setCardCommitRepository] = useState<GitHubRepository | null>(null)
+  const [cardCommitAll, setCardCommitAll] = useState(false)
+  const [cardCommitSync, setCardCommitSync] = useState(false)
+  const [cardCommitMessage, setCardCommitMessage] = useState('')
+  const [cardCommitError, setCardCommitError] = useState<string | null>(null)
   const [gitError, setGitError] = useState<string | null>(null)
   const [commitMessage, setCommitMessage] = useState('')
   const [diffTitle, setDiffTitle] = useState<string | null>(null)
   const [diffText, setDiffText] = useState<string | null>(null)
+  const [relativeTimeNow, setRelativeTimeNow] = useState(Date.now())
   const platform =
     window.desktop?.platform ??
     (navigator.userAgent.includes('Macintosh') ? 'darwin' : 'unknown')
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setRelativeTimeNow(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   useEffect(() => {
     const loadAccounts = async (): Promise<void> => {
@@ -217,10 +240,10 @@ export function App() {
     return [repository.fullName, repository.description ?? '', repository.language ?? '']
       .some((value) => value.toLowerCase().includes(query))
   })
-  const clonedRepositoryCount = repositories.filter((repository) => repository.localPath).length
-  const newRepositoryCount = repositories.length - clonedRepositoryCount
+  const localRepositoryCount = repositories.filter((repository) => repository.localPath).length
+  const githubOnlyRepositoryCount = repositories.length - localRepositoryCount
   const visibleRepositories = searchedRepositories.filter((repository) =>
-    repositoryTab === 'cloned' ? Boolean(repository.localPath) : !repository.localPath,
+    repositoryTab === 'local' ? Boolean(repository.localPath) : !repository.localPath,
   )
   const repositoryPageCount = Math.max(
     1,
@@ -230,7 +253,7 @@ export function App() {
     (repositoryPage - 1) * repositoriesPerPage,
     repositoryPage * repositoriesPerPage,
   )
-  const monitoredPaths = activeView === 'repositories' && repositoryTab === 'cloned'
+  const monitoredPaths = activeView === 'repositories' && repositoryTab === 'local'
     ? pagedRepositories.flatMap((repository) => repository.localPath ? [repository.localPath] : [])
     : []
   const monitoredPathsKey = JSON.stringify(monitoredPaths)
@@ -361,7 +384,7 @@ export function App() {
             ? { ...item, localPath: result.path }
             : item,
         ))
-        setRepositoryTab('cloned')
+        setRepositoryTab('local')
         setRepositoryPage(1)
       }
     } catch (error) {
@@ -388,8 +411,27 @@ export function App() {
           : item,
       ))
       setCloneResult({ fullName: repository.fullName, path: result.path })
-      setRepositoryTab('cloned')
+      setRepositoryTab('local')
       setRepositoryPage(1)
+    } catch (error) {
+      setRepositoriesError(errorMessage(error))
+    }
+  }
+
+  const addLocalRepository = async (): Promise<void> => {
+    if (!window.desktop || !selectedAccountId) return
+    setRepositoriesError(null)
+
+    try {
+      const repository = await window.desktop.repositories.addLocal(
+        selectedAccountId === 'all' ? null : Number(selectedAccountId),
+      )
+      if (!repository) return
+      setRepositories((current) => mergeRepositoryDetails([repository], current))
+      setCloneResult({ fullName: repository.fullName, path: repository.localPath! })
+      setRepositoryTab('local')
+      setRepositoryPage(1)
+      void refreshRepositories()
     } catch (error) {
       setRepositoriesError(errorMessage(error))
     }
@@ -446,6 +488,105 @@ export function App() {
       return false
     } finally {
       setGitAction(null)
+    }
+  }
+
+  const runCardGitAction = async (
+    repository: GitHubRepository,
+    action: 'pull' | 'push',
+  ): Promise<void> => {
+    if (!window.desktop || !repository.localPath) return
+
+    const actionKey = `${action}:${repository.localPath}`
+    setCardGitAction(actionKey)
+    setRepositoriesError(null)
+    try {
+      const details = action === 'pull'
+        ? await window.desktop.repositories.gitPull(repository.localPath)
+        : await window.desktop.repositories.gitPush(repository.localPath)
+      setGitStatuses((current) => ({ ...current, [details.status.path]: details.status }))
+    } catch (error) {
+      setRepositoriesError(errorMessage(error))
+    } finally {
+      setCardGitAction(null)
+    }
+  }
+
+  const openCardCommit = (
+    repository: GitHubRepository,
+    stageAll: boolean,
+    syncAfterCommit = false,
+  ): void => {
+    setCardCommitRepository(repository)
+    setCardCommitAll(stageAll)
+    setCardCommitSync(syncAfterCommit)
+    setCardCommitMessage('')
+    setCardCommitError(null)
+  }
+
+  const syncRepository = async (repository: GitHubRepository): Promise<void> => {
+    if (!window.desktop || !repository.localPath) return
+    const repositoryPath = repository.localPath
+    setCardGitAction(`sync:${repositoryPath}`)
+    setRepositoriesError(null)
+    try {
+      const pulledDetails = await window.desktop.repositories.gitPull(repositoryPath)
+      setGitStatuses((current) => ({
+        ...current,
+        [pulledDetails.status.path]: pulledDetails.status,
+      }))
+      const details = await window.desktop.repositories.gitPush(repositoryPath)
+      setGitStatuses((current) => ({ ...current, [details.status.path]: details.status }))
+      const syncedAt = new Date().toISOString()
+      setRepositories((current) => current.map((item) =>
+        item.localPath === repositoryPath ? { ...item, lastSyncedAt: syncedAt } : item,
+      ))
+      setRelativeTimeNow(Date.now())
+    } catch (error) {
+      setRepositoriesError(errorMessage(error))
+    } finally {
+      setCardGitAction(null)
+    }
+  }
+
+  const commitFromCard = async (): Promise<void> => {
+    if (!window.desktop || !cardCommitRepository?.localPath) return
+    const message = cardCommitMessage.trim()
+    if (!message) {
+      setCardCommitError('Enter a commit message.')
+      return
+    }
+
+    const repositoryPath = cardCommitRepository.localPath
+    setCardGitAction(`${cardCommitSync ? 'sync' : 'commit'}:${repositoryPath}`)
+    setCardCommitError(null)
+    try {
+      if (cardCommitAll) await window.desktop.repositories.gitStage(repositoryPath, [])
+      let details = await window.desktop.repositories.gitCommit(repositoryPath, message)
+      setGitStatuses((current) => ({ ...current, [details.status.path]: details.status }))
+      if (cardCommitSync) {
+        try {
+          await window.desktop.repositories.gitPull(repositoryPath)
+          details = await window.desktop.repositories.gitPush(repositoryPath)
+          const syncedAt = new Date().toISOString()
+          setRepositories((current) => current.map((item) =>
+            item.localPath === repositoryPath ? { ...item, lastSyncedAt: syncedAt } : item,
+          ))
+          setRelativeTimeNow(Date.now())
+        } catch (error) {
+          setCardCommitRepository(null)
+          setRepositoriesError(`Commit succeeded, but sync failed: ${errorMessage(error)}`)
+          return
+        }
+      }
+      setGitStatuses((current) => ({ ...current, [details.status.path]: details.status }))
+      setCardCommitRepository(null)
+      setCardCommitMessage('')
+      setCardCommitSync(false)
+    } catch (error) {
+      setCardCommitError(errorMessage(error))
+    } finally {
+      setCardGitAction(null)
     }
   }
 
@@ -557,24 +698,34 @@ export function App() {
               </Text>
             </div>
           ) : activeView === 'repositories' ? (
+            <>
             <Tabs
               className="topbar-tabs"
               value={repositoryTab}
               onChange={(value) => {
-                setRepositoryTab((value as RepositoryTab | null) ?? 'new')
+                setRepositoryTab((value as RepositoryTab | null) ?? 'github')
                 setRepositoryPage(1)
                 contentScrollRef.current?.scrollTo({ top: 0 })
               }}
             >
               <Tabs.List>
-                <Tabs.Tab value="cloned" leftSection={<IconCheck size={14} />}>
-                  Cloned <span className="tab-count">{clonedRepositoryCount}</span>
+                <Tabs.Tab value="local" leftSection={<IconCheck size={14} />}>
+                  Local <span className="tab-count">{localRepositoryCount}</span>
                 </Tabs.Tab>
-                <Tabs.Tab value="new" leftSection={<IconPlus size={14} />}>
-                  New <span className="tab-count">{repositoriesLoading ? '…' : newRepositoryCount}</span>
+                <Tabs.Tab value="github" leftSection={<IconPlus size={14} />}>
+                  GitHub <span className="tab-count">{repositoriesLoading ? '…' : githubOnlyRepositoryCount}</span>
                 </Tabs.Tab>
               </Tabs.List>
             </Tabs>
+            <Button
+              size="xs"
+              variant="light"
+              leftSection={<IconFolderSearch size={15} />}
+              onClick={() => void addLocalRepository()}
+            >
+              Add local repository
+            </Button>
+            </>
           ) : (
             <div>
               <Text fw={700} fz="lg">Settings</Text>
@@ -761,7 +912,7 @@ export function App() {
                   />
                   <Badge variant="outline" color="gray" size="lg">
                     {visibleRepositories.length}{' '}
-                    {repositoryTab === 'cloned' ? 'cloned' : 'new'}
+                    {repositoryTab === 'local' ? 'local' : 'on GitHub'}
                   </Badge>
                 </section>
               </div>
@@ -782,7 +933,7 @@ export function App() {
                 <Alert mt="lg" color="teal" icon={<IconCheck size={17} />}>
                   <Group justify="space-between" wrap="nowrap">
                     <div>
-                      <Text size="sm" fw={650}>{cloneResult.fullName} cloned</Text>
+                      <Text size="sm" fw={650}>{cloneResult.fullName} is ready locally</Text>
                       <Text size="xs" c="dimmed" className="clone-path">{cloneResult.path}</Text>
                     </div>
                     <Group gap="xs" wrap="nowrap">
@@ -822,17 +973,27 @@ export function App() {
                   <Text fz={18} fw={680}>
                     {repositorySearch
                       ? 'No matching repositories'
-                      : repositoryTab === 'cloned'
-                        ? 'No cloned repositories yet'
-                        : 'No new repositories'}
+                      : repositoryTab === 'local'
+                        ? 'No local repositories yet'
+                        : 'No GitHub-only repositories'}
                   </Text>
                   <Text size="sm" c="dimmed" ta="center">
                     {repositorySearch
                       ? 'Try a different search.'
-                      : repositoryTab === 'cloned'
-                        ? 'Clone a repository or locate an existing local clone.'
-                        : 'Every available repository is already cloned.'}
+                      : repositoryTab === 'local'
+                        ? 'Add an existing repository or get one from GitHub.'
+                        : 'Every available GitHub repository is already local.'}
                   </Text>
+                  {!repositorySearch && repositoryTab === 'local' && (
+                    <Button
+                      mt="xs"
+                      variant="light"
+                      leftSection={<IconFolderSearch size={16} />}
+                      onClick={() => void addLocalRepository()}
+                    >
+                      Add local repository
+                    </Button>
+                  )}
                 </Paper>
               ) : (
                 <Stack gap="sm" mt="lg">
@@ -870,23 +1031,31 @@ export function App() {
                               )}
                             </>
                           )}
-                          {repository.localPath && (
-                            <Badge
-                              size="xs"
-                              variant="light"
-                              color="teal"
-                              leftSection={<IconCheck size={10} />}
-                            >
-                              Cloned
-                            </Badge>
-                          )}
                           {repository.localPath && gitStatus && !gitStatus.error && (
                             <Badge
                               size="xs"
                               variant="light"
-                              color={gitStatus.conflicts > 0 ? 'red' : gitStatus.clean ? 'teal' : 'yellow'}
+                              color={gitStatus.conflicts > 0
+                                ? 'red'
+                                : gitStatus.clean && gitStatus.upstream &&
+                                    gitStatus.ahead === 0 && gitStatus.behind === 0
+                                  ? 'teal'
+                                  : gitStatus.clean
+                                    ? 'blue'
+                                    : 'yellow'}
                             >
-                              {gitStatus.clean ? 'Clean' : `${changeCount} changes`}
+                              {gitStatus.conflicts > 0
+                                ? `${gitStatus.conflicts} conflicts`
+                                : gitStatus.clean && gitStatus.upstream &&
+                                    gitStatus.ahead === 0 && gitStatus.behind === 0
+                                  ? `Synced${repository.lastSyncedAt
+                                    ? ` ${timeAgo(repository.lastSyncedAt, relativeTimeNow)}`
+                                    : ''}`
+                                  : gitStatus.ahead > 0 || gitStatus.behind > 0
+                                    ? 'Sync needed'
+                                    : gitStatus.clean
+                                      ? 'Published'
+                                      : `${changeCount} changes`}
                             </Badge>
                           )}
                           {selectedAccountId === 'all' && (
@@ -962,6 +1131,75 @@ export function App() {
                         </ActionIcon>
                         {repository.localPath ? (
                           <Group gap="xs" wrap="nowrap">
+                            {gitStatus && gitStatus.behind > 0 && (
+                              <Button
+                                size="xs"
+                                variant="light"
+                                color="yellow"
+                                loading={cardGitAction === `pull:${repository.localPath}`}
+                                disabled={Boolean(cardGitAction)}
+                                onClick={() => void runCardGitAction(repository, 'pull')}
+                              >
+                                Pull {gitStatus.behind}
+                              </Button>
+                            )}
+                            {gitStatus && gitStatus.staged > 0 && (
+                              <Button
+                                size="xs"
+                                variant="light"
+                                color="teal"
+                                loading={cardGitAction === `commit:${repository.localPath}`}
+                                disabled={Boolean(cardGitAction)}
+                                onClick={() => openCardCommit(repository, false)}
+                              >
+                                Commit {gitStatus.staged}
+                              </Button>
+                            )}
+                            {gitStatus && gitStatus.staged === 0 && gitStatus.conflicts === 0 &&
+                              gitStatus.unstaged + gitStatus.untracked > 0 && (
+                              <Button
+                                size="xs"
+                                variant="light"
+                                color="teal"
+                                loading={cardGitAction === `commit:${repository.localPath}`}
+                                disabled={Boolean(cardGitAction)}
+                                onClick={() => openCardCommit(repository, true)}
+                              >
+                                Commit all {gitStatus.unstaged + gitStatus.untracked}
+                              </Button>
+                            )}
+                            {gitStatus && gitStatus.ahead > 0 && (
+                              <Button
+                                size="xs"
+                                loading={cardGitAction === `push:${repository.localPath}`}
+                                disabled={Boolean(cardGitAction)}
+                                onClick={() => void runCardGitAction(repository, 'push')}
+                              >
+                                Push {gitStatus.ahead}
+                              </Button>
+                            )}
+                            {gitStatus && (
+                              <Button
+                                size="xs"
+                                variant="light"
+                                loading={cardGitAction === `sync:${repository.localPath}`}
+                                disabled={Boolean(cardGitAction) || gitStatus.conflicts > 0}
+                                onClick={() => {
+                                  const hasChanges = gitStatus.staged + gitStatus.unstaged + gitStatus.untracked > 0
+                                  if (hasChanges) {
+                                    openCardCommit(
+                                      repository,
+                                      gitStatus.unstaged + gitStatus.untracked > 0,
+                                      true,
+                                    )
+                                  } else {
+                                    void syncRepository(repository)
+                                  }
+                                }}
+                              >
+                                Sync
+                              </Button>
+                            )}
                             <Button
                               size="xs"
                               variant="subtle"
@@ -1093,6 +1331,81 @@ export function App() {
           )}
         </div>
       </main>
+
+      <Modal
+        opened={Boolean(cardCommitRepository)}
+        onClose={() => {
+          if (cardGitAction) return
+          setCardCommitRepository(null)
+          setCardCommitError(null)
+          setCardCommitSync(false)
+        }}
+        title={cardCommitRepository
+          ? `${cardCommitSync ? 'Commit and sync' : cardCommitAll ? 'Commit all changes' : 'Commit staged changes'} · ${cardCommitRepository.fullName}`
+          : 'Commit changes'}
+        centered
+        closeOnClickOutside={!cardGitAction}
+        closeOnEscape={!cardGitAction}
+      >
+        <Stack gap="md">
+          {cardCommitAll && (
+            <Text size="sm" c="dimmed">
+              All modified and untracked files will be staged before committing.
+            </Text>
+          )}
+          {cardCommitSync && (
+            <Text size="sm" c="dimmed">
+              After committing, MyRepos will pull remote changes and push your commits.
+            </Text>
+          )}
+          {cardCommitError && (
+            <Alert color="red" icon={<IconAlertCircle size={17} />}>
+              {cardCommitError}
+            </Alert>
+          )}
+          <Textarea
+            label="Commit message"
+            placeholder="Describe your changes"
+            value={cardCommitMessage}
+            autosize
+            minRows={3}
+            autoFocus
+            disabled={Boolean(cardGitAction)}
+            onChange={(event) => {
+              setCardCommitMessage(event.currentTarget.value)
+              setCardCommitError(null)
+            }}
+            onKeyDown={(event) => {
+              if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                event.preventDefault()
+                void commitFromCard()
+              }
+            }}
+          />
+          <Group justify="flex-end">
+            <Button
+              variant="subtle"
+              color="gray"
+              disabled={Boolean(cardGitAction)}
+              onClick={() => {
+                setCardCommitRepository(null)
+                setCardCommitSync(false)
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              loading={Boolean(cardGitAction)}
+              disabled={!cardCommitMessage.trim()}
+              onClick={() => void commitFromCard()}
+            >
+              {cardCommitSync
+                ? cardCommitAll ? 'Stage, commit and sync' : 'Commit and sync'
+                : cardCommitAll ? 'Stage and commit' : 'Commit'}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
 
       <Modal
         opened={Boolean(gitRepository)}
