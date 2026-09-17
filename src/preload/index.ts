@@ -40,6 +40,11 @@ const desktopApi: DesktopApi = {
     },
     gitDetails: (path) => ipcRenderer.invoke('repositories:git-details', path),
     gitDiff: (path, file, staged) => ipcRenderer.invoke('repositories:git-diff', path, file, staged),
+    gitHistory: (path) => ipcRenderer.invoke('repositories:git-history', path),
+    gitCommitDiff: (path, commitHash) => ipcRenderer.invoke('repositories:git-commit-diff', path, commitHash),
+    gitCommitFiles: (path, commitHash) => ipcRenderer.invoke('repositories:git-commit-files', path, commitHash),
+    gitCommitFileDiff: (path, commitHash, file) =>
+      ipcRenderer.invoke('repositories:git-commit-file-diff', path, commitHash, file),
     gitStage: (path, files) => ipcRenderer.invoke('repositories:git-stage', path, files),
     gitUnstage: (path, files) => ipcRenderer.invoke('repositories:git-unstage', path, files),
     gitCommit: (path, message) => ipcRenderer.invoke('repositories:git-commit', path, message),

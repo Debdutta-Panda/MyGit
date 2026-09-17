@@ -1,7 +1,6 @@
-import { app, safeStorage } from 'electron'
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { safeStorage } from 'electron'
 import type { GitHubAccount } from '../shared/desktop-api'
+import { getDatabase } from './database'
 
 interface StoredGitHubAccount extends GitHubAccount {
   encryptedAccessToken: string
@@ -11,9 +10,19 @@ interface StoredGitHubAccount extends GitHubAccount {
   tokenType: string
 }
 
-interface AccountFile {
-  version: 1
-  accounts: StoredGitHubAccount[]
+interface AccountRow {
+  id: number
+  login: string
+  name: string | null
+  avatar_url: string
+  profile_url: string
+  scopes_json: string
+  added_at: string
+  encrypted_access_token: string
+  encrypted_refresh_token: string | null
+  access_token_expires_at: string | null
+  refresh_token_expires_at: string | null
+  token_type: string
 }
 
 export interface GitHubCredentials {
@@ -24,14 +33,10 @@ export interface GitHubCredentials {
   tokenType: string
 }
 
-const emptyFile = (): AccountFile => ({ version: 1, accounts: [] })
-const accountFilePath = (): string => join(app.getPath('userData'), 'accounts.json')
-
 const assertSecureStorage = (): void => {
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error('Secure credential storage is unavailable on this system.')
   }
-
   if (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text') {
     throw new Error('A Linux Secret Service or KWallet is required to store GitHub credentials securely.')
   }
@@ -47,6 +52,30 @@ const decrypt = (value: string): string => {
   return safeStorage.decryptString(Buffer.from(value, 'base64'))
 }
 
+const parseScopes = (value: string): string[] => {
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return Array.isArray(parsed) && parsed.every((scope) => typeof scope === 'string') ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+const storedAccount = (row: AccountRow): StoredGitHubAccount => ({
+  id: row.id,
+  login: row.login,
+  name: row.name,
+  avatarUrl: row.avatar_url,
+  profileUrl: row.profile_url,
+  scopes: parseScopes(row.scopes_json),
+  addedAt: row.added_at,
+  encryptedAccessToken: row.encrypted_access_token,
+  encryptedRefreshToken: row.encrypted_refresh_token,
+  accessTokenExpiresAt: row.access_token_expires_at,
+  refreshTokenExpiresAt: row.refresh_token_expires_at,
+  tokenType: row.token_type,
+})
+
 const publicAccount = ({
   encryptedAccessToken: _accessToken,
   encryptedRefreshToken: _refreshToken,
@@ -56,54 +85,36 @@ const publicAccount = ({
   ...account
 }: StoredGitHubAccount): GitHubAccount => account
 
-const readAccountFile = async (): Promise<AccountFile> => {
-  try {
-    const contents = await readFile(accountFilePath(), 'utf8')
-    const parsed = JSON.parse(contents) as Partial<AccountFile>
+const accountRows = (): AccountRow[] => getDatabase().prepare(`
+  SELECT id, login, name, avatar_url, profile_url, scopes_json, added_at,
+         encrypted_access_token, encrypted_refresh_token, access_token_expires_at,
+         refresh_token_expires_at, token_type
+  FROM accounts
+  ORDER BY added_at, id
+`).all() as unknown as AccountRow[]
 
-    if (parsed.version !== 1 || !Array.isArray(parsed.accounts)) {
-      throw new Error('The account store has an unsupported format.')
-    }
-
-    return parsed as AccountFile
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyFile()
-    throw error
-  }
-}
-
-const writeAccountFile = async (contents: AccountFile): Promise<void> => {
-  const destination = accountFilePath()
-  const temporary = `${destination}.tmp`
-
-  await mkdir(dirname(destination), { recursive: true })
-  await writeFile(temporary, `${JSON.stringify(contents, null, 2)}\n`, { mode: 0o600 })
-  await rename(temporary, destination)
-  await chmod(destination, 0o600)
-}
-
-export const listAccounts = async (): Promise<GitHubAccount[]> => {
-  const store = await readAccountFile()
-  return store.accounts.map(publicAccount)
-}
+export const listAccounts = async (): Promise<GitHubAccount[]> =>
+  accountRows().map(storedAccount).map(publicAccount)
 
 export const getAccountCredentials = async (
   accountId: number,
 ): Promise<{ account: GitHubAccount; credentials: GitHubCredentials }> => {
-  const store = await readAccountFile()
-  const storedAccount = store.accounts.find((account) => account.id === accountId)
-  if (!storedAccount) throw new Error('The selected GitHub account is no longer connected.')
-
+  const row = getDatabase().prepare(`
+    SELECT id, login, name, avatar_url, profile_url, scopes_json, added_at,
+           encrypted_access_token, encrypted_refresh_token, access_token_expires_at,
+           refresh_token_expires_at, token_type
+    FROM accounts WHERE id = ?
+  `).get(accountId) as unknown as AccountRow | undefined
+  if (!row) throw new Error('The selected GitHub account is no longer connected.')
+  const account = storedAccount(row)
   return {
-    account: publicAccount(storedAccount),
+    account: publicAccount(account),
     credentials: {
-      accessToken: decrypt(storedAccount.encryptedAccessToken),
-      refreshToken: storedAccount.encryptedRefreshToken
-        ? decrypt(storedAccount.encryptedRefreshToken)
-        : null,
-      accessTokenExpiresAt: storedAccount.accessTokenExpiresAt,
-      refreshTokenExpiresAt: storedAccount.refreshTokenExpiresAt,
-      tokenType: storedAccount.tokenType,
+      accessToken: decrypt(account.encryptedAccessToken),
+      refreshToken: account.encryptedRefreshToken ? decrypt(account.encryptedRefreshToken) : null,
+      accessTokenExpiresAt: account.accessTokenExpiresAt,
+      refreshTokenExpiresAt: account.refreshTokenExpiresAt,
+      tokenType: account.tokenType,
     },
   }
 }
@@ -112,27 +123,34 @@ export const saveAccount = async (
   account: GitHubAccount,
   credentials: GitHubCredentials,
 ): Promise<GitHubAccount> => {
-  const store = await readAccountFile()
-  const storedAccount: StoredGitHubAccount = {
-    ...account,
-    encryptedAccessToken: encrypt(credentials.accessToken),
-    encryptedRefreshToken: credentials.refreshToken ? encrypt(credentials.refreshToken) : null,
-    accessTokenExpiresAt: credentials.accessTokenExpiresAt,
-    refreshTokenExpiresAt: credentials.refreshTokenExpiresAt,
-    tokenType: credentials.tokenType,
-  }
-
-  const existingIndex = store.accounts.findIndex((item) => item.id === account.id)
-  if (existingIndex >= 0) store.accounts[existingIndex] = storedAccount
-  else store.accounts.push(storedAccount)
-
-  await writeAccountFile(store)
-  return publicAccount(storedAccount)
+  getDatabase().prepare(`
+    INSERT INTO accounts (
+      id, login, name, avatar_url, profile_url, scopes_json, added_at,
+      encrypted_access_token, encrypted_refresh_token, access_token_expires_at,
+      refresh_token_expires_at, token_type
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      login = excluded.login,
+      name = excluded.name,
+      avatar_url = excluded.avatar_url,
+      profile_url = excluded.profile_url,
+      scopes_json = excluded.scopes_json,
+      added_at = excluded.added_at,
+      encrypted_access_token = excluded.encrypted_access_token,
+      encrypted_refresh_token = excluded.encrypted_refresh_token,
+      access_token_expires_at = excluded.access_token_expires_at,
+      refresh_token_expires_at = excluded.refresh_token_expires_at,
+      token_type = excluded.token_type
+  `).run(
+    account.id, account.login, account.name, account.avatarUrl, account.profileUrl,
+    JSON.stringify(account.scopes), account.addedAt, encrypt(credentials.accessToken),
+    credentials.refreshToken ? encrypt(credentials.refreshToken) : null,
+    credentials.accessTokenExpiresAt, credentials.refreshTokenExpiresAt, credentials.tokenType,
+  )
+  return account
 }
 
 export const removeAccount = async (accountId: number): Promise<GitHubAccount[]> => {
-  const store = await readAccountFile()
-  store.accounts = store.accounts.filter((account) => account.id !== accountId)
-  await writeAccountFile(store)
-  return store.accounts.map(publicAccount)
+  getDatabase().prepare('DELETE FROM accounts WHERE id = ?').run(accountId)
+  return await listAccounts()
 }

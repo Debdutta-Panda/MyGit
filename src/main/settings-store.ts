@@ -1,36 +1,16 @@
-import { app, ipcMain } from 'electron'
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { ipcMain } from 'electron'
 import type { AppSettings } from '../shared/desktop-api'
+import { getDatabase } from './database'
 
-interface SettingsFile {
-  version: 1
-  settings: AppSettings
+interface SettingsRow {
+  vscode_application_name: string
 }
 
-const defaultSettings = (): AppSettings => ({
-  vscodeApplicationName: '',
-})
-
-const settingsFilePath = (): string => join(app.getPath('userData'), 'settings.json')
-
 export const getAppSettings = async (): Promise<AppSettings> => {
-  try {
-    const parsed = JSON.parse(await readFile(settingsFilePath(), 'utf8')) as Partial<SettingsFile>
-    if (parsed.version !== 1 || !parsed.settings) {
-      throw new Error('The settings file has an unsupported format.')
-    }
-
-    return {
-      vscodeApplicationName:
-        typeof parsed.settings.vscodeApplicationName === 'string'
-          ? parsed.settings.vscodeApplicationName
-          : '',
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return defaultSettings()
-    throw error
-  }
+  const row = getDatabase().prepare(`
+    SELECT vscode_application_name FROM app_settings WHERE id = 1
+  `).get() as unknown as SettingsRow | undefined
+  return { vscodeApplicationName: row?.vscode_application_name ?? '' }
 }
 
 const saveAppSettings = async (settings: unknown): Promise<AppSettings> => {
@@ -42,17 +22,10 @@ const saveAppSettings = async (settings: unknown): Promise<AppSettings> => {
   if (vscodeApplicationName.length > 200) {
     throw new Error('The VS Code application name is too long.')
   }
-
-  const nextSettings: AppSettings = { vscodeApplicationName }
-  const destination = settingsFilePath()
-  const temporary = `${destination}.tmp`
-  const contents: SettingsFile = { version: 1, settings: nextSettings }
-
-  await mkdir(dirname(destination), { recursive: true })
-  await writeFile(temporary, `${JSON.stringify(contents, null, 2)}\n`, { mode: 0o600 })
-  await rename(temporary, destination)
-  await chmod(destination, 0o600)
-  return nextSettings
+  getDatabase().prepare(`
+    UPDATE app_settings SET vscode_application_name = ? WHERE id = 1
+  `).run(vscodeApplicationName)
+  return { vscodeApplicationName }
 }
 
 export const registerSettingsHandlers = (): void => {

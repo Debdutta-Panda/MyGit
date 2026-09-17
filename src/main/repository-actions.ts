@@ -9,7 +9,12 @@ import {
   verifiedClonePath,
 } from './github-repositories'
 import { readRepositoryStatus, refreshRepositoryStatus } from './repository-monitor'
-import type { RepositoryChangedFile, RepositoryGitDetails } from '../shared/desktop-api'
+import type {
+  RepositoryChangedFile,
+  RepositoryCommit,
+  RepositoryCommitFile,
+  RepositoryGitDetails,
+} from '../shared/desktop-api'
 
 interface GitRunOptions {
   env?: NodeJS.ProcessEnv
@@ -115,6 +120,20 @@ const validatedFiles = (files: unknown): string[] => {
   return [...new Set(files as string[])]
 }
 
+const validatedCommitHash = (commitHash: unknown): string => {
+  if (typeof commitHash !== 'string' || !/^[a-f0-9]{4,64}$/i.test(commitHash)) {
+    throw new Error('Invalid commit selection.')
+  }
+  return commitHash
+}
+
+const validatedFile = (file: unknown): string => {
+  if (typeof file !== 'string' || file.length === 0 || file.length > 4_096) {
+    throw new Error('Invalid Git file selection.')
+  }
+  return file
+}
+
 const authenticatedEnvironment = async (repositoryPath: string): Promise<NodeJS.ProcessEnv> => {
   const records = await readCloneRecords()
   const record = records.find((item) => resolve(item.path) === repositoryPath)
@@ -167,6 +186,76 @@ export const registerRepositoryActionHandlers = (): void => {
         ['diff', '--no-index', '--', process.platform === 'win32' ? 'NUL' : '/dev/null', file],
         { successCodes: [0, 1] },
       )
+    },
+  )
+  ipcMain.handle('repositories:git-history', async (_event, path: unknown) => {
+    const repositoryPath = await verifiedClonePath(path)
+    const output = await runGit(repositoryPath, [
+      'log',
+      '-n',
+      '100',
+      '--date=iso-strict',
+      '--pretty=format:%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1e',
+    ], { successCodes: [0, 128] })
+
+    return output
+      .split('\x1e')
+      .map((record) => record.trim())
+      .filter(Boolean)
+      .map((record): RepositoryCommit | null => {
+        const [hash, shortHash, author, authoredAt, ...subjectParts] = record.split('\x1f')
+        if (!hash || !shortHash || !author || !authoredAt) return null
+        return { hash, shortHash, author, authoredAt, subject: subjectParts.join('\x1f') }
+      })
+      .filter((commit): commit is RepositoryCommit => commit !== null)
+  })
+  ipcMain.handle(
+    'repositories:git-commit-diff',
+    async (_event, path: unknown, commitHash: unknown) => {
+      const repositoryPath = await verifiedClonePath(path)
+      const hash = validatedCommitHash(commitHash)
+      return await runGit(repositoryPath, [
+        'show',
+        '--format=',
+        '--find-renames',
+        '--find-copies',
+        hash,
+      ])
+    },
+  )
+  ipcMain.handle(
+    'repositories:git-commit-files',
+    async (_event, path: unknown, commitHash: unknown) => {
+      const repositoryPath = await verifiedClonePath(path)
+      const hash = validatedCommitHash(commitHash)
+      const output = await runGit(repositoryPath, [
+        'diff-tree', '--root', '--no-commit-id', '--name-status', '-r', '-z', hash,
+      ])
+      const tokens = output.split('\0').filter(Boolean)
+      const files: RepositoryCommitFile[] = []
+      for (let index = 0; index < tokens.length;) {
+        const token = tokens[index++]
+        const inline = token.match(/^([^\t]+)\t(.+)$/)
+        const status = inline?.[1] ?? token
+        let filePath = inline?.[2] ?? tokens[index++]
+        if (!filePath) break
+        if ((status.startsWith('R') || status.startsWith('C')) && index < tokens.length) {
+          filePath = tokens[index++]
+        }
+        files.push({ path: filePath, status: status[0] })
+      }
+      return files
+    },
+  )
+  ipcMain.handle(
+    'repositories:git-commit-file-diff',
+    async (_event, path: unknown, commitHash: unknown, file: unknown) => {
+      const repositoryPath = await verifiedClonePath(path)
+      const hash = validatedCommitHash(commitHash)
+      const filePath = validatedFile(file)
+      return await runGit(repositoryPath, [
+        'show', '--format=', '--find-renames', hash, '--', filePath,
+      ])
     },
   )
   ipcMain.handle('repositories:git-stage', async (_event, path: unknown, files: unknown) => {

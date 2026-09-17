@@ -72,6 +72,19 @@ export interface RepositoryGitDetails {
   files: RepositoryChangedFile[]
 }
 
+export interface RepositoryCommit {
+  hash: string
+  shortHash: string
+  author: string
+  authoredAt: string
+  subject: string
+}
+
+export interface RepositoryCommitFile {
+  path: string
+  status: string
+}
+
 export interface DesktopApi {
   platform: NodeJS.Platform
   versions: {
@@ -105,6 +118,10 @@ export interface DesktopApi {
     onStatusChanged: (callback: (status: RepositoryGitStatus) => void) => () => void
     gitDetails: (path: string) => Promise<RepositoryGitDetails>
     gitDiff: (path: string, file: string, staged: boolean) => Promise<string>
+    gitHistory: (path: string) => Promise<RepositoryCommit[]>
+    gitCommitDiff: (path: string, commitHash: string) => Promise<string>
+    gitCommitFiles: (path: string, commitHash: string) => Promise<RepositoryCommitFile[]>
+    gitCommitFileDiff: (path: string, commitHash: string, file: string) => Promise<string>
     gitStage: (path: string, files: string[]) => Promise<RepositoryGitDetails>
     gitUnstage: (path: string, files: string[]) => Promise<RepositoryGitDetails>
     gitCommit: (path: string, message: string) => Promise<RepositoryGitDetails>

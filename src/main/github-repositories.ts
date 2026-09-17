@@ -13,6 +13,7 @@ import {
 import { githubClientId } from './github-auth'
 import { getAppSettings } from './settings-store'
 import { monitorRepositories } from './repository-monitor'
+import { getDatabase } from './database'
 import type { CloneResult, GitHubRepository } from '../shared/desktop-api'
 
 const GITHUB_API_VERSION = '2022-11-28'
@@ -52,25 +53,61 @@ interface GitHubRepositoryResponse {
   html_url: string
 }
 
-const cloneRecordsPath = (): string => join(app.getPath('userData'), 'clones.json')
-
 export const readCloneRecords = async (): Promise<CloneRecord[]> => {
-  try {
-    const parsed = JSON.parse(await readFile(cloneRecordsPath(), 'utf8')) as unknown
-    return Array.isArray(parsed) ? parsed as CloneRecord[] : []
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-    throw error
-  }
+  const rows = getDatabase().prepare(`
+    SELECT account_id, full_name, local_path, cloned_at, last_synced_at
+    FROM repositories
+    WHERE provider = 'github'
+    ORDER BY cloned_at
+  `).all() as unknown as Array<{
+    account_id: number
+    full_name: string
+    local_path: string
+    cloned_at: string
+    last_synced_at: string | null
+  }>
+  return rows.map((row) => ({
+    accountId: row.account_id,
+    fullName: row.full_name,
+    path: row.local_path,
+    clonedAt: row.cloned_at,
+    lastSyncedAt: row.last_synced_at,
+  }))
 }
 
 const writeCloneRecords = async (records: CloneRecord[]): Promise<void> => {
-  const destination = cloneRecordsPath()
-  const temporary = `${destination}.tmp`
-  await mkdir(dirname(destination), { recursive: true })
-  await writeFile(temporary, `${JSON.stringify(records, null, 2)}\n`, { mode: 0o600 })
-  await rename(temporary, destination)
-  await chmod(destination, 0o600)
+  const db = getDatabase()
+  const existing = db.prepare(`
+    SELECT id, account_id, full_name FROM repositories WHERE provider = 'github'
+  `).all() as unknown as Array<{ id: string; account_id: number; full_name: string }>
+  const incomingKeys = new Set(records.map((record) => `${record.accountId}:${record.fullName}`))
+  const upsert = db.prepare(`
+    INSERT INTO repositories (
+      id, provider, account_id, full_name, local_path, cloned_at, last_synced_at
+    ) VALUES (?, 'github', ?, ?, ?, ?, ?)
+    ON CONFLICT(provider, account_id, full_name) DO UPDATE SET
+      local_path = excluded.local_path,
+      cloned_at = excluded.cloned_at,
+      last_synced_at = excluded.last_synced_at
+  `)
+  const remove = db.prepare('DELETE FROM repositories WHERE id = ?')
+
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    for (const record of records) {
+      upsert.run(
+        randomUUID(), record.accountId, record.fullName, record.path,
+        record.clonedAt, record.lastSyncedAt ?? null,
+      )
+    }
+    for (const row of existing) {
+      if (!incomingKeys.has(`${row.account_id}:${row.full_name}`)) remove.run(row.id)
+    }
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
 }
 
 const isGitRepository = async (path: string): Promise<boolean> => {

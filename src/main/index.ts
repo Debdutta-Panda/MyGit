@@ -4,6 +4,7 @@ import { registerGitHubAccountHandlers } from './github-auth'
 import { registerRepositoryHandlers } from './github-repositories'
 import { registerSettingsHandlers } from './settings-store'
 import { registerRepositoryActionHandlers } from './repository-actions'
+import { closeDatabase, initializeDatabase } from './database'
 
 const appIconPath = join(process.cwd(), 'build', 'icon.png')
 
@@ -47,7 +48,8 @@ const createWindow = (): void => {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  await initializeDatabase()
   if (process.platform === 'darwin') app.dock.setIcon(appIconPath)
 
   registerGitHubAccountHandlers()
@@ -59,7 +61,12 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+}).catch((error: unknown) => {
+  console.error('MyRepos failed to start:', error)
+  app.quit()
 })
+
+app.on('before-quit', closeDatabase)
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
