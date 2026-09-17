@@ -39,6 +39,33 @@ export interface CloneResult {
   path: string
 }
 
+export interface PublishRepositoryInput {
+  path: string
+  accountId: number
+  owner: string
+  name: string
+  description: string
+  private: boolean
+}
+
+export interface PublishRepositoryResult {
+  repository: GitHubRepository
+  status: RepositoryGitStatus
+}
+
+export interface ConfigurationSyncState {
+  connected: boolean
+  localPath: string | null
+  accountId: number | null
+  fullName: string | null
+  autoSync: boolean
+  lastSyncedAt: string | null
+  lastError: string | null
+  hasRemote: boolean
+}
+
+export type ConfigurationSyncAction = 'sync' | 'pull' | 'push'
+
 export interface AppSettings {
   vscodeApplicationName: string
 }
@@ -85,6 +112,38 @@ export interface RepositoryCommitFile {
   status: string
 }
 
+export type OrganizationKind = 'workspace' | 'group' | 'tag'
+
+export interface OrganizationItem {
+  id: string
+  kind: OrganizationKind
+  name: string
+  color: string
+  description: string | null
+  repositoryCount: number
+}
+
+export interface OrganizationCatalog {
+  workspaces: OrganizationItem[]
+  groups: OrganizationItem[]
+  tags: OrganizationItem[]
+}
+
+export interface RepositoryOrganization {
+  workspaceIds: string[]
+  groupIds: string[]
+  tagIds: string[]
+}
+
+export interface RepositoryOrganizationEntry extends RepositoryOrganization {
+  repositoryKey: string
+}
+
+export interface RepositoryAppearanceEntry {
+  repositoryKey: string
+  color: string | null
+}
+
 export interface DesktopApi {
   platform: NodeJS.Platform
   versions: {
@@ -112,6 +171,7 @@ export interface DesktopApi {
     clone: (accountId: number, fullName: string) => Promise<CloneResult | null>
     locate: (accountId: number, fullName: string) => Promise<CloneResult | null>
     addLocal: (accountId: number | null) => Promise<GitHubRepository | null>
+    publish: (input: PublishRepositoryInput) => Promise<PublishRepositoryResult>
     openFolder: (path: string) => Promise<void>
     openInVSCode: (path: string) => Promise<void>
     monitor: (paths: string[]) => Promise<RepositoryGitStatus[]>
@@ -128,5 +188,48 @@ export interface DesktopApi {
     gitFetch: (path: string) => Promise<RepositoryGitDetails>
     gitPull: (path: string) => Promise<RepositoryGitDetails>
     gitPush: (path: string) => Promise<RepositoryGitDetails>
+  }
+  organization: {
+    list: () => Promise<OrganizationCatalog>
+    create: (
+      kind: OrganizationKind,
+      input: { name: string; color: string; description?: string },
+    ) => Promise<OrganizationItem>
+    update: (
+      kind: OrganizationKind,
+      id: string,
+      input: { name: string; color: string; description?: string },
+    ) => Promise<OrganizationItem>
+    remove: (kind: OrganizationKind, id: string) => Promise<void>
+    assignments: () => Promise<RepositoryOrganizationEntry[]>
+    appearances: () => Promise<RepositoryAppearanceEntry[]>
+    saveRepositoryColor: (
+      accountId: number,
+      fullName: string,
+      color: string | null,
+    ) => Promise<RepositoryAppearanceEntry>
+    workspaceOrder: (workspaceId: string) => Promise<string[]>
+    reorderWorkspace: (workspaceId: string, repositoryKeys: string[]) => Promise<string[]>
+    saveRepository: (
+      accountId: number,
+      fullName: string,
+      organization: RepositoryOrganization,
+    ) => Promise<RepositoryOrganizationEntry>
+  }
+  configurationSync: {
+    get: () => Promise<ConfigurationSyncState>
+    create: (input: {
+      accountId: number
+      owner: string
+      name: string
+      private: boolean
+    }) => Promise<ConfigurationSyncState>
+    connectRemote: (accountId: number, fullName: string) => Promise<ConfigurationSyncState>
+    connectLocal: (accountId: number) => Promise<ConfigurationSyncState | null>
+    run: (action: ConfigurationSyncAction) => Promise<ConfigurationSyncState>
+    setAutoSync: (enabled: boolean) => Promise<ConfigurationSyncState>
+    openFolder: () => Promise<void>
+    disconnect: () => Promise<ConfigurationSyncState>
+    onChanged: (callback: (state: ConfigurationSyncState) => void) => () => void
   }
 }

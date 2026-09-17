@@ -25,6 +25,10 @@ The device flow does not use or embed a client secret. MyRepos requests `repo`, 
 
 MyRepos stores accounts, repository registrations, and settings in `myrepos.sqlite3` under Electron's application data directory. Database access stays in the main process, with foreign keys and WAL mode enabled. Credentials remain encrypted through Electron `safeStorage`; plaintext tokens are never stored in SQLite or exposed to the renderer.
 
+Repositories can be organized manually into Workspaces (repositories worked on together), Groups (browsing collections), and Tags (descriptive labels). These many-to-many assignments are stored transactionally in SQLite and managed from each repository's Organize dialog.
+
+Settings can connect a portable configuration repository in three ways: create and publish a managed GitHub repository, clone an existing GitHub repository, or use an existing local Git repository. MyRepos stores the portable data in `.myrepos/config.json` and can commit/push changes automatically or pull, push, and sync manually. The file contains organization metadata, repository colors, assignments, and workspace ordering; credentials, local paths, and machine-specific settings are deliberately excluded.
+
 On the first SQLite-backed launch, legacy `accounts.json`, `clones.json`, and `settings.json` data is imported in one transaction. Successfully imported files are retained alongside the database with a `.migrated` suffix for recovery.
 
 ## Structure

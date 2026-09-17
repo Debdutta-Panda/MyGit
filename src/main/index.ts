@@ -5,6 +5,8 @@ import { registerRepositoryHandlers } from './github-repositories'
 import { registerSettingsHandlers } from './settings-store'
 import { registerRepositoryActionHandlers } from './repository-actions'
 import { closeDatabase, initializeDatabase } from './database'
+import { registerOrganizationHandlers } from './organization-store'
+import { registerConfigurationSyncHandlers } from './configuration-sync'
 
 const appIconPath = join(process.cwd(), 'build', 'icon.png')
 
@@ -56,6 +58,8 @@ app.whenReady().then(async () => {
   registerRepositoryHandlers()
   registerRepositoryActionHandlers()
   registerSettingsHandlers()
+  registerOrganizationHandlers()
+  registerConfigurationSyncHandlers()
   createWindow()
 
   app.on('activate', () => {

@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  type CSSProperties,
+} from 'react'
 import {
   ActionIcon,
   Alert,
@@ -6,6 +13,8 @@ import {
   Badge,
   Box,
   Button,
+  Checkbox,
+  ColorInput,
   CopyButton,
   Divider,
   Group,
@@ -16,6 +25,7 @@ import {
   Paper,
   Select,
   Stack,
+  Switch,
   Tabs,
   Text,
   TextInput,
@@ -29,16 +39,20 @@ import {
   IconBrandGithub,
   IconBrandVscode,
   IconBook2,
+  IconBriefcase,
   IconCheck,
   IconCommand,
   IconCopy,
   IconDownload,
   IconDeviceFloppy,
   IconExternalLink,
+  IconFilter,
   IconFolderOpen,
   IconFolderSearch,
+  IconFolders,
   IconGitBranch,
   IconGitCommit,
+  IconGripVertical,
   IconLayoutGrid,
   IconLayoutList,
   IconLayoutSidebarLeftCollapse,
@@ -52,28 +66,121 @@ import {
   IconSettings,
   IconShieldCheck,
   IconStar,
+  IconTags,
   IconTrash,
+  IconUpload,
   IconUsers,
   IconX,
 } from '@tabler/icons-react'
 import type {
   AppSettings,
+  ConfigurationSyncAction,
+  ConfigurationSyncState,
   GitHubAccount,
   GitHubDeviceAuthorization,
   GitHubRepository,
+  OrganizationCatalog,
+  OrganizationItem,
+  OrganizationKind,
   RepositoryChangedFile,
   RepositoryCommit,
   RepositoryCommitFile,
   RepositoryGitDetails,
   RepositoryGitStatus,
+  RepositoryOrganization,
+  RepositoryOrganizationEntry,
 } from '../../shared/desktop-api'
 import myReposIcon from './assets/myrepos-icon.png'
 
 type AuthorizationState = 'idle' | 'starting' | 'waiting'
-type ActiveView = 'accounts' | 'repositories' | 'settings'
-type RepositoryTab = 'local' | 'github'
+type ActiveView = 'accounts' | 'repositories' | 'workspaces' | 'groups' | 'tags' | 'settings'
+type RepositoryTab = 'local' | 'github' | 'workspace'
 type RepositoryLayout = 'list' | 'grid'
 type FilesPanelTab = 'changes' | 'history'
+type BulkGitOperation = 'sync' | 'fetch' | 'pull' | 'push'
+type BulkGitTarget = 'visible' | 'selected'
+
+const bulkGitOperationLabel: Record<BulkGitOperation, string> = {
+  sync: 'Sync',
+  fetch: 'Fetch',
+  pull: 'Pull',
+  push: 'Push',
+}
+
+interface BulkGitResult {
+  repositoryKey: string
+  fullName: string
+  status: 'pending' | 'running' | 'success' | 'error'
+  message?: string
+}
+
+const emptyOrganizationCatalog = (): OrganizationCatalog => ({
+  workspaces: [],
+  groups: [],
+  tags: [],
+})
+
+const emptyRepositoryOrganization = (): RepositoryOrganization => ({
+  workspaceIds: [],
+  groupIds: [],
+  tagIds: [],
+})
+
+const emptyConfigurationSyncState: ConfigurationSyncState = {
+  connected: false,
+  localPath: null,
+  accountId: null,
+  fullName: null,
+  autoSync: false,
+  lastSyncedAt: null,
+  lastError: null,
+  hasRemote: false,
+}
+
+const repositoryOrganizationKey = (repository: Pick<GitHubRepository, 'accountId' | 'fullName'>): string =>
+  `github:${repository.accountId}:${repository.fullName.toLowerCase()}`
+
+const organizationFieldForKind: Record<OrganizationKind, keyof RepositoryOrganization> = {
+  workspace: 'workspaceIds',
+  group: 'groupIds',
+  tag: 'tagIds',
+}
+
+const bulkOrganizationChangeKey = (kind: OrganizationKind, id: string): string => `${kind}:${id}`
+
+const organizationDefaultColor: Record<OrganizationKind, string> = {
+  workspace: '#20c997',
+  group: '#4dabf7',
+  tag: '#cc5de8',
+}
+
+const organizationKinds: OrganizationKind[] = ['workspace', 'group', 'tag']
+
+const organizationCopy: Record<OrganizationKind, {
+  singular: string
+  plural: string
+  description: string
+  catalogField: keyof OrganizationCatalog
+}> = {
+  workspace: {
+    singular: 'Workspace',
+    plural: 'Workspaces',
+    description: 'Build focused working sets from repositories that belong together.',
+    catalogField: 'workspaces',
+  },
+  group: {
+    singular: 'Group',
+    plural: 'Groups',
+    description: 'Create stable collections for teams, clients, products, or any structure you choose.',
+    catalogField: 'groups',
+  },
+  tag: {
+    singular: 'Tag',
+    plural: 'Tags',
+    description: 'Add flexible labels that can be combined across every repository.',
+    catalogField: 'tags',
+  },
+}
 
 interface DiffDisplayLine {
   kind: 'add' | 'delete' | 'context' | 'meta'
@@ -254,6 +361,41 @@ export function App() {
   const [repositoryPaneWidth, setRepositoryPaneWidth] = useState(430)
   const [scmNavigatorWidth, setScmNavigatorWidth] = useState(290)
   const [commitFilesWidth, setCommitFilesWidth] = useState(300)
+  const [organizationCatalog, setOrganizationCatalog] = useState<OrganizationCatalog>(emptyOrganizationCatalog)
+  const [organizationAssignments, setOrganizationAssignments] = useState<Record<string, RepositoryOrganization>>({})
+  const [repositoryColors, setRepositoryColors] = useState<Record<string, string>>({})
+  const [organizeRepository, setOrganizeRepository] = useState<GitHubRepository | null>(null)
+  const [repositoryColorDraft, setRepositoryColorDraft] = useState('')
+  const [organizationDraft, setOrganizationDraft] = useState<RepositoryOrganization>(emptyRepositoryOrganization)
+  const [organizationLoading, setOrganizationLoading] = useState(false)
+  const [organizationSaving, setOrganizationSaving] = useState(false)
+  const [organizationError, setOrganizationError] = useState<string | null>(null)
+  const [newOrganizationNames, setNewOrganizationNames] = useState<Record<OrganizationKind, string>>({
+    workspace: '',
+    group: '',
+    tag: '',
+  })
+  const [organizationEditorKind, setOrganizationEditorKind] = useState<OrganizationKind | null>(null)
+  const [organizationEditorItem, setOrganizationEditorItem] = useState<OrganizationItem | null>(null)
+  const [organizationEditorName, setOrganizationEditorName] = useState('')
+  const [organizationEditorColor, setOrganizationEditorColor] = useState(organizationDefaultColor.workspace)
+  const [organizationEditorDescription, setOrganizationEditorDescription] = useState('')
+  const [organizationEditorSaving, setOrganizationEditorSaving] = useState(false)
+  const [organizationEditorError, setOrganizationEditorError] = useState<string | null>(null)
+  const [organizationDeleteItem, setOrganizationDeleteItem] = useState<OrganizationItem | null>(null)
+  const [repositorySelectionMode, setRepositorySelectionMode] = useState(false)
+  const [selectedRepositoryKeys, setSelectedRepositoryKeys] = useState<string[]>([])
+  const [bulkOrganizationOpen, setBulkOrganizationOpen] = useState(false)
+  const [bulkOrganizationChanges, setBulkOrganizationChanges] = useState<Record<string, boolean>>({})
+  const [bulkOrganizationSaving, setBulkOrganizationSaving] = useState(false)
+  const [bulkOrganizationError, setBulkOrganizationError] = useState<string | null>(null)
+  const [repositoryOrganizationFilters, setRepositoryOrganizationFilters] =
+    useState<RepositoryOrganization>(emptyRepositoryOrganization)
+  const [bulkGitOpen, setBulkGitOpen] = useState(false)
+  const [bulkGitTarget, setBulkGitTarget] = useState<BulkGitTarget>('visible')
+  const [bulkGitOperation, setBulkGitOperation] = useState<BulkGitOperation>('sync')
+  const [bulkGitRunning, setBulkGitRunning] = useState(false)
+  const [bulkGitResults, setBulkGitResults] = useState<BulkGitResult[]>([])
   const [accounts, setAccounts] = useState<GitHubAccount[]>([])
   const [accountsLoading, setAccountsLoading] = useState(true)
   const [accountsError, setAccountsError] = useState<string | null>(null)
@@ -265,10 +407,25 @@ export function App() {
   const [gitStatuses, setGitStatuses] = useState<Record<string, RepositoryGitStatus>>({})
   const [repositorySearch, setRepositorySearch] = useState('')
   const [repositoryTab, setRepositoryTab] = useState<RepositoryTab>('local')
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null)
+  const [workspaceRepositoryOrder, setWorkspaceRepositoryOrder] = useState<string[]>([])
+  const [workspaceOrderLoading, setWorkspaceOrderLoading] = useState(false)
+  const [workspaceOrderSaving, setWorkspaceOrderSaving] = useState(false)
+  const [workspaceOrderError, setWorkspaceOrderError] = useState<string | null>(null)
+  const [draggedRepositoryKey, setDraggedRepositoryKey] = useState<string | null>(null)
+  const [repositoryDropTarget, setRepositoryDropTarget] = useState<string | null>(null)
   const [repositoryLayout, setRepositoryLayout] = useState<RepositoryLayout>('list')
   const [repositoryPage, setRepositoryPage] = useState(1)
   const [cloningRepository, setCloningRepository] = useState<string | null>(null)
   const [cloneResult, setCloneResult] = useState<{ fullName: string; path: string } | null>(null)
+  const [publishRepository, setPublishRepository] = useState<GitHubRepository | null>(null)
+  const [publishAccountId, setPublishAccountId] = useState<string | null>(null)
+  const [publishOwner, setPublishOwner] = useState('')
+  const [publishName, setPublishName] = useState('')
+  const [publishDescription, setPublishDescription] = useState('')
+  const [publishPrivate, setPublishPrivate] = useState(true)
+  const [publishSaving, setPublishSaving] = useState(false)
+  const [publishError, setPublishError] = useState<string | null>(null)
   const contentScrollRef = useRef<HTMLDivElement>(null)
   const repositoryResultsScrollRef = useRef<HTMLDivElement>(null)
   const [connectOpen, setConnectOpen] = useState(false)
@@ -281,6 +438,27 @@ export function App() {
   const [settingsSaving, setSettingsSaving] = useState(false)
   const [settingsError, setSettingsError] = useState<string | null>(null)
   const [settingsSaved, setSettingsSaved] = useState(false)
+  const [configurationSync, setConfigurationSync] = useState<ConfigurationSyncState>(
+    emptyConfigurationSyncState,
+  )
+  const [configurationSyncLoading, setConfigurationSyncLoading] = useState(true)
+  const [configurationSyncAction, setConfigurationSyncAction] =
+    useState<ConfigurationSyncAction | 'setup' | null>(null)
+  const [configurationSyncError, setConfigurationSyncError] = useState<string | null>(null)
+  const [configurationSetupOpen, setConfigurationSetupOpen] = useState(false)
+  const [configurationSetupMode, setConfigurationSetupMode] =
+    useState<'create' | 'remote' | 'local'>('create')
+  const [configurationSetupAccountId, setConfigurationSetupAccountId] =
+    useState<string | null>(null)
+  const [configurationSetupOwner, setConfigurationSetupOwner] = useState('')
+  const [configurationSetupName, setConfigurationSetupName] = useState('myrepos-config')
+  const [configurationSetupPrivate, setConfigurationSetupPrivate] = useState(true)
+  const [configurationSetupAutoSync, setConfigurationSetupAutoSync] = useState(true)
+  const [configurationRemoteRepositories, setConfigurationRemoteRepositories] =
+    useState<GitHubRepository[]>([])
+  const [configurationRemoteRepository, setConfigurationRemoteRepository] =
+    useState<string | null>(null)
+  const [configurationRemoteLoading, setConfigurationRemoteLoading] = useState(false)
   const [gitRepository, setGitRepository] = useState<GitHubRepository | null>(null)
   const [gitDetails, setGitDetails] = useState<RepositoryGitDetails | null>(null)
   const [filesPanelTab, setFilesPanelTab] = useState<FilesPanelTab>('changes')
@@ -316,6 +494,68 @@ export function App() {
   useEffect(() => {
     if (sidebarWidth > 72 && sidebarWidth < 190) setSidebarWidth(72)
   }, [sidebarWidth])
+
+  useEffect(() => {
+    if (organizationCatalog.workspaces.length === 0) {
+      setSelectedWorkspaceId(null)
+      if (repositoryTab === 'workspace') setRepositoryTab('local')
+      return
+    }
+    if (!selectedWorkspaceId ||
+      !organizationCatalog.workspaces.some((workspace) => workspace.id === selectedWorkspaceId)) {
+      setSelectedWorkspaceId(organizationCatalog.workspaces[0].id)
+    }
+  }, [organizationCatalog.workspaces, repositoryTab, selectedWorkspaceId])
+
+  useEffect(() => {
+    if (!window.desktop || !selectedWorkspaceId) {
+      setWorkspaceRepositoryOrder([])
+      return
+    }
+    let cancelled = false
+    setWorkspaceOrderLoading(true)
+    setWorkspaceOrderError(null)
+    window.desktop.organization.workspaceOrder(selectedWorkspaceId)
+      .then((order) => {
+        if (!cancelled) setWorkspaceRepositoryOrder(order)
+      })
+      .catch((error) => {
+        if (!cancelled) setWorkspaceOrderError(errorMessage(error))
+      })
+      .finally(() => {
+        if (!cancelled) setWorkspaceOrderLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [selectedWorkspaceId, organizationCatalog.workspaces])
+
+  useEffect(() => {
+    if (!window.desktop) return
+    let cancelled = false
+    const loadOrganization = async (): Promise<void> => {
+      try {
+        const [catalog, assignments, appearances] = await Promise.all([
+          window.desktop!.organization.list(),
+          window.desktop!.organization.assignments(),
+          window.desktop!.organization.appearances(),
+        ])
+        if (cancelled) return
+        setOrganizationCatalog(catalog)
+        setOrganizationAssignments(Object.fromEntries(
+          assignments.map((entry) => [entry.repositoryKey, {
+            workspaceIds: entry.workspaceIds,
+            groupIds: entry.groupIds,
+            tagIds: entry.tagIds,
+          }]),
+        ))
+        setRepositoryColors(Object.fromEntries(appearances.flatMap((entry) =>
+          entry.color ? [[entry.repositoryKey, entry.color]] : [])))
+      } catch (error) {
+        if (!cancelled) setOrganizationError(errorMessage(error))
+      }
+    }
+    void loadOrganization()
+    return () => { cancelled = true }
+  }, [])
 
   useEffect(() => {
     const loadAccounts = async (): Promise<void> => {
@@ -357,6 +597,46 @@ export function App() {
     }
 
     void loadSettings()
+  }, [])
+
+  useEffect(() => {
+    if (!window.desktop) {
+      setConfigurationSyncLoading(false)
+      return
+    }
+    let cancelled = false
+    void window.desktop.configurationSync.get()
+      .then((state) => { if (!cancelled) setConfigurationSync(state) })
+      .catch((error) => { if (!cancelled) setConfigurationSyncError(errorMessage(error)) })
+      .finally(() => { if (!cancelled) setConfigurationSyncLoading(false) })
+    const unsubscribe = window.desktop.configurationSync.onChanged((state) => {
+      if (cancelled) return
+      setConfigurationSync(state)
+      void Promise.all([
+        window.desktop!.organization.list(),
+        window.desktop!.organization.assignments(),
+        window.desktop!.organization.appearances(),
+      ]).then(([catalog, assignments, appearances]) => {
+        if (cancelled) return
+        setOrganizationCatalog(catalog)
+        setOrganizationAssignments(Object.fromEntries(assignments.map((entry) => [
+          entry.repositoryKey,
+          {
+            workspaceIds: entry.workspaceIds,
+            groupIds: entry.groupIds,
+            tagIds: entry.tagIds,
+          },
+        ])))
+        setRepositoryColors(Object.fromEntries(appearances.flatMap((entry) =>
+          entry.color ? [[entry.repositoryKey, entry.color]] : [])))
+      }).catch((error) => {
+        if (!cancelled) setConfigurationSyncError(errorMessage(error))
+      })
+    })
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
   }, [])
 
   useEffect(() => {
@@ -413,9 +693,41 @@ export function App() {
   })
   const localRepositoryCount = repositories.filter((repository) => repository.localPath).length
   const githubOnlyRepositoryCount = repositories.length - localRepositoryCount
-  const visibleRepositories = searchedRepositories.filter((repository) =>
-    repositoryTab === 'local' ? Boolean(repository.localPath) : !repository.localPath,
+  const selectedWorkspace = organizationCatalog.workspaces.find(
+    (workspace) => workspace.id === selectedWorkspaceId,
+  ) ?? null
+  const selectedWorkspaceRepositoryCount = selectedWorkspaceId
+    ? repositories.filter((repository) =>
+      organizationAssignments[repositoryOrganizationKey(repository)]?.workspaceIds
+        .includes(selectedWorkspaceId)).length
+    : 0
+  const activeRepositoryOrganizationFilterCount =
+    (repositoryTab === 'workspace' ? 0 : repositoryOrganizationFilters.workspaceIds.length) +
+    repositoryOrganizationFilters.groupIds.length +
+    repositoryOrganizationFilters.tagIds.length
+  const organizationFilteredRepositories = searchedRepositories.filter((repository) => {
+    const assignment = organizationAssignments[repositoryOrganizationKey(repository)] ??
+      emptyRepositoryOrganization()
+    const matches = (filters: string[], assigned: string[]): boolean =>
+      filters.length === 0 || filters.some((id) => assigned.includes(id))
+    return (repositoryTab === 'workspace' ||
+      matches(repositoryOrganizationFilters.workspaceIds, assignment.workspaceIds)) &&
+      matches(repositoryOrganizationFilters.groupIds, assignment.groupIds) &&
+      matches(repositoryOrganizationFilters.tagIds, assignment.tagIds)
+  })
+  const workspaceOrderIndex = new Map(
+    workspaceRepositoryOrder.map((repositoryKey, index) => [repositoryKey, index]),
   )
+  const visibleRepositories = organizationFilteredRepositories.filter((repository) => {
+    if (repositoryTab === 'local') return Boolean(repository.localPath)
+    if (repositoryTab === 'github') return !repository.localPath
+    if (!selectedWorkspaceId) return false
+    return organizationAssignments[repositoryOrganizationKey(repository)]?.workspaceIds
+      .includes(selectedWorkspaceId) ?? false
+  }).sort((left, right) => repositoryTab === 'workspace'
+    ? (workspaceOrderIndex.get(repositoryOrganizationKey(left)) ?? Number.MAX_SAFE_INTEGER) -
+      (workspaceOrderIndex.get(repositoryOrganizationKey(right)) ?? Number.MAX_SAFE_INTEGER)
+    : 0)
   const repositoryPageCount = Math.max(
     1,
     Math.ceil(visibleRepositories.length / repositoriesPerPage),
@@ -424,7 +736,45 @@ export function App() {
     (repositoryPage - 1) * repositoriesPerPage,
     repositoryPage * repositoriesPerPage,
   )
-  const monitoredPaths = activeView === 'repositories' && repositoryTab === 'local'
+  const listedRepositoryStatuses = pagedRepositories.flatMap((repository) => {
+    if (!repository.localPath) return []
+    const status = gitStatuses[repository.localPath]
+    return status && !status.error ? [status] : []
+  })
+  const listedRepositoriesWithChanges = listedRepositoryStatuses.filter((status) =>
+    status.staged + status.unstaged + status.untracked + status.conflicts > 0)
+  const listedChangeCount = listedRepositoriesWithChanges.reduce((total, status) =>
+    total + status.staged + status.unstaged + status.untracked + status.conflicts, 0)
+  const listedConflictCount = listedRepositoriesWithChanges.reduce((total, status) =>
+    total + status.conflicts, 0)
+  const listedPushNeededCount = listedRepositoryStatuses.filter((status) => status.ahead > 0).length
+  const listedPullNeededCount = listedRepositoryStatuses.filter((status) => status.behind > 0).length
+  const listedHasStatus = listedConflictCount > 0 || listedChangeCount > 0 ||
+    listedPushNeededCount > 0 || listedPullNeededCount > 0
+  const selectedRepositories = repositories.filter((repository) =>
+    selectedRepositoryKeys.includes(repositoryOrganizationKey(repository)),
+  )
+  const visibleLocalRepositories = visibleRepositories.filter((repository) => repository.localPath)
+  const selectedLocalRepositories = selectedRepositories.filter((repository) => repository.localPath)
+  const bulkGitRepositories = bulkGitTarget === 'selected'
+    ? selectedLocalRepositories
+    : visibleLocalRepositories
+  const pagedRepositoryKeys = pagedRepositories.map(repositoryOrganizationKey)
+  const selectedOnPageCount = pagedRepositoryKeys.filter((key) =>
+    selectedRepositoryKeys.includes(key),
+  ).length
+  const allRepositoriesOnPageSelected = pagedRepositoryKeys.length > 0 &&
+    selectedOnPageCount === pagedRepositoryKeys.length
+  const activeRepositoryOrganizationFilters = organizationKinds.flatMap((kind) => {
+    const field = organizationFieldForKind[kind]
+    const catalogField = organizationCopy[kind].catalogField
+    return organizationCatalog[catalogField]
+      .filter((item) => repositoryOrganizationFilters[field].includes(item.id))
+  })
+  const workspaceReorderEnabled = repositoryTab === 'workspace' &&
+    !workspaceOrderLoading && !workspaceOrderSaving && !repositorySearch.trim() &&
+    activeRepositoryOrganizationFilterCount === 0
+  const monitoredPaths = activeView === 'repositories'
     ? pagedRepositories.flatMap((repository) => repository.localPath ? [repository.localPath] : [])
     : []
   const monitoredPathsKey = JSON.stringify(monitoredPaths)
@@ -608,6 +958,65 @@ export function App() {
     }
   }
 
+  const openPublishRepository = (repository: GitHubRepository): void => {
+    const account = accounts.find((item) => item.id === repository.accountId) ?? accounts[0]
+    const [existingOwner, existingName] = repository.fullName.split('/', 2)
+    setPublishRepository(repository)
+    setPublishAccountId(account ? String(account.id) : null)
+    setPublishOwner(repository.profileUrl && existingOwner ? existingOwner : account?.login ?? '')
+    setPublishName(existingName || repository.name)
+    setPublishDescription(repository.description ?? '')
+    setPublishPrivate(true)
+    setPublishError(null)
+  }
+
+  const publishLocalRepository = async (): Promise<void> => {
+    if (!window.desktop || !publishRepository?.localPath || !publishAccountId) return
+    const oldKey = repositoryOrganizationKey(publishRepository)
+    setPublishSaving(true)
+    setPublishError(null)
+    try {
+      const result = await window.desktop.repositories.publish({
+        path: publishRepository.localPath,
+        accountId: Number(publishAccountId),
+        owner: publishOwner.trim(),
+        name: publishName.trim(),
+        description: publishDescription.trim(),
+        private: publishPrivate,
+      })
+      const newKey = repositoryOrganizationKey(result.repository)
+      setRepositories((current) => {
+        const withoutPublishedPath = current.filter((item) =>
+          item.localPath !== result.repository.localPath &&
+          repositoryOrganizationKey(item) !== newKey)
+        return [result.repository, ...withoutPublishedPath]
+      })
+      setGitStatuses((current) => ({ ...current, [result.status.path]: result.status }))
+      if (oldKey !== newKey) {
+        setOrganizationAssignments((current) => {
+          const next = { ...current }
+          if (next[oldKey]) next[newKey] = next[oldKey]
+          delete next[oldKey]
+          return next
+        })
+        setRepositoryColors((current) => {
+          const next = { ...current }
+          if (next[oldKey]) next[newKey] = next[oldKey]
+          delete next[oldKey]
+          return next
+        })
+        setSelectedRepositoryKeys((current) => current.map((key) => key === oldKey ? newKey : key))
+      }
+      setCloneResult({ fullName: result.repository.fullName, path: result.repository.localPath! })
+      setPublishRepository(null)
+      setRelativeTimeNow(Date.now())
+    } catch (error) {
+      setPublishError(errorMessage(error))
+    } finally {
+      setPublishSaving(false)
+    }
+  }
+
   const openRepositoryInVSCode = async (path: string): Promise<void> => {
     if (!window.desktop) return
     setRepositoriesError(null)
@@ -742,6 +1151,69 @@ export function App() {
     }
   }
 
+  const openBulkGit = (target: BulkGitTarget): void => {
+    setBulkGitTarget(target)
+    setBulkGitOperation('sync')
+    setBulkGitResults([])
+    setBulkGitOpen(true)
+  }
+
+  const runBulkGitOperation = async (): Promise<void> => {
+    if (!window.desktop || bulkGitRepositories.length === 0) return
+    const targets = [...bulkGitRepositories]
+    setBulkGitRunning(true)
+    setBulkGitResults(targets.map((repository) => ({
+      repositoryKey: repositoryOrganizationKey(repository),
+      fullName: repository.fullName,
+      status: 'pending',
+    })))
+
+    for (const repository of targets) {
+      const repositoryKey = repositoryOrganizationKey(repository)
+      const repositoryPath = repository.localPath!
+      setBulkGitResults((current) => current.map((result) =>
+        result.repositoryKey === repositoryKey ? { ...result, status: 'running' } : result))
+      try {
+        let details: RepositoryGitDetails
+        if (bulkGitOperation === 'sync') {
+          await window.desktop.repositories.gitPull(repositoryPath)
+          details = await window.desktop.repositories.gitPush(repositoryPath)
+        } else if (bulkGitOperation === 'fetch') {
+          details = await window.desktop.repositories.gitFetch(repositoryPath)
+        } else if (bulkGitOperation === 'pull') {
+          details = await window.desktop.repositories.gitPull(repositoryPath)
+        } else {
+          details = await window.desktop.repositories.gitPush(repositoryPath)
+        }
+        setGitStatuses((current) => ({ ...current, [details.status.path]: details.status }))
+        if (bulkGitOperation === 'sync') {
+          const syncedAt = new Date().toISOString()
+          setRepositories((current) => current.map((item) =>
+            item.localPath === repositoryPath ? { ...item, lastSyncedAt: syncedAt } : item,
+          ))
+        }
+        setBulkGitResults((current) => current.map((result) =>
+          result.repositoryKey === repositoryKey
+            ? { ...result, status: 'success', message: 'Completed' }
+            : result))
+      } catch (error) {
+        setBulkGitResults((current) => current.map((result) =>
+          result.repositoryKey === repositoryKey
+            ? { ...result, status: 'error', message: errorMessage(error) }
+            : result))
+        try {
+          const details = await window.desktop.repositories.gitDetails(repositoryPath)
+          setGitStatuses((current) => ({ ...current, [details.status.path]: details.status }))
+        } catch {
+          // Preserve the action error; refreshing status is best-effort.
+        }
+      }
+    }
+
+    setRelativeTimeNow(Date.now())
+    setBulkGitRunning(false)
+  }
+
   const commitFromCard = async (): Promise<void> => {
     if (!window.desktop || !cardCommitRepository?.localPath) return
     const message = cardCommitMessage.trim()
@@ -858,6 +1330,339 @@ export function App() {
     }
   }
 
+  const openOrganizeRepository = (repository: GitHubRepository): void => {
+    setOrganizeRepository(repository)
+    setOrganizationDraft(
+      organizationAssignments[repositoryOrganizationKey(repository)] ?? emptyRepositoryOrganization(),
+    )
+    setOrganizationError(null)
+    setRepositoryColorDraft(repositoryColors[repositoryOrganizationKey(repository)] ?? '')
+    setNewOrganizationNames({ workspace: '', group: '', tag: '' })
+  }
+
+  const toggleOrganizationAssignment = (kind: OrganizationKind, id: string): void => {
+    const field = organizationFieldForKind[kind]
+    setOrganizationDraft((current) => ({
+      ...current,
+      [field]: current[field].includes(id)
+        ? current[field].filter((itemId) => itemId !== id)
+        : [...current[field], id],
+    }))
+  }
+
+  const createOrganizationItem = async (kind: OrganizationKind): Promise<void> => {
+    if (!window.desktop) return
+    const name = newOrganizationNames[kind].trim()
+    if (!name) return
+    setOrganizationLoading(true)
+    setOrganizationError(null)
+    try {
+      const item = await window.desktop.organization.create(kind, {
+        name,
+        color: organizationDefaultColor[kind],
+      })
+      const catalogField = kind === 'workspace' ? 'workspaces' : kind === 'group' ? 'groups' : 'tags'
+      setOrganizationCatalog((current) => ({
+        ...current,
+        [catalogField]: [...current[catalogField], item].sort((left, right) =>
+          left.name.localeCompare(right.name)),
+      }))
+      setNewOrganizationNames((current) => ({ ...current, [kind]: '' }))
+      const assignmentField = organizationFieldForKind[kind]
+      setOrganizationDraft((current) => ({
+        ...current,
+        [assignmentField]: [...current[assignmentField], item.id],
+      }))
+    } catch (error) {
+      setOrganizationError(errorMessage(error))
+    } finally {
+      setOrganizationLoading(false)
+    }
+  }
+
+  const saveRepositoryOrganization = async (): Promise<void> => {
+    if (!window.desktop || !organizeRepository) return
+    setOrganizationSaving(true)
+    setOrganizationError(null)
+    try {
+      const entry = await window.desktop.organization.saveRepository(
+        organizeRepository.accountId,
+        organizeRepository.fullName,
+        organizationDraft,
+      )
+      setOrganizationAssignments((current) => ({
+        ...current,
+        [entry.repositoryKey]: {
+          workspaceIds: entry.workspaceIds,
+          groupIds: entry.groupIds,
+          tagIds: entry.tagIds,
+        },
+      }))
+      const appearance = await window.desktop.organization.saveRepositoryColor(
+        organizeRepository.accountId,
+        organizeRepository.fullName,
+        repositoryColorDraft || null,
+      )
+      setRepositoryColors((current) => {
+        const next = { ...current }
+        if (appearance.color) next[appearance.repositoryKey] = appearance.color
+        else delete next[appearance.repositoryKey]
+        return next
+      })
+      setOrganizationCatalog(await window.desktop.organization.list())
+      setOrganizeRepository(null)
+    } catch (error) {
+      setOrganizationError(errorMessage(error))
+    } finally {
+      setOrganizationSaving(false)
+    }
+  }
+
+  const toggleRepositorySelection = (repository: GitHubRepository): void => {
+    const key = repositoryOrganizationKey(repository)
+    setSelectedRepositoryKeys((current) => current.includes(key)
+      ? current.filter((item) => item !== key)
+      : [...current, key])
+  }
+
+  const toggleRepositoryOrganizationFilter = (kind: OrganizationKind, id: string): void => {
+    const field = organizationFieldForKind[kind]
+    setRepositoryOrganizationFilters((current) => ({
+      ...current,
+      [field]: current[field].includes(id)
+        ? current[field].filter((itemId) => itemId !== id)
+        : [...current[field], id],
+    }))
+    setRepositoryPage(1)
+    repositoryResultsScrollRef.current?.scrollTo({ top: 0 })
+  }
+
+  const clearRepositoryOrganizationFilters = (): void => {
+    setRepositoryOrganizationFilters(emptyRepositoryOrganization())
+    setRepositoryPage(1)
+    repositoryResultsScrollRef.current?.scrollTo({ top: 0 })
+  }
+
+  const toggleCurrentRepositoryPage = (): void => {
+    setSelectedRepositoryKeys((current) => {
+      if (allRepositoriesOnPageSelected) {
+        return current.filter((key) => !pagedRepositoryKeys.includes(key))
+      }
+      return [...new Set([...current, ...pagedRepositoryKeys])]
+    })
+  }
+
+  const closeRepositorySelection = (): void => {
+    setRepositorySelectionMode(false)
+    setSelectedRepositoryKeys([])
+  }
+
+  const openBulkOrganization = (): void => {
+    if (selectedRepositories.length === 0) return
+    setBulkOrganizationChanges({})
+    setBulkOrganizationError(null)
+    setBulkOrganizationOpen(true)
+  }
+
+  const saveBulkOrganization = async (): Promise<void> => {
+    if (!window.desktop || selectedRepositories.length === 0) return
+    setBulkOrganizationSaving(true)
+    setBulkOrganizationError(null)
+    try {
+      const entries = await Promise.all(selectedRepositories.map((repository) => {
+        const current = organizationAssignments[repositoryOrganizationKey(repository)] ??
+          emptyRepositoryOrganization()
+        const next: RepositoryOrganization = {
+          workspaceIds: [...current.workspaceIds],
+          groupIds: [...current.groupIds],
+          tagIds: [...current.tagIds],
+        }
+
+        organizationKinds.forEach((kind) => {
+          const field = organizationFieldForKind[kind]
+          const catalogField = organizationCopy[kind].catalogField
+          const ids = new Set(next[field])
+          organizationCatalog[catalogField].forEach((item) => {
+            const change = bulkOrganizationChanges[bulkOrganizationChangeKey(kind, item.id)]
+            if (change === true) ids.add(item.id)
+            if (change === false) ids.delete(item.id)
+          })
+          next[field] = [...ids]
+        })
+
+        return window.desktop!.organization.saveRepository(
+          repository.accountId,
+          repository.fullName,
+          next,
+        )
+      }))
+
+      setOrganizationAssignments((current) => {
+        const next = { ...current }
+        entries.forEach((entry) => {
+          next[entry.repositoryKey] = {
+            workspaceIds: entry.workspaceIds,
+            groupIds: entry.groupIds,
+            tagIds: entry.tagIds,
+          }
+        })
+        return next
+      })
+      setOrganizationCatalog(await window.desktop.organization.list())
+      setBulkOrganizationOpen(false)
+      closeRepositorySelection()
+    } catch (error) {
+      setBulkOrganizationError(errorMessage(error))
+      const [catalog, assignments] = await Promise.all([
+        window.desktop.organization.list(),
+        window.desktop.organization.assignments(),
+      ]).catch(() => [null, null] as const)
+      if (catalog) setOrganizationCatalog(catalog)
+      if (assignments) {
+        setOrganizationAssignments(Object.fromEntries(assignments.map((entry) => [
+          entry.repositoryKey,
+          {
+            workspaceIds: entry.workspaceIds,
+            groupIds: entry.groupIds,
+            tagIds: entry.tagIds,
+          },
+        ])))
+      }
+    } finally {
+      setBulkOrganizationSaving(false)
+    }
+  }
+
+  const openOrganizationEditor = (
+    kind: OrganizationKind,
+    item: OrganizationItem | null = null,
+  ): void => {
+    setOrganizationEditorKind(kind)
+    setOrganizationEditorItem(item)
+    setOrganizationEditorName(item?.name ?? '')
+    setOrganizationEditorColor(item?.color ?? organizationDefaultColor[kind])
+    setOrganizationEditorDescription(item?.description ?? '')
+    setOrganizationEditorError(null)
+  }
+
+  const openWorkspaceRepositories = (workspaceId: string): void => {
+    setSelectedWorkspaceId(workspaceId)
+    setSelectedAccountId('all')
+    setRepositoryTab('workspace')
+    setRepositoryOrganizationFilters((current) => ({ ...current, workspaceIds: [] }))
+    setRepositorySearch('')
+    setRepositorySelectionMode(false)
+    setSelectedRepositoryKeys([])
+    setRepositoryPage(1)
+    setActiveView('repositories')
+  }
+
+  const reorderWorkspaceRepository = async (
+    sourceRepositoryKey: string,
+    targetRepositoryKey: string,
+  ): Promise<void> => {
+    if (!window.desktop || !selectedWorkspaceId || sourceRepositoryKey === targetRepositoryKey) return
+    const previousOrder = [...workspaceRepositoryOrder]
+    const sourceIndex = previousOrder.indexOf(sourceRepositoryKey)
+    const targetIndex = previousOrder.indexOf(targetRepositoryKey)
+    if (sourceIndex < 0 || targetIndex < 0) {
+      setWorkspaceOrderError('Workspace order changed. Refresh the workspace and try again.')
+      return
+    }
+
+    const nextOrder = [...previousOrder]
+    nextOrder.splice(sourceIndex, 1)
+    const targetIndexAfterRemoval = nextOrder.indexOf(targetRepositoryKey)
+    const insertIndex = sourceIndex < targetIndex ? targetIndexAfterRemoval + 1 : targetIndexAfterRemoval
+    nextOrder.splice(insertIndex, 0, sourceRepositoryKey)
+    setWorkspaceRepositoryOrder(nextOrder)
+    setWorkspaceOrderSaving(true)
+    setWorkspaceOrderError(null)
+    try {
+      setWorkspaceRepositoryOrder(
+        await window.desktop.organization.reorderWorkspace(selectedWorkspaceId, nextOrder),
+      )
+    } catch (error) {
+      setWorkspaceRepositoryOrder(previousOrder)
+      setWorkspaceOrderError(errorMessage(error))
+    } finally {
+      setWorkspaceOrderSaving(false)
+      setDraggedRepositoryKey(null)
+      setRepositoryDropTarget(null)
+    }
+  }
+
+  const saveOrganizationItem = async (): Promise<void> => {
+    if (!window.desktop || !organizationEditorKind) return
+    const name = organizationEditorName.trim()
+    if (!name) {
+      setOrganizationEditorError('Enter a name.')
+      return
+    }
+    setOrganizationEditorSaving(true)
+    setOrganizationEditorError(null)
+    try {
+      const input = {
+        name,
+        color: organizationEditorColor,
+        description: organizationEditorDescription.trim(),
+      }
+      if (organizationEditorItem) {
+        await window.desktop.organization.update(
+          organizationEditorKind,
+          organizationEditorItem.id,
+          input,
+        )
+      } else {
+        await window.desktop.organization.create(organizationEditorKind, input)
+      }
+      setOrganizationCatalog(await window.desktop.organization.list())
+      setOrganizationEditorKind(null)
+      setOrganizationEditorItem(null)
+    } catch (error) {
+      setOrganizationEditorError(errorMessage(error))
+    } finally {
+      setOrganizationEditorSaving(false)
+    }
+  }
+
+  const removeOrganizationItem = async (): Promise<void> => {
+    if (!window.desktop || !organizationDeleteItem) return
+    setOrganizationEditorSaving(true)
+    setOrganizationEditorError(null)
+    try {
+      await window.desktop.organization.remove(
+        organizationDeleteItem.kind,
+        organizationDeleteItem.id,
+      )
+      const [catalog, assignments] = await Promise.all([
+        window.desktop.organization.list(),
+        window.desktop.organization.assignments(),
+      ])
+      setOrganizationCatalog(catalog)
+      const removedFilterField = organizationFieldForKind[organizationDeleteItem.kind]
+      setRepositoryOrganizationFilters((current) => ({
+        ...current,
+        [removedFilterField]: current[removedFilterField].filter(
+          (id) => id !== organizationDeleteItem.id,
+        ),
+      }))
+      setOrganizationAssignments(Object.fromEntries(assignments.map((entry) => [
+        entry.repositoryKey,
+        {
+          workspaceIds: entry.workspaceIds,
+          groupIds: entry.groupIds,
+          tagIds: entry.tagIds,
+        },
+      ])))
+      setOrganizationDeleteItem(null)
+    } catch (error) {
+      setOrganizationEditorError(errorMessage(error))
+    } finally {
+      setOrganizationEditorSaving(false)
+    }
+  }
+
   const saveSettings = async (): Promise<void> => {
     if (!window.desktop) return
     setSettingsSaving(true)
@@ -876,6 +1681,131 @@ export function App() {
     }
   }
 
+  const reloadPortableConfiguration = async (): Promise<void> => {
+    if (!window.desktop) return
+    const [catalog, assignments, appearances] = await Promise.all([
+      window.desktop.organization.list(),
+      window.desktop.organization.assignments(),
+      window.desktop.organization.appearances(),
+    ])
+    setOrganizationCatalog(catalog)
+    setOrganizationAssignments(Object.fromEntries(assignments.map((entry) => [
+      entry.repositoryKey,
+      {
+        workspaceIds: entry.workspaceIds,
+        groupIds: entry.groupIds,
+        tagIds: entry.tagIds,
+      },
+    ])))
+    setRepositoryColors(Object.fromEntries(appearances.flatMap((entry) =>
+      entry.color ? [[entry.repositoryKey, entry.color]] : [])))
+  }
+
+  const loadConfigurationRemoteRepositories = async (accountId: string): Promise<void> => {
+    if (!window.desktop) return
+    setConfigurationRemoteLoading(true)
+    setConfigurationRemoteRepository(null)
+    try {
+      const remoteRepositories = await window.desktop.repositories.list(Number(accountId))
+      setConfigurationRemoteRepositories(remoteRepositories.filter((repository) => !repository.archived))
+      setConfigurationSyncError(null)
+    } catch (error) {
+      setConfigurationRemoteRepositories([])
+      setConfigurationSyncError(errorMessage(error))
+    } finally {
+      setConfigurationRemoteLoading(false)
+    }
+  }
+
+  const openConfigurationSetup = (mode: 'create' | 'remote' | 'local'): void => {
+    const account = accounts.find((item) => String(item.id) === selectedAccountId) ?? accounts[0]
+    setConfigurationSetupMode(mode)
+    setConfigurationSetupAccountId(account ? String(account.id) : null)
+    setConfigurationSetupOwner(account?.login ?? '')
+    setConfigurationSetupName('myrepos-config')
+    setConfigurationSetupPrivate(true)
+    setConfigurationSetupAutoSync(true)
+    setConfigurationRemoteRepository(null)
+    setConfigurationSyncError(null)
+    setConfigurationSetupOpen(true)
+    if (mode === 'remote' && account) void loadConfigurationRemoteRepositories(String(account.id))
+  }
+
+  const completeConfigurationSetup = async (): Promise<void> => {
+    if (!window.desktop || !configurationSetupAccountId) return
+    setConfigurationSyncAction('setup')
+    setConfigurationSyncError(null)
+    try {
+      let state: ConfigurationSyncState | null
+      if (configurationSetupMode === 'create') {
+        state = await window.desktop.configurationSync.create({
+          accountId: Number(configurationSetupAccountId),
+          owner: configurationSetupOwner.trim(),
+          name: configurationSetupName.trim(),
+          private: configurationSetupPrivate,
+        })
+      } else if (configurationSetupMode === 'remote') {
+        if (!configurationRemoteRepository) throw new Error('Choose a GitHub repository.')
+        state = await window.desktop.configurationSync.connectRemote(
+          Number(configurationSetupAccountId),
+          configurationRemoteRepository,
+        )
+      } else {
+        state = await window.desktop.configurationSync.connectLocal(
+          Number(configurationSetupAccountId),
+        )
+      }
+      if (!state) return
+      if (configurationSetupAutoSync) {
+        state = await window.desktop.configurationSync.setAutoSync(true)
+      }
+      setConfigurationSync(state)
+      await reloadPortableConfiguration()
+      setConfigurationSetupOpen(false)
+    } catch (error) {
+      setConfigurationSyncError(errorMessage(error))
+    } finally {
+      setConfigurationSyncAction(null)
+    }
+  }
+
+  const runConfigurationSync = async (action: ConfigurationSyncAction): Promise<void> => {
+    if (!window.desktop) return
+    setConfigurationSyncAction(action)
+    setConfigurationSyncError(null)
+    try {
+      const state = await window.desktop.configurationSync.run(action)
+      setConfigurationSync(state)
+      if (action !== 'push') await reloadPortableConfiguration()
+    } catch (error) {
+      setConfigurationSyncError(errorMessage(error))
+    } finally {
+      setConfigurationSyncAction(null)
+    }
+  }
+
+  const changeConfigurationAutoSync = async (enabled: boolean): Promise<void> => {
+    if (!window.desktop) return
+    setConfigurationSyncError(null)
+    try {
+      setConfigurationSync(await window.desktop.configurationSync.setAutoSync(enabled))
+    } catch (error) {
+      setConfigurationSyncError(errorMessage(error))
+    }
+  }
+
+  const disconnectConfigurationSync = async (): Promise<void> => {
+    if (!window.desktop || !window.confirm(
+      'Disconnect this configuration repository? The repository and its files will not be deleted.',
+    )) return
+    try {
+      setConfigurationSync(await window.desktop.configurationSync.disconnect())
+      setConfigurationSyncError(null)
+    } catch (error) {
+      setConfigurationSyncError(errorMessage(error))
+    }
+  }
+
   const historyFilesShown = filesPanelTab === 'history' && commitFilesVisible
   const scmHasContent = scmNavigatorVisible || historyFilesShown || diffVisible
   const scmGridColumns = [
@@ -885,6 +1815,19 @@ export function App() {
     historyFilesShown && diffVisible ? '6px' : null,
     diffVisible ? 'minmax(0, 1fr)' : null,
   ].filter(Boolean).join(' ') || 'minmax(0, 1fr)'
+  const activeOrganizationKind: OrganizationKind | null = activeView === 'workspaces'
+    ? 'workspace'
+    : activeView === 'groups'
+      ? 'group'
+      : activeView === 'tags'
+        ? 'tag'
+        : null
+  const activeOrganizationCopy = activeOrganizationKind
+    ? organizationCopy[activeOrganizationKind]
+    : null
+  const activeOrganizationItems = activeOrganizationKind && activeOrganizationCopy
+    ? organizationCatalog[activeOrganizationCopy.catalogField]
+    : []
 
   return (
     <div className="app-frame" data-platform={platform}>
@@ -938,6 +1881,34 @@ export function App() {
           >
             <IconBook2 size={17} stroke={1.7} />
             <Text size="sm" fw={600}>Repositories</Text>
+          </UnstyledButton>
+          <Text className="nav-section-title nav-section-title--secondary">ORGANIZE</Text>
+          <UnstyledButton
+            className="nav-item"
+            title="Workspaces"
+            data-active={activeView === 'workspaces' || undefined}
+            onClick={() => setActiveView('workspaces')}
+          >
+            <IconBriefcase size={17} stroke={1.7} />
+            <Text size="sm" fw={600}>Workspaces</Text>
+          </UnstyledButton>
+          <UnstyledButton
+            className="nav-item"
+            title="Groups"
+            data-active={activeView === 'groups' || undefined}
+            onClick={() => setActiveView('groups')}
+          >
+            <IconFolders size={17} stroke={1.7} />
+            <Text size="sm" fw={600}>Groups</Text>
+          </UnstyledButton>
+          <UnstyledButton
+            className="nav-item"
+            title="Tags"
+            data-active={activeView === 'tags' || undefined}
+            onClick={() => setActiveView('tags')}
+          >
+            <IconTags size={17} stroke={1.7} />
+            <Text size="sm" fw={600}>Tags</Text>
           </UnstyledButton>
           <UnstyledButton
             className="nav-item"
@@ -1018,6 +1989,24 @@ export function App() {
                 onClick={() => setActiveView('repositories')}
               >
                 Repositories
+              </Menu.Item>
+              <Menu.Item
+                leftSection={<IconBriefcase size={15} />}
+                onClick={() => setActiveView('workspaces')}
+              >
+                Workspaces
+              </Menu.Item>
+              <Menu.Item
+                leftSection={<IconFolders size={15} />}
+                onClick={() => setActiveView('groups')}
+              >
+                Groups
+              </Menu.Item>
+              <Menu.Item
+                leftSection={<IconTags size={15} />}
+                onClick={() => setActiveView('tags')}
+              >
+                Tags
               </Menu.Item>
               <Menu.Item
                 leftSection={<IconSettings size={15} />}
@@ -1101,7 +2090,17 @@ export function App() {
               className="topbar-tabs"
               value={repositoryTab}
               onChange={(value) => {
-                setRepositoryTab((value as RepositoryTab | null) ?? 'github')
+                const nextTab = (value as RepositoryTab | null) ?? 'github'
+                setRepositoryTab(nextTab)
+                if (nextTab === 'workspace') {
+                  setSelectedAccountId('all')
+                  setRepositoryOrganizationFilters((current) => ({
+                    ...current,
+                    workspaceIds: [],
+                  }))
+                }
+                setRepositorySelectionMode(false)
+                setSelectedRepositoryKeys([])
                 setRepositoryPage(1)
                 repositoryResultsScrollRef.current?.scrollTo({ top: 0 })
               }}
@@ -1113,17 +2112,50 @@ export function App() {
                 <Tabs.Tab value="github" leftSection={<IconPlus size={14} />}>
                   GitHub <span className="tab-count">{repositoriesLoading ? '…' : githubOnlyRepositoryCount}</span>
                 </Tabs.Tab>
+                <Tabs.Tab
+                  value="workspace"
+                  leftSection={<IconBriefcase size={14} />}
+                  disabled={organizationCatalog.workspaces.length === 0}
+                >
+                  <span
+                    className="workspace-tab-name"
+                    title={selectedWorkspace?.name ?? 'Workspaces'}
+                  >
+                    {selectedWorkspace?.name ?? 'Workspaces'}
+                  </span>
+                  <span className="tab-count">
+                    {repositoriesLoading ? '…' : selectedWorkspaceRepositoryCount}
+                  </span>
+                </Tabs.Tab>
               </Tabs.List>
             </Tabs>
-            <Button
-              size="xs"
-              variant="light"
-              leftSection={<IconFolderSearch size={15} />}
-              onClick={() => void addLocalRepository()}
-            >
-              Add local repository
-            </Button>
+            {repositoryTab === 'workspace' ? (
+              <Button
+                size="xs"
+                variant="light"
+                leftSection={<IconBriefcase size={15} />}
+                onClick={() => setActiveView('workspaces')}
+              >
+                Manage workspaces
+              </Button>
+            ) : (
+              <Button
+                size="xs"
+                variant="light"
+                leftSection={<IconFolderSearch size={15} />}
+                onClick={() => void addLocalRepository()}
+              >
+                Add local repository
+              </Button>
+            )}
             </>
+          ) : activeOrganizationCopy ? (
+            <div className="topbar-heading">
+              <Text fw={700} fz="lg">{activeOrganizationCopy.plural}</Text>
+              <Text size="xs" c="dimmed">
+                {activeOrganizationCopy.description}
+              </Text>
+            </div>
           ) : (
             <div className="topbar-heading">
               <Text fw={700} fz="lg">Settings</Text>
@@ -1152,6 +2184,14 @@ export function App() {
               onClick={() => void refreshRepositories()}
             >
               Refresh
+            </Button>
+          ) : activeOrganizationKind && activeOrganizationCopy ? (
+            <Button
+              size="sm"
+              leftSection={<IconPlus size={16} />}
+              onClick={() => openOrganizationEditor(activeOrganizationKind)}
+            >
+              New {activeOrganizationCopy.singular.toLowerCase()}
             </Button>
           ) : (
             <Button
@@ -1284,23 +2324,45 @@ export function App() {
               <div className="repository-sticky-controls">
                 <section className="repository-toolbar">
                   <Text fz={18} fw={720} className="page-title">Repositories</Text>
-                  <Select
-                    aria-label="GitHub account"
-                    value={selectedAccountId}
-                    data={[
-                      { value: 'all', label: 'All Accounts' },
-                      ...accounts.map((account) => ({
-                        value: String(account.id),
-                        label: `@${account.login}`,
-                      })),
-                    ]}
-                    allowDeselect={false}
-                    onChange={(value) => {
-                      setSelectedAccountId(value)
-                      setRepositorySearch('')
-                      setRepositoryPage(1)
-                    }}
-                  />
+                  {repositoryTab === 'workspace' ? (
+                    <Select
+                      aria-label="Workspace"
+                      value={selectedWorkspaceId}
+                      data={organizationCatalog.workspaces.map((workspace) => ({
+                        value: workspace.id,
+                        label: workspace.name,
+                      }))}
+                      allowDeselect={false}
+                      leftSection={<IconBriefcase size={15} />}
+                      rightSection={workspaceOrderSaving ? <Loader size={13} /> : undefined}
+                      rightSectionPointerEvents="none"
+                      onChange={(value) => {
+                        setSelectedWorkspaceId(value)
+                        setRepositorySearch('')
+                        setRepositorySelectionMode(false)
+                        setSelectedRepositoryKeys([])
+                        setRepositoryPage(1)
+                      }}
+                    />
+                  ) : (
+                    <Select
+                      aria-label="GitHub account"
+                      value={selectedAccountId}
+                      data={[
+                        { value: 'all', label: 'All Accounts' },
+                        ...accounts.map((account) => ({
+                          value: String(account.id),
+                          label: `@${account.login}`,
+                        })),
+                      ]}
+                      allowDeselect={false}
+                      onChange={(value) => {
+                        setSelectedAccountId(value)
+                        setRepositorySearch('')
+                        setRepositoryPage(1)
+                      }}
+                    />
+                  )}
                   <TextInput
                     aria-label="Search repositories"
                     placeholder="Search name, description, or language"
@@ -1311,10 +2373,43 @@ export function App() {
                       setRepositoryPage(1)
                     }}
                   />
-                  <Badge variant="outline" color="gray" size="lg">
-                    {visibleRepositories.length}{' '}
-                    {repositoryTab === 'local' ? 'local' : 'on GitHub'}
-                  </Badge>
+                  <Group className="repository-summary-badges" gap={3} wrap="nowrap">
+                    {listedConflictCount > 0 && (
+                      <Tooltip label={`${listedConflictCount} unresolved ${listedConflictCount === 1 ? 'conflict' : 'conflicts'}`}>
+                        <Badge variant="filled" color="red" size="sm">
+                          {listedConflictCount} {listedConflictCount === 1 ? 'conflict' : 'conflicts'}
+                        </Badge>
+                      </Tooltip>
+                    )}
+                    {listedChangeCount > 0 && (
+                      <Tooltip label={`${listedChangeCount} pending ${listedChangeCount === 1 ? 'change' : 'changes'} across ${listedRepositoriesWithChanges.length} ${listedRepositoriesWithChanges.length === 1 ? 'repository' : 'repositories'}`}>
+                        <Badge variant="filled" color="orange" size="sm">
+                          {listedChangeCount} {listedChangeCount === 1 ? 'change' : 'changes'}
+                        </Badge>
+                      </Tooltip>
+                    )}
+                    {listedPushNeededCount > 0 && (
+                      <Tooltip label={`${listedPushNeededCount} ${listedPushNeededCount === 1 ? 'repository needs' : 'repositories need'} push`}>
+                        <Badge variant="filled" color="pink" size="sm">
+                          ↑ {listedPushNeededCount} push
+                        </Badge>
+                      </Tooltip>
+                    )}
+                    {listedPullNeededCount > 0 && (
+                      <Tooltip label={`${listedPullNeededCount} ${listedPullNeededCount === 1 ? 'repository needs' : 'repositories need'} pull`}>
+                        <Badge variant="filled" color="yellow" size="sm">
+                          ↓ {listedPullNeededCount} pull
+                        </Badge>
+                      </Tooltip>
+                    )}
+                    {!listedHasStatus && (
+                      <Tooltip label={`${visibleRepositories.length} repositories in the current view`}>
+                        <Badge variant="outline" color="gray" size="sm">
+                          {visibleRepositories.length} repos
+                        </Badge>
+                      </Tooltip>
+                    )}
+                  </Group>
                   <Group className="repository-layout-toggle" gap={3} wrap="nowrap">
                     <Tooltip label="List view">
                       <ActionIcon
@@ -1338,7 +2433,172 @@ export function App() {
                       </ActionIcon>
                     </Tooltip>
                   </Group>
+                  <Group className="repository-toolbar-actions" gap={4} wrap="nowrap">
+                    <Menu
+                      position="bottom-end"
+                      shadow="xl"
+                      width={290}
+                      closeOnItemClick={false}
+                      withinPortal
+                    >
+                      <Menu.Target>
+                        <Button
+                          size="xs"
+                          variant={activeRepositoryOrganizationFilterCount > 0 ? 'light' : 'subtle'}
+                          color={activeRepositoryOrganizationFilterCount > 0 ? 'teal' : 'gray'}
+                          leftSection={<IconFilter size={15} />}
+                        >
+                          Filters{activeRepositoryOrganizationFilterCount > 0
+                            ? ` ${activeRepositoryOrganizationFilterCount}`
+                            : ''}
+                        </Button>
+                      </Menu.Target>
+                      <Menu.Dropdown className="repository-filter-menu">
+                        {organizationKinds
+                          .filter((kind) => repositoryTab !== 'workspace' || kind !== 'workspace')
+                          .map((kind, index) => {
+                          const copy = organizationCopy[kind]
+                          const field = organizationFieldForKind[kind]
+                          const items = organizationCatalog[copy.catalogField]
+                          return (
+                            <div key={kind}>
+                              {index > 0 && <Menu.Divider />}
+                              <Menu.Label>{copy.plural}</Menu.Label>
+                              {items.length === 0 ? (
+                                <Menu.Item disabled>No {copy.plural.toLowerCase()} created</Menu.Item>
+                              ) : items.map((item) => (
+                                <Menu.Item
+                                  key={item.id}
+                                  leftSection={(
+                                    <Checkbox
+                                      size="xs"
+                                      checked={repositoryOrganizationFilters[field].includes(item.id)}
+                                      readOnly
+                                      tabIndex={-1}
+                                      styles={{ input: { pointerEvents: 'none' } }}
+                                    />
+                                  )}
+                                  onClick={() => toggleRepositoryOrganizationFilter(kind, item.id)}
+                                >
+                                  <Group justify="space-between" gap="xs" wrap="nowrap">
+                                    <Group gap={8} wrap="nowrap">
+                                      <span
+                                        className="organization-color"
+                                        style={{ backgroundColor: item.color }}
+                                      />
+                                      <Text size="sm" truncate>{item.name}</Text>
+                                    </Group>
+                                    <Text size="10px" c="dimmed">{item.repositoryCount}</Text>
+                                  </Group>
+                                </Menu.Item>
+                              ))}
+                            </div>
+                          )
+                        })}
+                        <Menu.Divider />
+                        <Menu.Item
+                          color="red"
+                          disabled={activeRepositoryOrganizationFilterCount === 0}
+                          leftSection={<IconX size={14} />}
+                          onClick={clearRepositoryOrganizationFilters}
+                        >
+                          Clear organization filters
+                        </Menu.Item>
+                      </Menu.Dropdown>
+                    </Menu>
+                    <Button
+                      size="xs"
+                      variant="subtle"
+                      color="gray"
+                      leftSection={<IconRefresh size={15} />}
+                      disabled={selectedRepositoryKeys.length > 0
+                        ? selectedLocalRepositories.length === 0
+                        : visibleLocalRepositories.length === 0}
+                      onClick={() => openBulkGit(
+                        selectedRepositoryKeys.length > 0 ? 'selected' : 'visible',
+                      )}
+                    >
+                      {selectedRepositoryKeys.length > 0 ? 'Sync selected' : 'Sync visible'}
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant={repositorySelectionMode ? 'light' : 'subtle'}
+                      color={repositorySelectionMode ? 'teal' : 'gray'}
+                      leftSection={<IconCheck size={15} />}
+                      onClick={() => {
+                        if (repositorySelectionMode) closeRepositorySelection()
+                        else setRepositorySelectionMode(true)
+                      }}
+                    >
+                      {repositorySelectionMode ? 'Done' : 'Select'}
+                    </Button>
+                  </Group>
                 </section>
+                {activeRepositoryOrganizationFilters.length > 0 && (
+                  <section className="repository-active-filters">
+                    <Text size="xs" c="dimmed" fw={650}>Filtered by</Text>
+                    {activeRepositoryOrganizationFilters.map((item) => (
+                      <Button
+                        className="repository-filter-chip"
+                        key={`${item.kind}:${item.id}`}
+                        size="compact-xs"
+                        variant="light"
+                        color="gray"
+                        leftSection={(
+                          <span
+                            className="organization-color"
+                            style={{ backgroundColor: item.color }}
+                          />
+                        )}
+                        rightSection={<IconX size={12} />}
+                        onClick={() => toggleRepositoryOrganizationFilter(item.kind, item.id)}
+                      >
+                        {item.name}
+                      </Button>
+                    ))}
+                    <Button
+                      size="compact-xs"
+                      variant="subtle"
+                      color="gray"
+                      onClick={clearRepositoryOrganizationFilters}
+                    >
+                      Clear all
+                    </Button>
+                  </section>
+                )}
+                {repositorySelectionMode && (
+                  <section className="repository-bulk-toolbar">
+                    <Checkbox
+                      size="xs"
+                      checked={allRepositoriesOnPageSelected}
+                      indeterminate={selectedOnPageCount > 0 && !allRepositoriesOnPageSelected}
+                      disabled={pagedRepositories.length === 0}
+                      label="Select this page"
+                      onChange={toggleCurrentRepositoryPage}
+                    />
+                    <Text size="xs" c="dimmed">
+                      {selectedRepositories.length} selected
+                    </Text>
+                    <div className="repository-bulk-toolbar-spacer" />
+                    <Button
+                      size="xs"
+                      variant="subtle"
+                      color="gray"
+                      disabled={selectedRepositories.length === 0}
+                      onClick={() => setSelectedRepositoryKeys([])}
+                    >
+                      Clear
+                    </Button>
+                    <Button
+                      size="xs"
+                      leftSection={<IconTags size={15} />}
+                      disabled={selectedRepositories.length === 0}
+                      onClick={openBulkOrganization}
+                    >
+                      Organize selected
+                    </Button>
+                  </section>
+                )}
               </div>
 
               <div className={`repository-workspace${gitRepository ? ' repository-workspace--split' : ''}`}>
@@ -1377,6 +2637,12 @@ export function App() {
               {repositoriesError && (
                 <Alert mt="lg" color="red" icon={<IconAlertCircle size={17} />}>
                   {repositoriesError}
+                </Alert>
+              )}
+
+              {repositoryTab === 'workspace' && workspaceOrderError && (
+                <Alert mt="lg" color="red" icon={<IconAlertCircle size={17} />}>
+                  {workspaceOrderError}
                 </Alert>
               )}
 
@@ -1422,20 +2688,35 @@ export function App() {
                     <IconBook2 size={34} stroke={1.55} />
                   </div>
                   <Text fz={18} fw={680}>
-                    {repositorySearch
+                    {repositorySearch || activeRepositoryOrganizationFilterCount > 0
                       ? 'No matching repositories'
                       : repositoryTab === 'local'
                         ? 'No local repositories yet'
-                        : 'No GitHub-only repositories'}
+                        : repositoryTab === 'github'
+                          ? 'No GitHub-only repositories'
+                          : `No repositories in ${selectedWorkspace?.name ?? 'this workspace'}`}
                   </Text>
                   <Text size="sm" c="dimmed" ta="center">
-                    {repositorySearch
-                      ? 'Try a different search.'
+                    {repositorySearch || activeRepositoryOrganizationFilterCount > 0
+                      ? 'Try a different search or clear some filters.'
                       : repositoryTab === 'local'
                         ? 'Add an existing repository or get one from GitHub.'
-                        : 'Every available GitHub repository is already local.'}
+                        : repositoryTab === 'github'
+                          ? 'Every available GitHub repository is already local.'
+                          : 'Assign repositories from their Organize action, then they will appear here.'}
                   </Text>
-                  {!repositorySearch && repositoryTab === 'local' && (
+                  {activeRepositoryOrganizationFilterCount > 0 && (
+                    <Button
+                      mt="xs"
+                      variant="light"
+                      leftSection={<IconX size={15} />}
+                      onClick={clearRepositoryOrganizationFilters}
+                    >
+                      Clear filters
+                    </Button>
+                  )}
+                  {!repositorySearch && activeRepositoryOrganizationFilterCount === 0 &&
+                    repositoryTab === 'local' && (
                     <Button
                       mt="xs"
                       variant="light"
@@ -1445,32 +2726,94 @@ export function App() {
                       Add local repository
                     </Button>
                   )}
+                  {!repositorySearch && activeRepositoryOrganizationFilterCount === 0 &&
+                    repositoryTab === 'workspace' && (
+                    <Button
+                      mt="xs"
+                      variant="light"
+                      leftSection={<IconBriefcase size={16} />}
+                      onClick={() => setActiveView('workspaces')}
+                    >
+                      Manage workspaces
+                    </Button>
+                  )}
                 </Paper>
               ) : (
                 <div className={`repository-collection repository-collection--${repositoryLayout}`}>
                   {pagedRepositories.map((repository) => {
+                    const repositoryKey = repositoryOrganizationKey(repository)
+                    const repositoryColor = repositoryColors[repositoryKey]
                     const gitStatus = repository.localPath
                       ? gitStatuses[repository.localPath]
                       : undefined
                     const changeCount = gitStatus
                       ? gitStatus.staged + gitStatus.unstaged + gitStatus.untracked + gitStatus.conflicts
                       : 0
+                    const assignment = organizationAssignments[repositoryKey]
+                    const assignedOrganizationItems = assignment ? [
+                      ...organizationCatalog.workspaces.filter((item) => assignment.workspaceIds.includes(item.id)),
+                      ...organizationCatalog.groups.filter((item) => assignment.groupIds.includes(item.id)),
+                      ...organizationCatalog.tags.filter((item) => assignment.tagIds.includes(item.id)),
+                    ] : []
 
                     return <Paper
                       className={`repository-card repository-card--${repositoryLayout}`}
+                      data-repository-color={repositoryColor ? true : undefined}
+                      style={repositoryColor
+                        ? ({ '--repository-color': repositoryColor } as CSSProperties)
+                        : undefined}
+                      data-status={gitStatus && !gitStatus.error
+                        ? gitStatus.conflicts > 0
+                          ? 'conflict'
+                          : gitStatus.ahead > 0 || gitStatus.behind > 0
+                            ? 'sync-needed'
+                            : !gitStatus.clean ? 'changes' : undefined
+                        : undefined}
                       data-files-open={gitRepository?.localPath === repository.localPath || undefined}
+                      data-selected={selectedRepositoryKeys.includes(repositoryKey) || undefined}
+                      data-selecting={repositorySelectionMode || undefined}
+                      data-dragging={draggedRepositoryKey === repositoryKey || undefined}
+                      data-drop-target={repositoryDropTarget === repositoryKey &&
+                        draggedRepositoryKey !== repositoryKey || undefined}
+                      onDragOver={(event) => {
+                        if (!workspaceReorderEnabled || !draggedRepositoryKey) return
+                        event.preventDefault()
+                        event.dataTransfer.dropEffect = 'move'
+                        setRepositoryDropTarget(repositoryKey)
+                      }}
+                      onDrop={(event) => {
+                        if (!workspaceReorderEnabled) return
+                        event.preventDefault()
+                        const sourceKey = draggedRepositoryKey || event.dataTransfer.getData('text/plain')
+                        if (sourceKey) void reorderWorkspaceRepository(sourceKey, repositoryKey)
+                      }}
                       radius="lg"
                       key={`${repository.accountId}:${repository.fullName}`}
                     >
+                      {repositorySelectionMode && (
+                        <Checkbox
+                          className="repository-selection-checkbox"
+                          checked={selectedRepositoryKeys.includes(repositoryKey)}
+                          aria-label={`Select ${repository.fullName}`}
+                          onChange={() => toggleRepositorySelection(repository)}
+                        />
+                      )}
                       <div className="repository-details">
                         <Group gap={8} wrap="wrap">
+                          {repositoryColor && (
+                            <span
+                              className="repository-color-dot"
+                              style={{ backgroundColor: repositoryColor }}
+                              title="Repository color"
+                            />
+                          )}
                           <Text fw={680}>{repository.fullName}</Text>
                           {repository.metadataLoaded && (
                             <>
                               <Badge
                                 size="xs"
-                                variant="light"
-                                color={repository.private ? 'yellow' : 'gray'}
+                                variant={repository.private ? 'outline' : 'light'}
+                                color="gray"
                                 leftSection={repository.private ? <IconLock size={10} /> : undefined}
                               >
                                 {repository.private ? 'Private' : 'Public'}
@@ -1486,15 +2829,20 @@ export function App() {
                           {repository.localPath && gitStatus && !gitStatus.error && (
                             <Badge
                               size="xs"
-                              variant="light"
+                              variant={gitStatus.conflicts === 0 &&
+                                (!gitStatus.clean || gitStatus.ahead > 0 || gitStatus.behind > 0)
+                                ? 'filled'
+                                : 'light'}
                               color={gitStatus.conflicts > 0
                                 ? 'red'
                                 : gitStatus.clean && gitStatus.upstream &&
                                     gitStatus.ahead === 0 && gitStatus.behind === 0
                                   ? 'teal'
+                                  : gitStatus.ahead > 0 || gitStatus.behind > 0
+                                    ? 'pink'
                                   : gitStatus.clean
                                     ? 'blue'
-                                    : 'yellow'}
+                                    : 'orange'}
                             >
                               {gitStatus.conflicts > 0
                                 ? `${gitStatus.conflicts} conflicts`
@@ -1506,13 +2854,29 @@ export function App() {
                                   : gitStatus.ahead > 0 || gitStatus.behind > 0
                                     ? 'Sync needed'
                                     : gitStatus.clean
-                                      ? 'Published'
+                                      ? 'Local only'
                                       : `${changeCount} changes`}
                             </Badge>
                           )}
                           {selectedAccountId === 'all' && (
                             <Badge size="xs" variant="outline" color="gray">
                               @{repository.accountLogin}
+                            </Badge>
+                          )}
+                          {assignedOrganizationItems.slice(0, 3).map((item) => (
+                            <Badge
+                              size="xs"
+                              variant="outline"
+                              color="gray"
+                              styles={{ root: { borderColor: item.color, color: item.color } }}
+                              key={item.id}
+                            >
+                              {item.name}
+                            </Badge>
+                          ))}
+                          {assignedOrganizationItems.length > 3 && (
+                            <Badge size="xs" variant="outline" color="gray">
+                              +{assignedOrganizationItems.length - 3}
                             </Badge>
                           )}
                         </Group>
@@ -1570,17 +2934,61 @@ export function App() {
                       </div>
 
                       <Group className="repository-actions" gap="xs" wrap="nowrap">
-                        <ActionIcon
-                          component="a"
-                          href={repository.profileUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          variant="subtle"
-                          color="gray"
-                          aria-label={`Open ${repository.fullName} on GitHub`}
-                        >
-                          <IconExternalLink size={17} />
-                        </ActionIcon>
+                        {repositoryTab === 'workspace' && (
+                          <Tooltip label={workspaceReorderEnabled
+                            ? 'Drag to permanently reorder this workspace'
+                            : workspaceOrderSaving
+                              ? 'Saving workspace order…'
+                              : 'Clear search and filters to reorder'}>
+                            <ActionIcon
+                              className="repository-drag-handle"
+                              variant="subtle"
+                              color="gray"
+                              disabled={!workspaceReorderEnabled}
+                              draggable={workspaceReorderEnabled}
+                              aria-label={`Reorder ${repository.fullName}`}
+                              onDragStart={(event) => {
+                                if (!workspaceReorderEnabled) {
+                                  event.preventDefault()
+                                  return
+                                }
+                                event.dataTransfer.effectAllowed = 'move'
+                                event.dataTransfer.setData('text/plain', repositoryKey)
+                                setDraggedRepositoryKey(repositoryKey)
+                                setRepositoryDropTarget(null)
+                              }}
+                              onDragEnd={() => {
+                                setDraggedRepositoryKey(null)
+                                setRepositoryDropTarget(null)
+                              }}
+                            >
+                              <IconGripVertical size={17} />
+                            </ActionIcon>
+                          </Tooltip>
+                        )}
+                        <Tooltip label="Organize repository">
+                          <ActionIcon
+                            variant="subtle"
+                            color="gray"
+                            aria-label={`Organize ${repository.fullName}`}
+                            onClick={() => openOrganizeRepository(repository)}
+                          >
+                            <IconTags size={17} />
+                          </ActionIcon>
+                        </Tooltip>
+                        {repository.profileUrl && (
+                          <ActionIcon
+                            component="a"
+                            href={repository.profileUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            variant="subtle"
+                            color="gray"
+                            aria-label={`Open ${repository.fullName} on GitHub`}
+                          >
+                            <IconExternalLink size={17} />
+                          </ActionIcon>
+                        )}
                         {repository.localPath ? (
                           <Group gap="xs" wrap="nowrap">
                             {gitStatus && gitStatus.behind > 0 && (
@@ -1630,7 +3038,18 @@ export function App() {
                                 Push {gitStatus.ahead}
                               </Button>
                             )}
-                            {gitStatus && (
+                            {gitStatus && !gitStatus.upstream && (
+                              <Button
+                                size="xs"
+                                variant="light"
+                                leftSection={<IconUpload size={14} />}
+                                disabled={Boolean(cardGitAction) || gitStatus.conflicts > 0}
+                                onClick={() => openPublishRepository(repository)}
+                              >
+                                Publish
+                              </Button>
+                            )}
+                            {gitStatus?.upstream && (
                               <Button
                                 size="xs"
                                 variant="light"
@@ -1860,7 +3279,9 @@ export function App() {
                           <Group gap="xs">
                             <Badge
                               variant="light"
-                              color={gitDetails?.status.clean ? 'teal' : 'yellow'}
+                              color={gitDetails?.status.conflicts
+                                ? 'red'
+                                : gitDetails?.status.clean ? 'teal' : 'orange'}
                               leftSection={<IconGitBranch size={12} />}
                             >
                               {gitDetails?.status.branch ?? 'Repository'}
@@ -2173,7 +3594,13 @@ export function App() {
                                 </Text>
                                 {filesPanelTab === 'changes' && (
                                 <Group gap={5} wrap="nowrap">
-                                  <Badge size="xs" variant="light" color={gitDetails.status.clean ? 'teal' : 'yellow'}>
+                                  <Badge
+                                    size="xs"
+                                    variant="light"
+                                    color={gitDetails.status.conflicts > 0
+                                      ? 'red'
+                                      : gitDetails.status.clean ? 'teal' : 'orange'}
+                                  >
                                     {gitDetails.status.branch ?? 'Detached'}
                                   </Badge>
                                   <Button
@@ -2320,8 +3747,8 @@ export function App() {
                                       <Group gap={5} mt={4}>
                                         {file.conflicted && <Badge size="xs" color="red">Conflict</Badge>}
                                         {file.staged && <Badge size="xs" color="teal">Staged</Badge>}
-                                        {file.unstaged && <Badge size="xs" color="yellow">Modified</Badge>}
-                                        {file.untracked && <Badge size="xs" color="gray">Untracked</Badge>}
+                                        {file.unstaged && <Badge size="xs" color="orange">Modified</Badge>}
+                                        {file.untracked && <Badge size="xs" variant="light" color="orange">Untracked</Badge>}
                                       </Group>
                                     </div>
                                     <Group gap={4} wrap="nowrap">
@@ -2438,6 +3865,122 @@ export function App() {
                 )}
               </div>
             </div>
+          ) : activeOrganizationKind && activeOrganizationCopy ? (
+            <div className="organization-management-content">
+              <section className="intro-row">
+                <div>
+                  <Text fz={24} fw={720} className="page-title">
+                    Manage {activeOrganizationCopy.plural.toLowerCase()}
+                  </Text>
+                  <Text c="dimmed" mt={5} maw={650}>
+                    {activeOrganizationCopy.description}
+                  </Text>
+                </div>
+                <Badge variant="outline" color="gray" size="lg">
+                  {activeOrganizationItems.length}{' '}
+                  {activeOrganizationItems.length === 1
+                    ? activeOrganizationCopy.singular.toLowerCase()
+                    : activeOrganizationCopy.plural.toLowerCase()}
+                </Badge>
+              </section>
+
+              {activeOrganizationItems.length === 0 ? (
+                <Paper className="empty-state organization-empty" radius="lg">
+                  <div className="empty-icon-wrap">
+                    {activeOrganizationKind === 'workspace'
+                      ? <IconBriefcase size={34} stroke={1.55} />
+                      : activeOrganizationKind === 'group'
+                        ? <IconFolders size={34} stroke={1.55} />
+                        : <IconTags size={34} stroke={1.55} />}
+                  </div>
+                  <Text fz={19} fw={680}>
+                    Create your first {activeOrganizationCopy.singular.toLowerCase()}
+                  </Text>
+                  <Text c="dimmed" size="sm" maw={470} ta="center" lh={1.6}>
+                    Once created, you can assign it to repositories from each repository’s Organize action.
+                  </Text>
+                  <Button
+                    mt="xs"
+                    leftSection={<IconPlus size={17} />}
+                    onClick={() => openOrganizationEditor(activeOrganizationKind)}
+                  >
+                    New {activeOrganizationCopy.singular.toLowerCase()}
+                  </Button>
+                </Paper>
+              ) : (
+                <div className="organization-management-grid">
+                  {activeOrganizationItems.map((item) => (
+                    <Paper className="organization-management-card" radius="lg" key={item.id}>
+                      <div
+                        className="organization-management-accent"
+                        style={{ backgroundColor: item.color }}
+                        aria-hidden="true"
+                      />
+                      <Group justify="space-between" align="flex-start" wrap="nowrap">
+                        <Group gap="sm" wrap="nowrap">
+                          <ThemeIcon
+                            variant="light"
+                            color="gray"
+                            size={38}
+                            radius="md"
+                            styles={{ root: { color: item.color } }}
+                          >
+                            {item.kind === 'workspace'
+                              ? <IconBriefcase size={20} />
+                              : item.kind === 'group'
+                                ? <IconFolders size={20} />
+                                : <IconTags size={20} />}
+                          </ThemeIcon>
+                          <div className="organization-management-identity">
+                            <Text fw={700} truncate>{item.name}</Text>
+                            <Text size="xs" c="dimmed">
+                              {item.repositoryCount} {item.repositoryCount === 1 ? 'repository' : 'repositories'}
+                            </Text>
+                          </div>
+                        </Group>
+                        <Group gap={4} wrap="nowrap">
+                          {item.kind === 'workspace' && (
+                            <Button
+                              size="compact-xs"
+                              variant="light"
+                              leftSection={<IconBriefcase size={13} />}
+                              onClick={() => openWorkspaceRepositories(item.id)}
+                            >
+                              Open
+                            </Button>
+                          )}
+                          <Button
+                            size="compact-xs"
+                            variant="subtle"
+                            color="gray"
+                            onClick={() => openOrganizationEditor(item.kind, item)}
+                          >
+                            Edit
+                          </Button>
+                          <Tooltip label={`Delete ${item.name}`}>
+                            <ActionIcon
+                              size="sm"
+                              variant="subtle"
+                              color="red"
+                              aria-label={`Delete ${item.name}`}
+                              onClick={() => {
+                                setOrganizationEditorError(null)
+                                setOrganizationDeleteItem(item)
+                              }}
+                            >
+                              <IconTrash size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        </Group>
+                      </Group>
+                      <Text className="organization-management-description" size="sm" c="dimmed">
+                        {item.description || `No description for this ${organizationCopy[item.kind].singular.toLowerCase()}.`}
+                      </Text>
+                    </Paper>
+                  ))}
+                </div>
+              )}
+            </div>
           ) : (
             <div className="settings-content">
               <section className="intro-row">
@@ -2459,6 +4002,182 @@ export function App() {
                   Settings saved.
                 </Alert>
               )}
+
+              {configurationSyncError && (
+                <Alert mt="lg" color="red" icon={<IconAlertCircle size={17} />}>
+                  {configurationSyncError}
+                </Alert>
+              )}
+
+              <Paper className="settings-card" radius="lg" mt={28}>
+                <Group justify="space-between" align="flex-start" wrap="nowrap">
+                  <Group gap="sm" wrap="nowrap">
+                    <ThemeIcon variant="light" color="teal" size={40} radius="md">
+                      <IconBrandGithub size={22} />
+                    </ThemeIcon>
+                    <div>
+                      <Text fw={680}>Portable configuration repository</Text>
+                      <Text size="xs" c="dimmed">
+                        Sync workspaces, groups, tags, colors, assignments, and ordering through Git.
+                      </Text>
+                    </div>
+                  </Group>
+                  {configurationSync.connected && (
+                    <Badge
+                      color={configurationSync.lastError
+                        ? 'red'
+                        : configurationSync.hasRemote ? 'teal' : 'blue'}
+                      variant="light"
+                    >
+                      {configurationSync.lastError
+                        ? 'Needs attention'
+                        : configurationSync.hasRemote ? 'Connected' : 'Local only'}
+                    </Badge>
+                  )}
+                </Group>
+
+                {configurationSyncLoading ? (
+                  <Group gap="sm" mt="lg"><Loader size="sm" /><Text size="sm">Checking configuration…</Text></Group>
+                ) : configurationSync.connected ? (
+                  <Stack gap="md" mt="lg">
+                    <Paper className="configuration-sync-location" radius="md">
+                      <Text size="sm" fw={650}>
+                        {configurationSync.fullName || 'Local configuration repository'}
+                      </Text>
+                      <Text size="xs" c="dimmed" truncate title={configurationSync.localPath ?? undefined}>
+                        {configurationSync.localPath}
+                      </Text>
+                      <Text size="xs" c={configurationSync.lastError ? 'red.4' : 'dimmed'} mt={5}>
+                        {configurationSync.lastError
+                          ? configurationSync.lastError
+                          : configurationSync.lastSyncedAt
+                            ? `Last updated ${timeAgo(configurationSync.lastSyncedAt, relativeTimeNow)}`
+                            : 'Ready for its first sync'}
+                      </Text>
+                    </Paper>
+                    <Switch
+                      checked={configurationSync.autoSync}
+                      disabled={Boolean(configurationSyncAction)}
+                      label={configurationSync.hasRemote
+                        ? 'Automatically commit and push configuration changes'
+                        : 'Automatically commit local configuration snapshots'}
+                      description="Changes are debounced and only .myrepos/config.json is committed."
+                      onChange={(event) => void changeConfigurationAutoSync(event.currentTarget.checked)}
+                    />
+                    <Group justify="space-between" wrap="wrap">
+                      <Group gap="xs">
+                        {configurationSync.hasRemote && (
+                          <>
+                            <Button
+                              size="xs"
+                              variant="light"
+                              loading={configurationSyncAction === 'sync'}
+                              disabled={Boolean(configurationSyncAction)}
+                              leftSection={<IconRefresh size={14} />}
+                              onClick={() => void runConfigurationSync('sync')}
+                            >
+                              Sync now
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="subtle"
+                              color="gray"
+                              loading={configurationSyncAction === 'pull'}
+                              disabled={Boolean(configurationSyncAction)}
+                              onClick={() => void runConfigurationSync('pull')}
+                            >
+                              Pull
+                            </Button>
+                          </>
+                        )}
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          color="gray"
+                          loading={configurationSyncAction === 'push'}
+                          disabled={Boolean(configurationSyncAction)}
+                          onClick={() => void runConfigurationSync('push')}
+                        >
+                          {configurationSync.hasRemote ? 'Push' : 'Save snapshot'}
+                        </Button>
+                      </Group>
+                      <Group gap="xs">
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          color="gray"
+                          leftSection={<IconFolderOpen size={14} />}
+                          onClick={() => void window.desktop?.configurationSync.openFolder()
+                            .catch((error) => setConfigurationSyncError(errorMessage(error)))}
+                        >
+                          Open folder
+                        </Button>
+                        <Menu position="bottom-end" withinPortal>
+                          <Menu.Target>
+                            <Button size="xs" variant="subtle" color="gray">Change repository</Button>
+                          </Menu.Target>
+                          <Menu.Dropdown>
+                            <Menu.Item onClick={() => openConfigurationSetup('create')}>
+                              Create a new repository
+                            </Menu.Item>
+                            <Menu.Item onClick={() => openConfigurationSetup('remote')}>
+                              Use a GitHub repository
+                            </Menu.Item>
+                            <Menu.Item onClick={() => openConfigurationSetup('local')}>
+                              Use a local repository
+                            </Menu.Item>
+                          </Menu.Dropdown>
+                        </Menu>
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          color="red"
+                          onClick={() => void disconnectConfigurationSync()}
+                        >
+                          Disconnect
+                        </Button>
+                      </Group>
+                    </Group>
+                  </Stack>
+                ) : (
+                  <Stack gap="md" mt="lg">
+                    <Alert color="blue" variant="light">
+                      Credentials, OAuth tokens, absolute local paths, and machine-specific settings
+                      are never written to the shared configuration.
+                    </Alert>
+                    <Group gap="xs" wrap="wrap">
+                      <Button
+                        size="xs"
+                        leftSection={<IconUpload size={14} />}
+                        disabled={accounts.length === 0}
+                        onClick={() => openConfigurationSetup('create')}
+                      >
+                        Create automatically
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="light"
+                        disabled={accounts.length === 0}
+                        onClick={() => openConfigurationSetup('remote')}
+                      >
+                        Use GitHub repository
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        color="gray"
+                        disabled={accounts.length === 0}
+                        onClick={() => openConfigurationSetup('local')}
+                      >
+                        Use local repository
+                      </Button>
+                    </Group>
+                    {accounts.length === 0 && (
+                      <Text size="xs" c="dimmed">Connect a GitHub account before configuring sync.</Text>
+                    )}
+                  </Stack>
+                )}
+              </Paper>
 
               <Paper className="settings-card" radius="lg" mt={28}>
                 <Group gap="sm" mb="lg" wrap="nowrap">
@@ -2495,6 +4214,798 @@ export function App() {
           )}
         </div>
       </main>
+
+      <Modal
+        opened={configurationSetupOpen}
+        onClose={() => {
+          if (configurationSyncAction === 'setup') return
+          setConfigurationSetupOpen(false)
+          setConfigurationSyncError(null)
+        }}
+        title={configurationSetupMode === 'create'
+          ? 'Create configuration repository'
+          : configurationSetupMode === 'remote'
+            ? 'Use GitHub configuration repository'
+            : 'Use local configuration repository'}
+        size="lg"
+        centered
+        closeOnClickOutside={configurationSyncAction !== 'setup'}
+        closeOnEscape={configurationSyncAction !== 'setup'}
+      >
+        <Stack gap="md">
+          <Alert color="blue" variant="light" icon={<IconBrandGithub size={17} />}>
+            {configurationSetupMode === 'create'
+              ? 'With your consent, MyRepos will create, initialize, publish, and connect this repository.'
+              : configurationSetupMode === 'remote'
+                ? 'MyRepos will clone the repository into its managed application data and import .myrepos/config.json when present.'
+                : 'Choose any local Git repository. MyRepos only manages .myrepos/config.json inside it.'}
+          </Alert>
+          {configurationSyncError && (
+            <Alert color="red" icon={<IconAlertCircle size={17} />}>
+              {configurationSyncError}
+            </Alert>
+          )}
+          <Select
+            label="GitHub account"
+            value={configurationSetupAccountId}
+            allowDeselect={false}
+            disabled={configurationSyncAction === 'setup'}
+            data={accounts.map((account) => ({
+              value: String(account.id),
+              label: `@${account.login}`,
+            }))}
+            onChange={(value) => {
+              setConfigurationSetupAccountId(value)
+              const account = accounts.find((item) => String(item.id) === value)
+              if (account) setConfigurationSetupOwner(account.login)
+              setConfigurationSyncError(null)
+              if (configurationSetupMode === 'remote' && value) {
+                void loadConfigurationRemoteRepositories(value)
+              }
+            }}
+          />
+          {configurationSetupMode === 'create' ? (
+            <>
+              <Group grow align="flex-start">
+                <TextInput
+                  label="Owner"
+                  description="Your account or an organization"
+                  value={configurationSetupOwner}
+                  maxLength={39}
+                  disabled={configurationSyncAction === 'setup'}
+                  onChange={(event) => setConfigurationSetupOwner(event.currentTarget.value)}
+                />
+                <TextInput
+                  label="Repository name"
+                  value={configurationSetupName}
+                  maxLength={100}
+                  disabled={configurationSyncAction === 'setup'}
+                  onChange={(event) => setConfigurationSetupName(event.currentTarget.value)}
+                />
+              </Group>
+              <Select
+                label="Visibility"
+                value={configurationSetupPrivate ? 'private' : 'public'}
+                allowDeselect={false}
+                disabled={configurationSyncAction === 'setup'}
+                data={[
+                  { value: 'private', label: 'Private — recommended for personal configuration' },
+                  { value: 'public', label: 'Public — anyone can read the configuration' },
+                ]}
+                onChange={(value) => setConfigurationSetupPrivate(value !== 'public')}
+              />
+            </>
+          ) : configurationSetupMode === 'remote' ? (
+            <Select
+              label="Repository"
+              description="An existing config file is imported; otherwise MyRepos initializes one."
+              placeholder={configurationRemoteLoading ? 'Loading repositories…' : 'Choose repository'}
+              searchable
+              value={configurationRemoteRepository}
+              disabled={configurationRemoteLoading || configurationSyncAction === 'setup'}
+              rightSection={configurationRemoteLoading ? <Loader size={14} /> : undefined}
+              data={configurationRemoteRepositories.map((repository) => ({
+                value: repository.fullName,
+                label: `${repository.fullName}${repository.private ? ' · Private' : ' · Public'}`,
+              }))}
+              onChange={setConfigurationRemoteRepository}
+            />
+          ) : (
+            <Text size="sm" c="dimmed">
+              Clicking Continue opens the folder chooser. The selected repository may be local-only
+              or already connected to GitHub.
+            </Text>
+          )}
+          <Switch
+            checked={configurationSetupAutoSync}
+            disabled={configurationSyncAction === 'setup'}
+            label="Keep configuration synchronized automatically"
+            description={configurationSetupMode === 'local'
+              ? 'Portable changes are committed automatically; they are pushed when the repository has an origin.'
+              : 'Portable changes are committed and pushed after a short debounce.'}
+            onChange={(event) => setConfigurationSetupAutoSync(event.currentTarget.checked)}
+          />
+          <Group justify="flex-end">
+            <Button
+              variant="subtle"
+              color="gray"
+              disabled={configurationSyncAction === 'setup'}
+              onClick={() => {
+                setConfigurationSetupOpen(false)
+                setConfigurationSyncError(null)
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              leftSection={configurationSetupMode === 'local'
+                ? <IconFolderSearch size={16} />
+                : <IconUpload size={16} />}
+              loading={configurationSyncAction === 'setup'}
+              disabled={!configurationSetupAccountId ||
+                (configurationSetupMode === 'create' &&
+                  (!configurationSetupOwner.trim() || !configurationSetupName.trim())) ||
+                (configurationSetupMode === 'remote' && !configurationRemoteRepository)}
+              onClick={() => void completeConfigurationSetup()}
+            >
+              {configurationSetupMode === 'create'
+                ? 'Create and connect'
+                : configurationSetupMode === 'remote' ? 'Clone and connect' : 'Choose folder'}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={Boolean(publishRepository)}
+        onClose={() => {
+          if (publishSaving) return
+          setPublishRepository(null)
+          setPublishError(null)
+        }}
+        title={publishRepository ? `Publish · ${publishRepository.name}` : 'Publish repository'}
+        size="lg"
+        centered
+        closeOnClickOutside={!publishSaving}
+        closeOnEscape={!publishSaving}
+      >
+        <Stack gap="md">
+          <Alert color="blue" variant="light" icon={<IconUpload size={17} />}>
+            This creates the GitHub repository, adds it as <code>origin</code>, and pushes the
+            current branch with upstream tracking. Uncommitted files remain local.
+          </Alert>
+          {publishError && (
+            <Alert color="red" icon={<IconAlertCircle size={17} />}>{publishError}</Alert>
+          )}
+          <Group grow align="flex-start">
+            <Select
+              label="GitHub account"
+              value={publishAccountId}
+              allowDeselect={false}
+              disabled={publishSaving}
+              data={accounts.map((account) => ({
+                value: String(account.id),
+                label: `@${account.login}`,
+              }))}
+              onChange={(value) => {
+                setPublishAccountId(value)
+                const account = accounts.find((item) => String(item.id) === value)
+                if (account) setPublishOwner(account.login)
+                setPublishError(null)
+              }}
+            />
+            <TextInput
+              label="Owner"
+              description="Your account or a GitHub organization"
+              value={publishOwner}
+              maxLength={39}
+              disabled={publishSaving}
+              onChange={(event) => {
+                setPublishOwner(event.currentTarget.value)
+                setPublishError(null)
+              }}
+            />
+          </Group>
+          <TextInput
+            label="Repository name"
+            value={publishName}
+            maxLength={100}
+            disabled={publishSaving}
+            autoFocus
+            onChange={(event) => {
+              setPublishName(event.currentTarget.value)
+              setPublishError(null)
+            }}
+          />
+          <Textarea
+            label="Description"
+            description={`${publishDescription.length}/350 characters`}
+            value={publishDescription}
+            maxLength={350}
+            minRows={2}
+            autosize
+            disabled={publishSaving}
+            onChange={(event) => setPublishDescription(event.currentTarget.value)}
+          />
+          <Select
+            label="Visibility"
+            value={publishPrivate ? 'private' : 'public'}
+            allowDeselect={false}
+            disabled={publishSaving}
+            data={[
+              { value: 'private', label: 'Private — only selected people can access it' },
+              { value: 'public', label: 'Public — anyone can see it' },
+            ]}
+            onChange={(value) => setPublishPrivate(value !== 'public')}
+          />
+          <Group justify="space-between" wrap="nowrap">
+            <Text size="xs" c="dimmed">
+              At least one local commit is required. GitHub permissions decide which organizations
+              this account may publish to.
+            </Text>
+            <Group gap="xs" wrap="nowrap">
+              <Button
+                variant="subtle"
+                color="gray"
+                disabled={publishSaving}
+                onClick={() => {
+                  setPublishRepository(null)
+                  setPublishError(null)
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                leftSection={<IconUpload size={16} />}
+                loading={publishSaving}
+                disabled={!publishAccountId || !publishOwner.trim() || !publishName.trim()}
+                onClick={() => void publishLocalRepository()}
+              >
+                Publish repository
+              </Button>
+            </Group>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={bulkGitOpen}
+        onClose={() => {
+          if (bulkGitRunning) return
+          setBulkGitOpen(false)
+          setBulkGitResults([])
+        }}
+        title={`${bulkGitOperationLabel[bulkGitOperation]} repositories`}
+        size="lg"
+        centered
+        closeOnClickOutside={!bulkGitRunning}
+        closeOnEscape={!bulkGitRunning}
+      >
+        <Stack gap="md">
+          <Group grow align="flex-start">
+            <Select
+              label="Target repositories"
+              description="Visible means every filtered result, across all pages."
+              value={bulkGitTarget}
+              allowDeselect={false}
+              disabled={bulkGitRunning}
+              data={[
+                {
+                  value: 'visible',
+                  label: `Visible local repositories (${visibleLocalRepositories.length})`,
+                  disabled: visibleLocalRepositories.length === 0,
+                },
+                {
+                  value: 'selected',
+                  label: `Selected local repositories (${selectedLocalRepositories.length})`,
+                  disabled: selectedLocalRepositories.length === 0,
+                },
+              ]}
+              onChange={(value) => {
+                setBulkGitTarget((value as BulkGitTarget | null) ?? 'visible')
+                setBulkGitResults([])
+              }}
+            />
+            <Select
+              label="Action"
+              description="Actions run sequentially, one repository at a time."
+              value={bulkGitOperation}
+              allowDeselect={false}
+              disabled={bulkGitRunning}
+              data={[
+                { value: 'sync', label: 'Sync (pull, then push)' },
+                { value: 'fetch', label: 'Fetch' },
+                { value: 'pull', label: 'Pull' },
+                { value: 'push', label: 'Push' },
+              ]}
+              onChange={(value) => {
+                setBulkGitOperation((value as BulkGitOperation | null) ?? 'sync')
+                setBulkGitResults([])
+              }}
+            />
+          </Group>
+
+          <Alert color="blue" variant="light" icon={<IconRefresh size={17} />}>
+            Repositories with conflicts, unsupported remotes, or blocking local changes may fail.
+            The queue will continue and report each result.
+          </Alert>
+
+          {bulkGitResults.length > 0 && (
+            <Paper className="bulk-git-results" radius="md">
+              <Group justify="space-between" mb="sm">
+                <Text size="sm" fw={700}>Progress</Text>
+                <Text size="xs" c="dimmed">
+                  {bulkGitResults.filter((result) =>
+                    result.status === 'success' || result.status === 'error').length}
+                  /{bulkGitResults.length} completed
+                </Text>
+              </Group>
+              <Stack gap={0}>
+                {bulkGitResults.map((result) => (
+                  <div className="bulk-git-result" key={result.repositoryKey}>
+                    <div className="bulk-git-result-name">
+                      <Text size="sm" fw={600} truncate>{result.fullName}</Text>
+                      {result.message && result.status === 'error' && (
+                        <Text size="xs" c="red.4" lineClamp={2}>{result.message}</Text>
+                      )}
+                    </div>
+                    {result.status === 'running' ? (
+                      <Group gap={7} wrap="nowrap">
+                        <Loader size={13} />
+                        <Text size="xs" c="dimmed">Running</Text>
+                      </Group>
+                    ) : (
+                      <Badge
+                        size="xs"
+                        variant="light"
+                        color={result.status === 'success'
+                          ? 'teal'
+                          : result.status === 'error'
+                            ? 'red'
+                            : 'gray'}
+                      >
+                        {result.status}
+                      </Badge>
+                    )}
+                  </div>
+                ))}
+              </Stack>
+            </Paper>
+          )}
+
+          <Group justify="space-between" wrap="nowrap">
+            <Text size="xs" c="dimmed">
+              {bulkGitRepositories.length} local {bulkGitRepositories.length === 1
+                ? 'repository'
+                : 'repositories'} will be processed
+            </Text>
+            <Group gap="xs" wrap="nowrap">
+              <Button
+                variant="subtle"
+                color="gray"
+                disabled={bulkGitRunning}
+                onClick={() => {
+                  setBulkGitOpen(false)
+                  setBulkGitResults([])
+                }}
+              >
+                Close
+              </Button>
+              <Button
+                leftSection={<IconRefresh size={16} />}
+                loading={bulkGitRunning}
+                disabled={bulkGitRepositories.length === 0}
+                onClick={() => void runBulkGitOperation()}
+              >
+                {bulkGitOperationLabel[bulkGitOperation]} repositories
+              </Button>
+            </Group>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={bulkOrganizationOpen}
+        onClose={() => {
+          if (bulkOrganizationSaving) return
+          setBulkOrganizationOpen(false)
+          setBulkOrganizationError(null)
+        }}
+        title={`Organize ${selectedRepositories.length} selected ${selectedRepositories.length === 1 ? 'repository' : 'repositories'}`}
+        size="lg"
+        centered
+        closeOnClickOutside={!bulkOrganizationSaving}
+        closeOnEscape={!bulkOrganizationSaving}
+      >
+        <Stack gap="md">
+          <Alert color="blue" variant="light" icon={<IconTags size={17} />}>
+            A dash means only some selected repositories have that item. Check it to add it to all,
+            or clear a checked item to remove it from all. Unchanged items are preserved.
+          </Alert>
+          {bulkOrganizationError && (
+            <Alert color="red" icon={<IconAlertCircle size={17} />}>
+              {bulkOrganizationError}
+            </Alert>
+          )}
+
+          {organizationKinds.map((kind) => {
+            const copy = organizationCopy[kind]
+            const items = organizationCatalog[copy.catalogField]
+            const field = organizationFieldForKind[kind]
+            return (
+              <Paper className="organization-section" radius="md" key={kind}>
+                <Group gap="sm" mb="sm" wrap="nowrap">
+                  <ThemeIcon variant="light" color="teal" size={32}>
+                    {kind === 'workspace'
+                      ? <IconBriefcase size={17} />
+                      : kind === 'group'
+                        ? <IconFolders size={17} />
+                        : <IconTags size={17} />}
+                  </ThemeIcon>
+                  <div>
+                    <Text size="sm" fw={700}>{copy.plural}</Text>
+                    <Text size="xs" c="dimmed">Apply {copy.plural.toLowerCase()} to the selection.</Text>
+                  </div>
+                </Group>
+
+                {items.length === 0 ? (
+                  <Text size="xs" c="dimmed">
+                    No {copy.plural.toLowerCase()} yet. Create one from the {copy.plural} section.
+                  </Text>
+                ) : (
+                  <div className="organization-options organization-options--bulk">
+                    {items.map((item) => {
+                      const assignedCount = selectedRepositories.filter((repository) => {
+                        const assignment = organizationAssignments[repositoryOrganizationKey(repository)] ??
+                          emptyRepositoryOrganization()
+                        return assignment[field].includes(item.id)
+                      }).length
+                      const changeKey = bulkOrganizationChangeKey(kind, item.id)
+                      const explicitChange = bulkOrganizationChanges[changeKey]
+                      const allAssigned = assignedCount === selectedRepositories.length
+                      const someAssigned = assignedCount > 0 && !allAssigned
+                      const checked = explicitChange ?? allAssigned
+                      return (
+                        <Checkbox
+                          key={item.id}
+                          checked={checked}
+                          indeterminate={explicitChange === undefined && someAssigned}
+                          disabled={bulkOrganizationSaving}
+                          onChange={(event) => {
+                            const nextChecked = event.currentTarget.checked
+                            setBulkOrganizationChanges((current) => ({
+                              ...current,
+                              [changeKey]: nextChecked,
+                            }))
+                          }}
+                          label={(
+                            <Group gap={8} wrap="nowrap">
+                              <span className="organization-color" style={{ backgroundColor: item.color }} />
+                              <Text component="span" size="sm">{item.name}</Text>
+                              <Text component="span" size="10px" c="dimmed">
+                                {explicitChange === true
+                                  ? 'add to all'
+                                  : explicitChange === false
+                                    ? 'remove from all'
+                                    : `${assignedCount}/${selectedRepositories.length}`}
+                              </Text>
+                            </Group>
+                          )}
+                        />
+                      )
+                    })}
+                  </div>
+                )}
+              </Paper>
+            )
+          })}
+
+          <Group justify="space-between" wrap="nowrap">
+            <Text size="xs" c="dimmed">
+              {Object.keys(bulkOrganizationChanges).length === 0
+                ? 'Choose at least one change.'
+                : `${Object.keys(bulkOrganizationChanges).length} organization changes ready`}
+            </Text>
+            <Group gap="xs" wrap="nowrap">
+              <Button
+                variant="subtle"
+                color="gray"
+                disabled={bulkOrganizationSaving}
+                onClick={() => {
+                  setBulkOrganizationOpen(false)
+                  setBulkOrganizationError(null)
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                loading={bulkOrganizationSaving}
+                disabled={Object.keys(bulkOrganizationChanges).length === 0}
+                onClick={() => void saveBulkOrganization()}
+              >
+                Apply to {selectedRepositories.length}
+              </Button>
+            </Group>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={Boolean(organizationEditorKind)}
+        onClose={() => {
+          if (organizationEditorSaving) return
+          setOrganizationEditorKind(null)
+          setOrganizationEditorItem(null)
+          setOrganizationEditorError(null)
+        }}
+        title={organizationEditorKind
+          ? `${organizationEditorItem ? 'Edit' : 'New'} ${organizationCopy[organizationEditorKind].singular.toLowerCase()}`
+          : 'Organization item'}
+        centered
+        closeOnClickOutside={!organizationEditorSaving}
+        closeOnEscape={!organizationEditorSaving}
+      >
+        <Stack gap="md">
+          {organizationEditorError && (
+            <Alert color="red" icon={<IconAlertCircle size={17} />}>
+              {organizationEditorError}
+            </Alert>
+          )}
+          <TextInput
+            label="Name"
+            placeholder={organizationEditorKind
+              ? `${organizationCopy[organizationEditorKind].singular} name`
+              : 'Name'}
+            value={organizationEditorName}
+            maxLength={80}
+            disabled={organizationEditorSaving}
+            autoFocus
+            onChange={(event) => setOrganizationEditorName(event.currentTarget.value)}
+          />
+          <ColorInput
+            label="Color"
+            description="Used for repository badges and quick visual recognition."
+            format="hex"
+            value={organizationEditorColor}
+            disabled={organizationEditorSaving}
+            swatches={['#20c997', '#4dabf7', '#cc5de8', '#fcc419', '#ff6b6b', '#845ef7', '#22b8cf', '#94d82d']}
+            onChange={setOrganizationEditorColor}
+          />
+          <Textarea
+            label="Description"
+            description={`${organizationEditorDescription.length}/500 characters`}
+            placeholder="What belongs here?"
+            value={organizationEditorDescription}
+            maxLength={500}
+            minRows={3}
+            autosize
+            disabled={organizationEditorSaving}
+            onChange={(event) => setOrganizationEditorDescription(event.currentTarget.value)}
+          />
+          <Group justify="flex-end">
+            <Button
+              variant="subtle"
+              color="gray"
+              disabled={organizationEditorSaving}
+              onClick={() => {
+                setOrganizationEditorKind(null)
+                setOrganizationEditorItem(null)
+                setOrganizationEditorError(null)
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              leftSection={<IconDeviceFloppy size={16} />}
+              loading={organizationEditorSaving}
+              disabled={!organizationEditorName.trim() || !/^#[0-9a-f]{6}$/i.test(organizationEditorColor)}
+              onClick={() => void saveOrganizationItem()}
+            >
+              {organizationEditorItem ? 'Save changes' : 'Create'}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={Boolean(organizationDeleteItem)}
+        onClose={() => {
+          if (organizationEditorSaving) return
+          setOrganizationDeleteItem(null)
+          setOrganizationEditorError(null)
+        }}
+        title={organizationDeleteItem
+          ? `Delete ${organizationCopy[organizationDeleteItem.kind].singular.toLowerCase()}?`
+          : 'Delete item?'}
+        centered
+        size="sm"
+        closeOnClickOutside={!organizationEditorSaving}
+        closeOnEscape={!organizationEditorSaving}
+      >
+        <Stack gap="md">
+          {organizationEditorError && (
+            <Alert color="red" icon={<IconAlertCircle size={17} />}>
+              {organizationEditorError}
+            </Alert>
+          )}
+          <Text size="sm">
+            Delete <strong>{organizationDeleteItem?.name}</strong>? It will be removed from{' '}
+            {organizationDeleteItem?.repositoryCount ?? 0}{' '}
+            {(organizationDeleteItem?.repositoryCount ?? 0) === 1 ? 'repository' : 'repositories'}.
+            The repositories themselves will not be deleted.
+          </Text>
+          <Group justify="flex-end">
+            <Button
+              variant="subtle"
+              color="gray"
+              disabled={organizationEditorSaving}
+              onClick={() => {
+                setOrganizationDeleteItem(null)
+                setOrganizationEditorError(null)
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              color="red"
+              leftSection={<IconTrash size={16} />}
+              loading={organizationEditorSaving}
+              onClick={() => void removeOrganizationItem()}
+            >
+              Delete
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={Boolean(organizeRepository)}
+        onClose={() => {
+          if (!organizationSaving) setOrganizeRepository(null)
+        }}
+        title={organizeRepository ? `Organize · ${organizeRepository.fullName}` : 'Organize repository'}
+        size="lg"
+        centered
+        closeOnClickOutside={!organizationSaving}
+        closeOnEscape={!organizationSaving}
+      >
+        <Stack gap="md">
+          <Text size="sm" c="dimmed">
+            Assign this repository to any number of workspaces, groups, and tags.
+          </Text>
+          {organizationError && (
+            <Alert color="red" icon={<IconAlertCircle size={17} />}>{organizationError}</Alert>
+          )}
+
+          <ColorInput
+            label="Repository color"
+            description="Optional identity color shown as a card accent in every repository view."
+            placeholder="No custom color"
+            format="hex"
+            value={repositoryColorDraft}
+            clearable
+            disabled={organizationSaving}
+            swatches={['#20c997', '#4dabf7', '#845ef7', '#cc5de8', '#f06595', '#ff922b', '#ffd43b', '#ff6b6b']}
+            onChange={setRepositoryColorDraft}
+          />
+
+          {([
+            {
+              kind: 'workspace' as const,
+              label: 'Workspaces',
+              description: 'Repositories that you work on together.',
+              icon: <IconBriefcase size={17} />,
+              items: organizationCatalog.workspaces,
+            },
+            {
+              kind: 'group' as const,
+              label: 'Groups',
+              description: 'Manual collections for browsing and organization.',
+              icon: <IconFolders size={17} />,
+              items: organizationCatalog.groups,
+            },
+            {
+              kind: 'tag' as const,
+              label: 'Tags',
+              description: 'Descriptive labels that can be combined freely.',
+              icon: <IconTags size={17} />,
+              items: organizationCatalog.tags,
+            },
+          ] satisfies Array<{
+            kind: OrganizationKind
+            label: string
+            description: string
+            icon: ReactNode
+            items: OrganizationItem[]
+          }>).map((section) => {
+            const field = organizationFieldForKind[section.kind]
+            return (
+              <Paper className="organization-section" radius="md" key={section.kind}>
+                <Group gap="sm" mb="sm" wrap="nowrap">
+                  <ThemeIcon variant="light" color="teal" size={32}>{section.icon}</ThemeIcon>
+                  <div>
+                    <Text size="sm" fw={700}>{section.label}</Text>
+                    <Text size="xs" c="dimmed">{section.description}</Text>
+                  </div>
+                </Group>
+
+                {section.items.length > 0 ? (
+                  <div className="organization-options">
+                    {section.items.map((item) => (
+                      <Checkbox
+                        key={item.id}
+                        checked={organizationDraft[field].includes(item.id)}
+                        disabled={organizationSaving}
+                        onChange={() => toggleOrganizationAssignment(section.kind, item.id)}
+                        label={(
+                          <Group gap={8} wrap="nowrap">
+                            <span className="organization-color" style={{ backgroundColor: item.color }} />
+                            <Text component="span" size="sm">{item.name}</Text>
+                            <Text component="span" size="10px" c="dimmed">
+                              {item.repositoryCount} repos
+                            </Text>
+                          </Group>
+                        )}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <Text size="xs" c="dimmed" mb="sm">No {section.label.toLowerCase()} yet.</Text>
+                )}
+
+                <Group gap="xs" mt="sm" wrap="nowrap">
+                  <TextInput
+                    size="xs"
+                    style={{ flex: 1 }}
+                    aria-label={`New ${section.kind} name`}
+                    placeholder={`Create a ${section.kind}`}
+                    value={newOrganizationNames[section.kind]}
+                    disabled={organizationLoading || organizationSaving}
+                    onChange={(event) => setNewOrganizationNames((current) => ({
+                      ...current,
+                      [section.kind]: event.currentTarget.value,
+                    }))}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        void createOrganizationItem(section.kind)
+                      }
+                    }}
+                  />
+                  <Button
+                    size="xs"
+                    variant="light"
+                    loading={organizationLoading}
+                    disabled={!newOrganizationNames[section.kind].trim() || organizationSaving}
+                    onClick={() => void createOrganizationItem(section.kind)}
+                  >
+                    Create
+                  </Button>
+                </Group>
+              </Paper>
+            )
+          })}
+
+          <Group justify="flex-end">
+            <Button
+              variant="subtle"
+              color="gray"
+              disabled={organizationSaving}
+              onClick={() => setOrganizeRepository(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              loading={organizationSaving}
+              disabled={organizationLoading || Boolean(repositoryColorDraft) &&
+                !/^#[0-9a-f]{6}$/i.test(repositoryColorDraft)}
+              onClick={() => void saveRepositoryOrganization()}
+            >
+              Save repository details
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
 
       <Modal
         opened={Boolean(cardCommitRepository)}
@@ -2592,7 +5103,9 @@ export function App() {
               <Group gap="xs">
                 <Badge
                   variant="light"
-                  color={gitDetails?.status.clean ? 'teal' : 'yellow'}
+                  color={gitDetails?.status.conflicts
+                    ? 'red'
+                    : gitDetails?.status.clean ? 'teal' : 'orange'}
                   leftSection={<IconGitBranch size={12} />}
                 >
                   {gitDetails?.status.branch ?? 'Repository'}
@@ -2700,8 +5213,8 @@ export function App() {
                           <Group gap={5} mt={4}>
                             {file.conflicted && <Badge size="xs" color="red">Conflict</Badge>}
                             {file.staged && <Badge size="xs" color="teal">Staged</Badge>}
-                            {file.unstaged && <Badge size="xs" color="yellow">Modified</Badge>}
-                            {file.untracked && <Badge size="xs" color="gray">Untracked</Badge>}
+                            {file.unstaged && <Badge size="xs" color="orange">Modified</Badge>}
+                            {file.untracked && <Badge size="xs" variant="light" color="orange">Untracked</Badge>}
                           </Group>
                         </div>
                         <Group gap={5} wrap="nowrap">

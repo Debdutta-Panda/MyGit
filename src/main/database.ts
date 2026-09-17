@@ -89,8 +89,118 @@ const createSchema = (db: DatabaseSync): void => {
     );
 
     INSERT OR IGNORE INTO app_settings (id, vscode_application_name) VALUES (1, '');
+
+    CREATE TABLE IF NOT EXISTS configuration_sync_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      local_path TEXT,
+      account_id INTEGER,
+      full_name TEXT,
+      auto_sync INTEGER NOT NULL DEFAULT 0,
+      last_synced_at TEXT,
+      last_error TEXT
+    );
+
+    INSERT OR IGNORE INTO configuration_sync_settings (id) VALUES (1);
+
+    CREATE TABLE IF NOT EXISTS workspaces (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+      color TEXT NOT NULL,
+      description TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS groups (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+      color TEXT NOT NULL,
+      description TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS tags (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+      color TEXT NOT NULL,
+      description TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS organization_repositories (
+      id TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      account_id INTEGER NOT NULL,
+      full_name TEXT NOT NULL COLLATE NOCASE,
+      color TEXT,
+      UNIQUE(provider, account_id, full_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS repository_workspaces (
+      repository_id TEXT NOT NULL REFERENCES organization_repositories(id) ON DELETE CASCADE,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL DEFAULT 0,
+      repository_position INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(repository_id, workspace_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS repository_groups (
+      repository_id TEXT NOT NULL REFERENCES organization_repositories(id) ON DELETE CASCADE,
+      group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(repository_id, group_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS repository_tags (
+      repository_id TEXT NOT NULL REFERENCES organization_repositories(id) ON DELETE CASCADE,
+      tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+      PRIMARY KEY(repository_id, tag_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS repository_workspaces_workspace_idx
+      ON repository_workspaces(workspace_id, position);
+    CREATE INDEX IF NOT EXISTS repository_groups_group_idx
+      ON repository_groups(group_id, position);
+    CREATE INDEX IF NOT EXISTS repository_tags_tag_idx
+      ON repository_tags(tag_id);
+
     INSERT OR IGNORE INTO schema_migrations (version, applied_at)
       VALUES (1, datetime('now'));
+    INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+      VALUES (2, datetime('now'));
+  `)
+
+  const workspaceColumns = db.prepare('PRAGMA table_info(repository_workspaces)').all() as unknown as
+    Array<{ name: string }>
+  if (!workspaceColumns.some((column) => column.name === 'repository_position')) {
+    db.exec(`
+      BEGIN IMMEDIATE;
+      ALTER TABLE repository_workspaces
+        ADD COLUMN repository_position INTEGER NOT NULL DEFAULT 0;
+      UPDATE repository_workspaces SET repository_position = rowid;
+      COMMIT;
+    `)
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS repository_workspaces_order_idx
+      ON repository_workspaces(workspace_id, repository_position);
+    INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+      VALUES (3, datetime('now'));
+  `)
+
+  const organizationRepositoryColumns = db.prepare(
+    'PRAGMA table_info(organization_repositories)',
+  ).all() as unknown as Array<{ name: string }>
+  if (!organizationRepositoryColumns.some((column) => column.name === 'color')) {
+    db.exec('ALTER TABLE organization_repositories ADD COLUMN color TEXT;')
+  }
+  db.exec(`
+    INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+      VALUES (4, datetime('now'));
+    INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+      VALUES (5, datetime('now'));
   `)
 }
 
