@@ -175,6 +175,10 @@ import myReposIcon from './assets/myrepos-icon.png'
 import { ReadOnlyMonaco } from './ReadOnlyMonaco'
 import { SqlSchemaPreview } from './SqlSchemaPreview'
 import { RepositoryChangeAnalytics } from './RepositoryChangeAnalytics'
+import {
+  RepositoryPortfolioAnalytics,
+  type PortfolioAnalyticsRepository,
+} from './RepositoryPortfolioAnalytics'
 
 type AuthorizationState = 'idle' | 'starting' | 'waiting'
 type ActiveView = 'accounts' | 'repositories' | 'workspaces' | 'groups' | 'tags' | 'settings'
@@ -191,6 +195,13 @@ type FileHistoryView = 'diff' | 'content' | 'compare'
 type WorkingTreeView = 'code' | 'preview' | 'both'
 type WorkingTreeDetailTab = 'content' | 'analytics'
 type WorkingTreePreviewKind = 'html' | 'svg' | 'markdown' | 'sql' | 'pdf' | 'image' | 'audio' | 'video'
+
+interface PortfolioAnalyticsTarget {
+  key: string
+  name: string
+  path: string | null
+  color: string | null
+}
 
 const workingTreePreviewKind = (path: string): WorkingTreePreviewKind | null => {
   const extension = path.slice(path.lastIndexOf('.')).toLowerCase()
@@ -1015,6 +1026,14 @@ export function App() {
   const [changeAnalyticsLoading, setChangeAnalyticsLoading] = useState(false)
   const [changeAnalyticsError, setChangeAnalyticsError] = useState<string | null>(null)
   const [changeAnalyticsRefreshVersion, setChangeAnalyticsRefreshVersion] = useState(0)
+  const [portfolioAnalyticsOpen, setPortfolioAnalyticsOpen] = useState(false)
+  const [portfolioAnalyticsTitle, setPortfolioAnalyticsTitle] = useState('Portfolio analytics')
+  const [portfolioAnalyticsTargets, setPortfolioAnalyticsTargets] = useState<PortfolioAnalyticsTarget[]>([])
+  const [portfolioAnalyticsRepositories, setPortfolioAnalyticsRepositories] =
+    useState<PortfolioAnalyticsRepository[]>([])
+  const [portfolioAnalyticsRange, setPortfolioAnalyticsRange] = useState<RepositoryAnalyticsRange>('7d')
+  const [portfolioAnalyticsLoading, setPortfolioAnalyticsLoading] = useState(false)
+  const [portfolioAnalyticsRefreshVersion, setPortfolioAnalyticsRefreshVersion] = useState(0)
   const [gitHistory, setGitHistory] = useState<RepositoryCommit[]>([])
   const [historyCommitterFilter, setHistoryCommitterFilter] = useState(allCommittersFilter)
   const [gitPanelLoading, setGitPanelLoading] = useState(false)
@@ -1669,6 +1688,44 @@ export function App() {
     changeAnalyticsRefreshVersion,
     changeAnalyticsVisible,
     gitRepository?.localPath,
+  ])
+
+  useEffect(() => {
+    if (!window.desktop || !portfolioAnalyticsOpen || portfolioAnalyticsTargets.length === 0) return
+    let cancelled = false
+    const loadPortfolio = async (): Promise<void> => {
+      setPortfolioAnalyticsLoading(true)
+      const results: PortfolioAnalyticsRepository[] = portfolioAnalyticsTargets.map((target) => ({
+        key: target.key,
+        name: target.name,
+        color: target.color,
+        data: null,
+        error: target.path ? null : 'No available local working copy.',
+      }))
+      setPortfolioAnalyticsRepositories(results)
+      for (let index = 0; index < portfolioAnalyticsTargets.length; index += 1) {
+        const target = portfolioAnalyticsTargets[index]
+        if (cancelled) return
+        if (!target.path) continue
+        try {
+          const data = await window.desktop.repositories.gitChangeAnalytics(target.path, portfolioAnalyticsRange)
+          results[index] = { ...results[index], data, error: null }
+        } catch (error) {
+          results[index] = { ...results[index], error: errorMessage(error) }
+        }
+        if (!cancelled) setPortfolioAnalyticsRepositories([...results])
+      }
+      if (!cancelled) setPortfolioAnalyticsLoading(false)
+    }
+    void loadPortfolio()
+    return () => {
+      cancelled = true
+    }
+  }, [
+    portfolioAnalyticsOpen,
+    portfolioAnalyticsRange,
+    portfolioAnalyticsRefreshVersion,
+    portfolioAnalyticsTargets,
   ])
 
   const resetAuthorization = (): void => {
@@ -3262,6 +3319,29 @@ export function App() {
     setActiveView('repositories')
   }
 
+  const openPortfolioAnalytics = (items: GitHubRepository[], title: string): void => {
+    const unique = new Map<string, PortfolioAnalyticsTarget>()
+    for (const repository of items) {
+      const key = repositoryOrganizationKey(repository)
+      const workspaceCopyId = selectedWorkspaceId ? workspaceWorkingCopySelections[key] : null
+      const workspaceCopy = workspaceCopyId
+        ? repository.workingCopies.find((copy) => copy.id === workspaceCopyId && copy.available)
+        : null
+      unique.set(key, {
+        key,
+        name: repository.fullName,
+        path: workspaceCopy?.path ?? repository.localPath,
+        color: repositoryColors[key] ?? null,
+      })
+    }
+    setPortfolioAnalyticsTitle(title)
+    setPortfolioAnalyticsTargets([...unique.values()])
+    setPortfolioAnalyticsRepositories([])
+    setPortfolioAnalyticsRange('7d')
+    setPortfolioAnalyticsRefreshVersion((version) => version + 1)
+    setPortfolioAnalyticsOpen(true)
+  }
+
   const reorderWorkspaceRepository = async (
     sourceRepositoryKey: string,
     targetRepositoryKey: string,
@@ -4049,6 +4129,20 @@ export function App() {
             </Tabs>
             {repositoryTab === 'workspace' ? (
               <Group gap="xs" wrap="nowrap">
+                <Button
+                  size="xs"
+                  variant="light"
+                  leftSection={<IconChartBar size={15} />}
+                  disabled={!selectedWorkspaceId || selectedWorkspaceRepositoryCount === 0}
+                  onClick={() => openPortfolioAnalytics(
+                    repositories.filter((repository) => selectedWorkspaceId &&
+                      organizationAssignments[repositoryOrganizationKey(repository)]?.workspaceIds
+                        .includes(selectedWorkspaceId)),
+                    `${selectedWorkspace?.name ?? 'Workspace'} analytics`,
+                  )}
+                >
+                  Analytics
+                </Button>
                 {workspaceTarget && (
                   <Tooltip label={workspaceTarget.path}>
                     <Button
@@ -4618,6 +4712,18 @@ export function App() {
                       onClick={() => setSelectedRepositoryKeys([])}
                     >
                       Clear
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="light"
+                      leftSection={<IconChartBar size={15} />}
+                      disabled={selectedRepositories.length === 0}
+                      onClick={() => openPortfolioAnalytics(
+                        selectedRepositories,
+                        `${selectedRepositories.length} selected repositories`,
+                      )}
+                    >
+                      Analyze selected
                     </Button>
                     <Button
                       size="xs"
@@ -9635,6 +9741,23 @@ export function App() {
             </Button>
           </Group>
         </Stack>
+      </Modal>
+
+      <Modal
+        opened={portfolioAnalyticsOpen}
+        onClose={() => setPortfolioAnalyticsOpen(false)}
+        title={portfolioAnalyticsTitle}
+        fullScreen
+        className="portfolio-analytics-modal"
+        overlayProps={{ backgroundOpacity: 0.72, blur: 4 }}
+      >
+        <RepositoryPortfolioAnalytics
+          repositories={portfolioAnalyticsRepositories}
+          loading={portfolioAnalyticsLoading}
+          range={portfolioAnalyticsRange}
+          onRangeChange={setPortfolioAnalyticsRange}
+          onRefresh={() => setPortfolioAnalyticsRefreshVersion((version) => version + 1)}
+        />
       </Modal>
 
       <Modal

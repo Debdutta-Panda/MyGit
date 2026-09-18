@@ -1868,6 +1868,44 @@ textarea { font: inherit; }
 .analytics-summary-signals > article p { margin: 0; color: #8795a3; font-size: 10px; line-height: 1.45; }
 .analytics-summary-note { margin: -2px 2px 0; color: #697786; font-size: 9px; line-height: 1.45; }
 
+.portfolio-analytics-modal .mantine-Modal-content { overflow: hidden; background: #0d1319; }
+.portfolio-analytics-modal .mantine-Modal-header { min-height: 52px; border-bottom: 1px solid #303741; background: #151b22; }
+.portfolio-analytics-modal .mantine-Modal-title { color: #e5edf4; font-size: 14px; font-weight: 750; }
+.portfolio-analytics-modal .mantine-Modal-body { height: calc(100vh - 52px); padding: 0; overflow: hidden; }
+.portfolio-analytics { height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: #0d1319; }
+.portfolio-analytics-header { min-height: 45px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px; border-bottom: 1px solid #303741; background: #111820; }
+.portfolio-analytics-header .mantine-Tabs-root { align-self: stretch; }
+.portfolio-analytics-header .mantine-Tabs-list { height: 100%; border-bottom: 0; }
+.portfolio-repository-filter { width: min(390px, 38vw); min-width: 220px; }
+.portfolio-repository-filter .mantine-MultiSelect-input { flex-wrap: nowrap; overflow: hidden; }
+.portfolio-repository-filter .mantine-MultiSelect-pill { flex: 0 0 auto; }
+.portfolio-analytics-alert { margin: 10px 12px 0; flex: 0 0 auto; }
+.portfolio-analytics > .change-analytics { flex: 1; }
+
+.portfolio-comparison { min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 14px; }
+.portfolio-comparison-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border: 1px solid #2d3742; border-bottom: 0; border-radius: 9px 9px 0 0; background: #171f28; }
+.portfolio-comparison-toolbar > div:first-child { min-width: 0; }
+.portfolio-comparison-scroll { min-height: 0; flex: 1; overflow: auto; border: 1px solid #2d3742; border-radius: 0 0 9px 9px; background: #121920; }
+.portfolio-comparison table { width: 100%; min-width: 1020px; border-collapse: separate; border-spacing: 0; font-size: 10px; font-variant-numeric: tabular-nums; }
+.portfolio-comparison th,
+.portfolio-comparison td { height: 43px; padding: 7px 11px; border-right: 1px solid rgba(45, 55, 66, .55); border-bottom: 1px solid rgba(45, 55, 66, .75); text-align: right; white-space: nowrap; }
+.portfolio-comparison th:last-child,
+.portfolio-comparison td:last-child { border-right: 0; }
+.portfolio-comparison thead th { position: sticky; top: 0; z-index: 3; color: #9eacba; background: #1a222b; font-size: 9px; text-transform: uppercase; }
+.portfolio-comparison thead th:first-child { left: 0; z-index: 4; text-align: left; }
+.portfolio-comparison tbody th { width: 320px; position: sticky; left: 0; z-index: 2; display: grid; grid-template-columns: 8px minmax(0, 1fr); align-content: center; align-items: center; gap: 3px 8px; color: #dce5ed; background: #141b23; text-align: left; }
+.portfolio-comparison tbody th > i { width: 7px; height: 7px; border-radius: 50%; }
+.portfolio-comparison tbody th > span { overflow: hidden; text-overflow: ellipsis; }
+.portfolio-comparison tbody th > em { height: 2px; grid-column: 2; overflow: hidden; border-radius: 2px; background: #26313c; }
+.portfolio-comparison tbody th > em b { height: 100%; display: block; border-radius: inherit; background: linear-gradient(90deg, #20c997, #4dabf7); }
+.portfolio-comparison tbody td { color: #bdc7d1; }
+.portfolio-comparison tbody tr:hover td,
+.portfolio-comparison tbody tr:hover th { background-color: #1c2832; }
+.portfolio-comparison [data-tone='positive'] { color: #63e6be; font-weight: 700; }
+.portfolio-comparison [data-tone='negative'] { color: #ff8787; font-weight: 700; }
+.portfolio-repository-error { display: flex; gap: 8px; margin: 0; padding: 8px 12px; color: #c2a56f; border-top: 1px solid #3a3327; background: rgba(255, 169, 77, .035); font-size: 10px; }
+.portfolio-repository-error strong { color: #ffd8a8; }
+
 .change-ranking-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));

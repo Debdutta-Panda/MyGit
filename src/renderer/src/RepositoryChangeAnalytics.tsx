@@ -753,7 +753,7 @@ export function RepositoryChangeAnalytics({
   range: RepositoryAnalyticsRange
   onRangeChange: (range: RepositoryAnalyticsRange) => void
   onRefresh: () => void
-  onOpenFile: (path: string) => void
+  onOpenFile?: (path: string) => void
   scope?: { path: string; kind: 'file' | 'folder' }
 }) {
   const [grouping, setGrouping] = useState<AnalyticsGrouping>('day')
