@@ -8,6 +8,19 @@ const desktopApi: DesktopApi = {
     chrome: process.versions.chrome,
     node: process.versions.node,
   },
+  windowControls: {
+    minimize: () => ipcRenderer.invoke('window:minimize'),
+    toggleMaximize: () => ipcRenderer.invoke('window:toggle-maximize'),
+    close: () => ipcRenderer.invoke('window:close'),
+    isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
+    onMaximizedChanged: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, maximized: boolean): void => {
+        callback(maximized)
+      }
+      ipcRenderer.on('window:maximized-changed', listener)
+      return () => ipcRenderer.removeListener('window:maximized-changed', listener)
+    },
+  },
   accounts: {
     list: () => ipcRenderer.invoke('accounts:list'),
     remove: (accountId) => ipcRenderer.invoke('accounts:remove', accountId),
@@ -15,6 +28,19 @@ const desktopApi: DesktopApi = {
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
     save: (settings) => ipcRenderer.invoke('settings:save', settings),
+  },
+  updates: {
+    getState: () => ipcRenderer.invoke('updates:get-state'),
+    check: () => ipcRenderer.invoke('updates:check'),
+    download: () => ipcRenderer.invoke('updates:download'),
+    install: () => ipcRenderer.invoke('updates:install'),
+    onStateChanged: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: Parameters<typeof callback>[0]): void => {
+        callback(state)
+      }
+      ipcRenderer.on('updates:state-changed', listener)
+      return () => ipcRenderer.removeListener('updates:state-changed', listener)
+    },
   },
   github: {
     start: () => ipcRenderer.invoke('github:start'),
@@ -27,7 +53,8 @@ const desktopApi: DesktopApi = {
     list: (accountId) => ipcRenderer.invoke('repositories:list', accountId),
     clone: (accountId, fullName) => ipcRenderer.invoke('repositories:clone', accountId, fullName),
     locate: (accountId, fullName) => ipcRenderer.invoke('repositories:locate', accountId, fullName),
-    addLocal: (accountId) => ipcRenderer.invoke('repositories:add-local', accountId),
+    addLocal: (accountId, initializePlainFolder = false) =>
+      ipcRenderer.invoke('repositories:add-local', accountId, initializePlainFolder),
     publish: (input) => ipcRenderer.invoke('repositories:publish', input),
     openFolder: (path) => ipcRenderer.invoke('repositories:open-folder', path),
     openInVSCode: (path) => ipcRenderer.invoke('repositories:open-vscode', path),
@@ -46,6 +73,7 @@ const desktopApi: DesktopApi = {
     gitCommitFiles: (path, commitHash) => ipcRenderer.invoke('repositories:git-commit-files', path, commitHash),
     gitCommitFileDiff: (path, commitHash, file) =>
       ipcRenderer.invoke('repositories:git-commit-file-diff', path, commitHash, file),
+    scanInsights: (path) => ipcRenderer.invoke('repositories:scan-insights', path),
     gitStage: (path, files) => ipcRenderer.invoke('repositories:git-stage', path, files),
     gitUnstage: (path, files) => ipcRenderer.invoke('repositories:git-unstage', path, files),
     gitCommit: (path, message) => ipcRenderer.invoke('repositories:git-commit', path, message),
@@ -65,6 +93,14 @@ const desktopApi: DesktopApi = {
     workspaceOrder: (workspaceId) => ipcRenderer.invoke('organization:workspace-order', workspaceId),
     reorderWorkspace: (workspaceId, repositoryKeys) =>
       ipcRenderer.invoke('organization:reorder-workspace', workspaceId, repositoryKeys),
+    workspaceTarget: (workspaceId) =>
+      ipcRenderer.invoke('organization:workspace-target', workspaceId),
+    connectWorkspaceTarget: (workspaceId, type) =>
+      ipcRenderer.invoke('organization:connect-workspace-target', workspaceId, type),
+    openWorkspaceTarget: (workspaceId) =>
+      ipcRenderer.invoke('organization:open-workspace-target', workspaceId),
+    disconnectWorkspaceTarget: (workspaceId) =>
+      ipcRenderer.invoke('organization:disconnect-workspace-target', workspaceId),
     saveRepository: (accountId, fullName, organization) =>
       ipcRenderer.invoke('organization:save-repository', accountId, fullName, organization),
   },

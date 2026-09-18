@@ -4,11 +4,22 @@
   "version": "0.1.0",
   "private": true,
   "description": "A multi-account, multi-provider Git desktop client.",
+  "author": "Debdutta-Panda",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Debdutta-Panda/MyGit.git"
+  },
   "main": "./out/main/index.js",
   "type": "module",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
+    "package": "npm run build && electron-builder --publish never",
+    "package:win": "npm run build && electron-builder --win --x64 --publish never",
+    "package:mac": "npm run build && electron-builder --mac --publish never",
+    "package:linux": "npm run build && electron-builder --linux --publish never",
+    "publish:github": "npm run build && electron-builder --publish always",
+    "deploy": "node scripts/deploy.mjs",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit"
   },
@@ -16,6 +27,8 @@
     "@mantine/core": "^9.6.1",
     "@mantine/hooks": "^9.6.1",
     "@tabler/icons-react": "^3.46.0",
+    "devicon": "^2.17.0",
+    "electron-updater": "^6.8.9",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },
@@ -25,6 +38,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^44.4.1",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "typescript": "^7.0.2",
     "vite": "^7.3.6"

@@ -1,0 +1,71 @@
+appId: com.debduttapanda.myrepos
+productName: MyRepos
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - out/**/*
+  - package.json
+
+asar: true
+
+win:
+  executableName: MyRepos
+  icon: icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+mac:
+  executableName: MyRepos
+  icon: icon.icns
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+
+linux:
+  executableName: myrepos
+  icon: icon.png
+  category: Development
+  target:
+    - target: AppImage
+      arch:
+        - x64
+        - arm64
+    - target: deb
+      arch:
+        - x64
+        - arm64
+
+nsis:
+  artifactName: MyRepos-Setup-${version}-${arch}.${ext}
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: MyRepos
+
+dmg:
+  artifactName: MyRepos-${version}-mac-${arch}.${ext}
+
+appImage:
+  artifactName: MyRepos-${version}-linux-${arch}.${ext}
+
+deb:
+  artifactName: MyRepos-${version}-linux-${arch}.${ext}
+
+publish:
+  provider: github
+  owner: Debdutta-Panda
+  repo: MyGit
+  releaseType: release

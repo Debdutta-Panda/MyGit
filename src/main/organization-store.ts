@@ -1,5 +1,7 @@
-import { ipcMain } from 'electron'
+import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { randomUUID } from 'node:crypto'
+import { stat } from 'node:fs/promises'
+import { extname, resolve } from 'node:path'
 import type {
   OrganizationCatalog,
   OrganizationItem,
@@ -7,9 +9,11 @@ import type {
   RepositoryAppearanceEntry,
   RepositoryOrganization,
   RepositoryOrganizationEntry,
+  WorkspaceLaunchTarget,
 } from '../shared/desktop-api'
 import { getDatabase } from './database'
 import { scheduleConfigurationSync } from './configuration-sync'
+import { launchVSCodeInNewWindow } from './github-repositories'
 
 const tableForKind: Record<OrganizationKind, 'workspaces' | 'groups' | 'tags'> = {
   workspace: 'workspaces',
@@ -216,6 +220,79 @@ const listWorkspaceOrder = async (workspaceIdValue: unknown): Promise<string[]> 
     repositoryKey(row.account_id, row.full_name))
 }
 
+const workspaceTarget = async (workspaceIdValue: unknown): Promise<WorkspaceLaunchTarget | null> => {
+  const workspaceId = validateId(workspaceIdValue)
+  const row = getDatabase().prepare(`
+    SELECT target_type, target_path FROM workspace_local_targets WHERE workspace_id = ?
+  `).get(workspaceId) as { target_type: WorkspaceLaunchTarget['type']; target_path: string } | undefined
+  return row ? { workspaceId, type: row.target_type, path: row.target_path } : null
+}
+
+const connectWorkspaceTarget = async (
+  event: Electron.IpcMainInvokeEvent,
+  workspaceIdValue: unknown,
+  typeValue: unknown,
+): Promise<WorkspaceLaunchTarget | null> => {
+  const workspaceId = validateId(workspaceIdValue)
+  if (typeValue !== 'folder' && typeValue !== 'code-workspace') {
+    throw new Error('Invalid workspace launch target.')
+  }
+  const type = typeValue as WorkspaceLaunchTarget['type']
+  const options: Electron.OpenDialogOptions = type === 'folder'
+    ? {
+        title: 'Connect workspace folder',
+        buttonLabel: 'Connect folder',
+        properties: ['openDirectory'],
+      }
+    : {
+        title: 'Connect VS Code workspace',
+        buttonLabel: 'Connect workspace',
+        properties: ['openFile'],
+        filters: [{ name: 'VS Code Workspace', extensions: ['code-workspace'] }],
+      }
+  const ownerWindow = BrowserWindow.fromWebContents(event.sender)
+  const selection = ownerWindow
+    ? await dialog.showOpenDialog(ownerWindow, options)
+    : await dialog.showOpenDialog(options)
+  if (selection.canceled || !selection.filePaths[0]) return null
+
+  const path = resolve(selection.filePaths[0])
+  const details = await stat(path)
+  if (type === 'folder' && !details.isDirectory()) throw new Error('Select a folder.')
+  if (type === 'code-workspace' &&
+    (!details.isFile() || extname(path).toLowerCase() !== '.code-workspace')) {
+    throw new Error('Select a .code-workspace file.')
+  }
+
+  getDatabase().prepare(`
+    INSERT INTO workspace_local_targets (workspace_id, target_type, target_path)
+    VALUES (?, ?, ?)
+    ON CONFLICT(workspace_id) DO UPDATE SET
+      target_type = excluded.target_type,
+      target_path = excluded.target_path
+  `).run(workspaceId, type, path)
+  return { workspaceId, type, path }
+}
+
+const openWorkspaceTarget = async (workspaceIdValue: unknown): Promise<void> => {
+  const target = await workspaceTarget(workspaceIdValue)
+  if (!target) throw new Error('Connect a folder or VS Code workspace first.')
+  try {
+    const details = await stat(target.path)
+    if (target.type === 'folder' ? !details.isDirectory() : !details.isFile()) {
+      throw new Error('wrong type')
+    }
+  } catch {
+    throw new Error('The connected workspace target is no longer available.')
+  }
+  await launchVSCodeInNewWindow(target.path)
+}
+
+const disconnectWorkspaceTarget = async (workspaceIdValue: unknown): Promise<void> => {
+  const workspaceId = validateId(workspaceIdValue)
+  getDatabase().prepare('DELETE FROM workspace_local_targets WHERE workspace_id = ?').run(workspaceId)
+}
+
 const reorderWorkspace = async (
   workspaceIdValue: unknown,
   repositoryKeysValue: unknown,
@@ -350,6 +427,14 @@ export const registerOrganizationHandlers = (): void => {
     listWorkspaceOrder(workspaceId))
   ipcMain.handle('organization:reorder-workspace', (_event, workspaceId, repositoryKeys) =>
     reorderWorkspace(workspaceId, repositoryKeys))
+  ipcMain.handle('organization:workspace-target', (_event, workspaceId) =>
+    workspaceTarget(workspaceId))
+  ipcMain.handle('organization:connect-workspace-target', (event, workspaceId, type) =>
+    connectWorkspaceTarget(event, workspaceId, type))
+  ipcMain.handle('organization:open-workspace-target', (_event, workspaceId) =>
+    openWorkspaceTarget(workspaceId))
+  ipcMain.handle('organization:disconnect-workspace-target', (_event, workspaceId) =>
+    disconnectWorkspaceTarget(workspaceId))
   ipcMain.handle('organization:save-repository', (_event, accountId, fullName, organization) =>
     saveRepository(accountId, fullName, organization))
 }

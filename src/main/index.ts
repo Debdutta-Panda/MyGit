@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron'
 import { join } from 'node:path'
 import { registerGitHubAccountHandlers } from './github-auth'
 import { registerRepositoryHandlers } from './github-repositories'
@@ -7,6 +7,8 @@ import { registerRepositoryActionHandlers } from './repository-actions'
 import { closeDatabase, initializeDatabase } from './database'
 import { registerOrganizationHandlers } from './organization-store'
 import { registerConfigurationSyncHandlers } from './configuration-sync'
+import { registerProjectInsightHandlers } from './project-insights'
+import { registerUpdateHandlers, startAutomaticUpdateChecks } from './app-updater'
 
 const appIconPath = join(process.cwd(), 'build', 'icon.png')
 
@@ -22,7 +24,14 @@ const createWindow = (): void => {
     backgroundColor: '#0d1117',
     title: 'MyRepos',
     icon: appIconPath,
-    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
+    autoHideMenuBar: true,
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' as const }
+      : process.platform === 'win32'
+        ? {
+            frame: false,
+          }
+        : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
@@ -32,6 +41,12 @@ const createWindow = (): void => {
   })
 
   mainWindow.once('ready-to-show', () => mainWindow.show())
+  mainWindow.on('maximize', () => {
+    mainWindow.webContents.send('window:maximized-changed', true)
+  })
+  mainWindow.on('unmaximize', () => {
+    mainWindow.webContents.send('window:maximized-changed', false)
+  })
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://')) void shell.openExternal(url)
@@ -50,17 +65,40 @@ const createWindow = (): void => {
   }
 }
 
+const windowFromEvent = (event: Electron.IpcMainInvokeEvent): BrowserWindow => {
+  const window = BrowserWindow.fromWebContents(event.sender)
+  if (!window) throw new Error('The application window is unavailable.')
+  return window
+}
+
+const registerWindowHandlers = (): void => {
+  ipcMain.handle('window:minimize', (event) => { windowFromEvent(event).minimize() })
+  ipcMain.handle('window:toggle-maximize', (event) => {
+    const window = windowFromEvent(event)
+    if (window.isMaximized()) window.unmaximize()
+    else window.maximize()
+    return window.isMaximized()
+  })
+  ipcMain.handle('window:close', (event) => { windowFromEvent(event).close() })
+  ipcMain.handle('window:is-maximized', (event) => windowFromEvent(event).isMaximized())
+}
+
 app.whenReady().then(async () => {
   await initializeDatabase()
+  Menu.setApplicationMenu(null)
   if (process.platform === 'darwin') app.dock.setIcon(appIconPath)
 
   registerGitHubAccountHandlers()
   registerRepositoryHandlers()
   registerRepositoryActionHandlers()
+  registerProjectInsightHandlers()
   registerSettingsHandlers()
+  registerUpdateHandlers()
   registerOrganizationHandlers()
   registerConfigurationSyncHandlers()
+  registerWindowHandlers()
   createWindow()
+  startAutomaticUpdateChecks()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

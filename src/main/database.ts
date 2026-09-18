@@ -85,7 +85,9 @@ const createSchema = (db: DatabaseSync): void => {
 
     CREATE TABLE IF NOT EXISTS app_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
-      vscode_application_name TEXT NOT NULL DEFAULT ''
+      vscode_application_name TEXT NOT NULL DEFAULT '',
+      automatically_check_for_updates INTEGER NOT NULL DEFAULT 1,
+      automatically_download_updates INTEGER NOT NULL DEFAULT 1
     );
 
     INSERT OR IGNORE INTO app_settings (id, vscode_application_name) VALUES (1, '');
@@ -109,6 +111,12 @@ const createSchema = (db: DatabaseSync): void => {
       description TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS workspace_local_targets (
+      workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+      target_type TEXT NOT NULL CHECK (target_type IN ('folder', 'code-workspace')),
+      target_path TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS groups (
@@ -172,6 +180,21 @@ const createSchema = (db: DatabaseSync): void => {
       VALUES (2, datetime('now'));
   `)
 
+  const appSettingsColumns = db.prepare('PRAGMA table_info(app_settings)').all() as unknown as
+    Array<{ name: string }>
+  if (!appSettingsColumns.some((column) => column.name === 'automatically_check_for_updates')) {
+    db.exec(`
+      ALTER TABLE app_settings
+        ADD COLUMN automatically_check_for_updates INTEGER NOT NULL DEFAULT 1;
+    `)
+  }
+  if (!appSettingsColumns.some((column) => column.name === 'automatically_download_updates')) {
+    db.exec(`
+      ALTER TABLE app_settings
+        ADD COLUMN automatically_download_updates INTEGER NOT NULL DEFAULT 1;
+    `)
+  }
+
   const workspaceColumns = db.prepare('PRAGMA table_info(repository_workspaces)').all() as unknown as
     Array<{ name: string }>
   if (!workspaceColumns.some((column) => column.name === 'repository_position')) {
@@ -201,6 +224,10 @@ const createSchema = (db: DatabaseSync): void => {
       VALUES (4, datetime('now'));
     INSERT OR IGNORE INTO schema_migrations (version, applied_at)
       VALUES (5, datetime('now'));
+    INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+      VALUES (6, datetime('now'));
+    INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+      VALUES (7, datetime('now'));
   `)
 }
 

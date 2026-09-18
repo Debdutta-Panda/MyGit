@@ -190,13 +190,26 @@ export const registerRepositoryActionHandlers = (): void => {
   )
   ipcMain.handle('repositories:git-history', async (_event, path: unknown) => {
     const repositoryPath = await verifiedClonePath(path)
-    const output = await runGit(repositoryPath, [
-      'log',
-      '-n',
-      '100',
-      '--date=iso-strict',
-      '--pretty=format:%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1e',
-    ], { successCodes: [0, 128] })
+    const [output, unpushedOutput] = await Promise.all([
+      runGit(repositoryPath, [
+        'log',
+        '-n',
+        '100',
+        '--date=iso-strict',
+        '--pretty=format:%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1e',
+      ], { successCodes: [0, 128] }),
+      (async (): Promise<string> => {
+        try {
+          await runGit(repositoryPath, ['rev-parse', '--verify', '@{upstream}'])
+          return await runGit(repositoryPath, ['rev-list', '-n', '100', '@{upstream}..HEAD'])
+        } catch {
+          return await runGit(repositoryPath, ['rev-list', '-n', '100', 'HEAD'], {
+            successCodes: [0, 128],
+          })
+        }
+      })(),
+    ])
+    const unpushedHashes = new Set(unpushedOutput.split(/\r?\n/).filter(Boolean))
 
     return output
       .split('\x1e')
@@ -205,7 +218,14 @@ export const registerRepositoryActionHandlers = (): void => {
       .map((record): RepositoryCommit | null => {
         const [hash, shortHash, author, authoredAt, ...subjectParts] = record.split('\x1f')
         if (!hash || !shortHash || !author || !authoredAt) return null
-        return { hash, shortHash, author, authoredAt, subject: subjectParts.join('\x1f') }
+        return {
+          hash,
+          shortHash,
+          author,
+          authoredAt,
+          subject: subjectParts.join('\x1f'),
+          unpushed: unpushedHashes.has(hash),
+        }
       })
       .filter((commit): commit is RepositoryCommit => commit !== null)
   })

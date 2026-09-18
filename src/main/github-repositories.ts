@@ -517,13 +517,16 @@ const githubFullNameFromRemote = (remote: string): string | null => {
 const addLocalRepository = async (
   event: Electron.IpcMainInvokeEvent,
   requestedAccountId: number | null,
+  initializePlainFolder: boolean,
 ): Promise<GitHubRepository | null> => {
   const ownerWindow = BrowserWindow.fromWebContents(event.sender)
   const options: Electron.OpenDialogOptions = {
-    title: 'Add local repository',
-    buttonLabel: 'Add repository',
+    title: initializePlainFolder ? 'Choose project folder to publish' : 'Add local repository',
+    buttonLabel: initializePlainFolder ? 'Use this folder' : 'Add repository',
     defaultPath: app.getPath('documents'),
-    message: 'Select a local GitHub repository folder.',
+    message: initializePlainFolder
+      ? 'Select a project folder. MyRepos will initialize Git before publishing.'
+      : 'Select a local GitHub repository folder.',
     properties: ['openDirectory'],
   }
   const selection = ownerWindow
@@ -532,7 +535,12 @@ const addLocalRepository = async (
   if (selection.canceled || !selection.filePaths[0]) return null
 
   const path = resolve(selection.filePaths[0])
-  if (!(await isGitRepository(path))) throw new Error('The selected folder is not a Git repository.')
+  if (!(await isGitRepository(path))) {
+    if (!initializePlainFolder) {
+      throw new Error('The selected folder is not a Git repository. Use Publish folder instead.')
+    }
+    await runPublishGit(path, ['init', '-b', 'main'])
+  }
 
   const origin = await optionalGitOrigin(path)
   const originFullName = origin ? githubFullNameFromRemote(origin) : null
@@ -692,7 +700,21 @@ export const publishRepository = async (value: unknown): Promise<PublishReposito
   try {
     await runPublishGit(repositoryPath, ['rev-parse', '--verify', 'HEAD'])
   } catch {
-    throw new Error('Create the first commit before publishing this repository.')
+    try {
+      await runPublishGit(repositoryPath, ['add', '--all'])
+      await runPublishGit(repositoryPath, [
+        '-c',
+        `user.name=${auth.accountLogin}`,
+        '-c',
+        `user.email=${input.accountId}+${auth.accountLogin}@users.noreply.github.com`,
+        'commit',
+        '--allow-empty',
+        '-m',
+        'Initial commit',
+      ])
+    } catch (error) {
+      throw new Error(`Could not create the initial commit: ${error instanceof Error ? error.message : 'Git failed.'}`)
+    }
   }
 
   let response: GitHubRepositoryResponse
@@ -750,7 +772,7 @@ export const publishRepository = async (value: unknown): Promise<PublishReposito
   }
 }
 
-const launchVSCodeInNewWindow = async (repositoryPath: string): Promise<void> => {
+export const launchVSCodeInNewWindow = async (repositoryPath: string): Promise<void> => {
   let command = 'code'
   let args = ['--new-window', repositoryPath]
 
@@ -788,9 +810,9 @@ const launchVSCodeInNewWindow = async (repositoryPath: string): Promise<void> =>
     vscode.once('error', () => {
       reject(new Error('Unable to open Visual Studio Code. Make sure VS Code is installed.'))
     })
-    vscode.once('close', (code) => {
-      if (code === 0) resolvePromise()
-      else reject(new Error('Unable to open Visual Studio Code in a new window.'))
+    vscode.once('spawn', () => {
+      vscode.unref()
+      resolvePromise()
     })
   })
 }
@@ -935,8 +957,10 @@ export const registerRepositoryHandlers = (): void => {
   ipcMain.handle('repositories:locate', (event, accountId: number, fullName: string) =>
     locateRepository(event, accountId, fullName),
   )
-  ipcMain.handle('repositories:add-local', (event, accountId: number | null) =>
-    addLocalRepository(event, accountId),
+  ipcMain.handle(
+    'repositories:add-local',
+    (event, accountId: number | null, initializePlainFolder: boolean = false) =>
+      addLocalRepository(event, accountId, initializePlainFolder === true),
   )
   ipcMain.handle('repositories:publish', (_event, input: unknown) => publishRepository(input))
   ipcMain.handle('repositories:open-folder', async (_event, path: unknown) => {

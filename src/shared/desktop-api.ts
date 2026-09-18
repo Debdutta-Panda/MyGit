@@ -68,6 +68,31 @@ export type ConfigurationSyncAction = 'sync' | 'pull' | 'push'
 
 export interface AppSettings {
   vscodeApplicationName: string
+  automaticallyCheckForUpdates: boolean
+  automaticallyDownloadUpdates: boolean
+}
+
+export type AppUpdatePhase =
+  | 'idle'
+  | 'checking'
+  | 'up-to-date'
+  | 'available'
+  | 'downloading'
+  | 'downloaded'
+  | 'error'
+  | 'unavailable'
+
+export interface AppUpdateState {
+  phase: AppUpdatePhase
+  channel: 'stable'
+  currentVersion: string
+  availableVersion: string | null
+  progress: number | null
+  transferred: number | null
+  total: number | null
+  checkedAt: string | null
+  message: string | null
+  packaged: boolean
 }
 
 export interface RepositoryGitStatus {
@@ -105,11 +130,80 @@ export interface RepositoryCommit {
   author: string
   authoredAt: string
   subject: string
+  unpushed: boolean
 }
 
 export interface RepositoryCommitFile {
   path: string
   status: string
+}
+
+export type ProjectInsightFileCategory =
+  | 'source'
+  | 'text'
+  | 'config'
+  | 'asset'
+  | 'archive'
+  | 'binary'
+
+export interface ProjectInsightFile {
+  path: string
+  extension: string
+  category: ProjectInsightFileCategory
+  language: string | null
+  size: number
+  lines: number
+  codeLines: number
+  commentLines: number
+  blankLines: number
+  projectPath: string
+}
+
+export interface ProjectInsightLanguage {
+  name: string
+  files: number
+  lines: number
+  codeLines: number
+  commentLines: number
+  blankLines: number
+}
+
+export interface ProjectInsightTechnology {
+  name: string
+  category: 'framework' | 'library' | 'runtime' | 'tool'
+  version: string | null
+  confidence: 'confirmed' | 'likely'
+  evidence: string[]
+}
+
+export interface ProjectInsightProject {
+  path: string
+  name: string
+  markers: string[]
+  files: number
+  lines: number
+}
+
+export interface ProjectInsightsResult {
+  rootPath: string
+  scannedAt: string
+  durationMs: number
+  files: ProjectInsightFile[]
+  languages: ProjectInsightLanguage[]
+  technologies: ProjectInsightTechnology[]
+  projects: ProjectInsightProject[]
+  totals: {
+    files: number
+    textFiles: number
+    binaryFiles: number
+    assets: number
+    bytes: number
+    lines: number
+    codeLines: number
+    commentLines: number
+    blankLines: number
+  }
+  warnings: string[]
 }
 
 export type OrganizationKind = 'workspace' | 'group' | 'tag'
@@ -127,6 +221,12 @@ export interface OrganizationCatalog {
   workspaces: OrganizationItem[]
   groups: OrganizationItem[]
   tags: OrganizationItem[]
+}
+
+export interface WorkspaceLaunchTarget {
+  workspaceId: string
+  type: 'folder' | 'code-workspace'
+  path: string
 }
 
 export interface RepositoryOrganization {
@@ -151,6 +251,13 @@ export interface DesktopApi {
     chrome: string
     node: string
   }
+  windowControls: {
+    minimize: () => Promise<void>
+    toggleMaximize: () => Promise<boolean>
+    close: () => Promise<void>
+    isMaximized: () => Promise<boolean>
+    onMaximizedChanged: (callback: (maximized: boolean) => void) => () => void
+  }
   accounts: {
     list: () => Promise<GitHubAccount[]>
     remove: (accountId: number) => Promise<GitHubAccount[]>
@@ -158,6 +265,13 @@ export interface DesktopApi {
   settings: {
     get: () => Promise<AppSettings>
     save: (settings: AppSettings) => Promise<AppSettings>
+  }
+  updates: {
+    getState: () => Promise<AppUpdateState>
+    check: () => Promise<AppUpdateState>
+    download: () => Promise<AppUpdateState>
+    install: () => Promise<void>
+    onStateChanged: (callback: (state: AppUpdateState) => void) => () => void
   }
   github: {
     start: () => Promise<GitHubDeviceAuthorization>
@@ -170,7 +284,10 @@ export interface DesktopApi {
     list: (accountId: number | null) => Promise<GitHubRepository[]>
     clone: (accountId: number, fullName: string) => Promise<CloneResult | null>
     locate: (accountId: number, fullName: string) => Promise<CloneResult | null>
-    addLocal: (accountId: number | null) => Promise<GitHubRepository | null>
+    addLocal: (
+      accountId: number | null,
+      initializePlainFolder?: boolean,
+    ) => Promise<GitHubRepository | null>
     publish: (input: PublishRepositoryInput) => Promise<PublishRepositoryResult>
     openFolder: (path: string) => Promise<void>
     openInVSCode: (path: string) => Promise<void>
@@ -182,6 +299,7 @@ export interface DesktopApi {
     gitCommitDiff: (path: string, commitHash: string) => Promise<string>
     gitCommitFiles: (path: string, commitHash: string) => Promise<RepositoryCommitFile[]>
     gitCommitFileDiff: (path: string, commitHash: string, file: string) => Promise<string>
+    scanInsights: (path: string) => Promise<ProjectInsightsResult>
     gitStage: (path: string, files: string[]) => Promise<RepositoryGitDetails>
     gitUnstage: (path: string, files: string[]) => Promise<RepositoryGitDetails>
     gitCommit: (path: string, message: string) => Promise<RepositoryGitDetails>
@@ -210,6 +328,13 @@ export interface DesktopApi {
     ) => Promise<RepositoryAppearanceEntry>
     workspaceOrder: (workspaceId: string) => Promise<string[]>
     reorderWorkspace: (workspaceId: string, repositoryKeys: string[]) => Promise<string[]>
+    workspaceTarget: (workspaceId: string) => Promise<WorkspaceLaunchTarget | null>
+    connectWorkspaceTarget: (
+      workspaceId: string,
+      type: WorkspaceLaunchTarget['type'],
+    ) => Promise<WorkspaceLaunchTarget | null>
+    openWorkspaceTarget: (workspaceId: string) => Promise<void>
+    disconnectWorkspaceTarget: (workspaceId: string) => Promise<void>
     saveRepository: (
       accountId: number,
       fullName: string,

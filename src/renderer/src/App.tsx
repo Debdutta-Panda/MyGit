@@ -1,11 +1,49 @@
 import {
+  useDeferredValue,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type CSSProperties,
 } from 'react'
+import cplusplusLogo from 'devicon/icons/cplusplus/cplusplus-original.svg'
+import csharpLogo from 'devicon/icons/csharp/csharp-original.svg'
+import cssLogo from 'devicon/icons/css3/css3-original.svg'
+import cLogo from 'devicon/icons/c/c-original.svg'
+import bashLogo from 'devicon/icons/bash/bash-original.svg'
+import dartLogo from 'devicon/icons/dart/dart-original.svg'
+import elixirLogo from 'devicon/icons/elixir/elixir-original.svg'
+import erlangLogo from 'devicon/icons/erlang/erlang-original.svg'
+import fsharpLogo from 'devicon/icons/fsharp/fsharp-original.svg'
+import goLogo from 'devicon/icons/go/go-original.svg'
+import graphqlLogo from 'devicon/icons/graphql/graphql-plain.svg'
+import htmlLogo from 'devicon/icons/html5/html5-original.svg'
+import javaLogo from 'devicon/icons/java/java-original.svg'
+import javascriptLogo from 'devicon/icons/javascript/javascript-original.svg'
+import jsonLogo from 'devicon/icons/json/json-original.svg'
+import kotlinLogo from 'devicon/icons/kotlin/kotlin-original.svg'
+import lessLogo from 'devicon/icons/less/less-plain-wordmark.svg'
+import luaLogo from 'devicon/icons/lua/lua-original.svg'
+import markdownLogo from 'devicon/icons/markdown/markdown-original.svg'
+import phpLogo from 'devicon/icons/php/php-original.svg'
+import powershellLogo from 'devicon/icons/powershell/powershell-original.svg'
+import prismaLogo from 'devicon/icons/prisma/prisma-original.svg'
+import pythonLogo from 'devicon/icons/python/python-original.svg'
+import rLogo from 'devicon/icons/r/r-original.svg'
+import rubyLogo from 'devicon/icons/ruby/ruby-original.svg'
+import rustLogo from 'devicon/icons/rust/rust-original.svg'
+import sassLogo from 'devicon/icons/sass/sass-original.svg'
+import scalaLogo from 'devicon/icons/scala/scala-original.svg'
+import sqlLogo from 'devicon/icons/sqldeveloper/sqldeveloper-original.svg'
+import svelteLogo from 'devicon/icons/svelte/svelte-original.svg'
+import swiftLogo from 'devicon/icons/swift/swift-original.svg'
+import typescriptLogo from 'devicon/icons/typescript/typescript-original.svg'
+import visualBasicLogo from 'devicon/icons/visualbasic/visualbasic-original.svg'
+import vueLogo from 'devicon/icons/vuejs/vuejs-original.svg'
+import xmlLogo from 'devicon/icons/xml/xml-original.svg'
+import yamlLogo from 'devicon/icons/yaml/yaml-original.svg'
 import {
   ActionIcon,
   Alert,
@@ -23,6 +61,7 @@ import {
   Modal,
   Pagination,
   Paper,
+  Progress,
   Select,
   Stack,
   Switch,
@@ -36,16 +75,26 @@ import {
 } from '@mantine/core'
 import {
   IconAlertCircle,
+  IconArrowUp,
+  IconBrandGit,
   IconBrandGithub,
   IconBrandVscode,
   IconBook2,
   IconBriefcase,
+  IconChartBar,
   IconCheck,
   IconCommand,
+  IconCode,
   IconCopy,
   IconDownload,
   IconDeviceFloppy,
   IconExternalLink,
+  IconFileCode,
+  IconFile,
+  IconFileSpreadsheet,
+  IconFileText,
+  IconFileTypePdf,
+  IconFileZip,
   IconFilter,
   IconFolderOpen,
   IconFolderSearch,
@@ -59,21 +108,30 @@ import {
   IconLayoutSidebarLeftExpand,
   IconLayoutSidebarRightCollapse,
   IconLayoutSidebarRightExpand,
+  IconKey,
+  IconLink,
   IconLock,
+  IconMinus,
   IconPlus,
+  IconPhoto,
   IconRefresh,
+  IconRestore,
   IconSearch,
   IconSettings,
   IconShieldCheck,
   IconStar,
+  IconSquare,
   IconTags,
+  IconTemplate,
   IconTrash,
   IconUpload,
   IconUsers,
+  IconUnlink,
   IconX,
 } from '@tabler/icons-react'
 import type {
   AppSettings,
+  AppUpdateState,
   ConfigurationSyncAction,
   ConfigurationSyncState,
   GitHubAccount,
@@ -89,6 +147,10 @@ import type {
   RepositoryGitStatus,
   RepositoryOrganization,
   RepositoryOrganizationEntry,
+  ProjectInsightsResult,
+  ProjectInsightFile,
+  ProjectInsightTechnology,
+  WorkspaceLaunchTarget,
 } from '../../shared/desktop-api'
 import myReposIcon from './assets/myrepos-icon.png'
 
@@ -97,6 +159,10 @@ type ActiveView = 'accounts' | 'repositories' | 'workspaces' | 'groups' | 'tags'
 type RepositoryTab = 'local' | 'github' | 'workspace'
 type RepositoryLayout = 'list' | 'grid'
 type FilesPanelTab = 'changes' | 'history'
+type InsightsTab = 'overview' | 'files' | 'technologies' | 'projects'
+type InsightsMode = 'off' | 'manual' | 'automatic' | 'hybrid'
+type InsightsMetric = 'all' | 'lines' | 'code' | 'comments'
+type TechnologyCategory = ProjectInsightsResult['technologies'][number]['category']
 type BulkGitOperation = 'sync' | 'fetch' | 'pull' | 'push'
 type BulkGitTarget = 'visible' | 'selected'
 
@@ -316,6 +382,131 @@ const HorizontalSplitter = ({
     </div>
   )
 }
+
+const defaultSettings: AppSettings = {
+  vscodeApplicationName: '',
+  automaticallyCheckForUpdates: true,
+  automaticallyDownloadUpdates: true,
+}
+
+const emptyUpdateState: AppUpdateState = {
+  phase: 'idle',
+  channel: 'stable',
+  currentVersion: '',
+  availableVersion: null,
+  progress: null,
+  transferred: null,
+  total: null,
+  checkedAt: null,
+  message: null,
+  packaged: false,
+}
+
+const VirtualizedInsightFiles = ({ files }: { files: ProjectInsightFile[] }) => {
+  const rowHeight = 31
+  const overscan = 10
+  const visibleRows = 24
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const [scrollTop, setScrollTop] = useState(0)
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan)
+  const end = Math.min(files.length, start + visibleRows + overscan * 2)
+
+  useEffect(() => {
+    setScrollTop(0)
+    if (viewportRef.current) viewportRef.current.scrollTop = 0
+  }, [files])
+
+  return (
+    <div className="insights-file-table">
+      <div className="insights-file-row insights-file-head">
+        <span>Path</span><span>Type</span><span>Size</span><span>Lines</span>
+        <span>Code</span><span>Comments</span><span>Blank</span>
+      </div>
+      <div
+        ref={viewportRef}
+        className="insights-virtual-viewport insights-file-viewport"
+        onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+      >
+        <div className="insights-virtual-spacer" style={{ height: files.length * rowHeight }}>
+          <div className="insights-virtual-window" style={{ transform: `translateY(${start * rowHeight}px)` }}>
+            {files.slice(start, end).map((file) => (
+              <div className="insights-file-row" key={file.path}>
+                <span className="insights-file-path-cell">
+                  <span
+                    className="insights-file-type-icon"
+                    data-category={file.category}
+                    data-on-light={['.md', '.mdx', '.sh', '.bash', '.prisma'].includes(file.extension) || undefined}
+                    aria-hidden="true"
+                  >
+                    {repositoryFileIcon(file)}
+                  </span>
+                  <span className="insights-file-path" title={file.path}>{file.path}</span>
+                </span>
+                <span>{file.language ?? file.category}</span>
+                <span>{formatBytes(file.size)}</span>
+                <span>{file.lines.toLocaleString()}</span>
+                <span>{file.codeLines.toLocaleString()}</span>
+                <span>{file.commentLines.toLocaleString()}</span>
+                <span>{file.blankLines.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const VirtualizedTechnologies = ({
+  technologies,
+  category,
+}: {
+  technologies: ProjectInsightTechnology[]
+  category: TechnologyCategory
+}) => {
+  const rowHeight = 67
+  const overscan = 6
+  const visibleRows = 9
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const [scrollTop, setScrollTop] = useState(0)
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan)
+  const end = Math.min(technologies.length, start + visibleRows + overscan * 2)
+
+  useEffect(() => {
+    setScrollTop(0)
+    if (viewportRef.current) viewportRef.current.scrollTop = 0
+  }, [technologies])
+
+  return (
+    <div
+      ref={viewportRef}
+      className="insights-virtual-viewport insights-technology-viewport"
+      style={{ height: Math.min(603, Math.max(rowHeight, technologies.length * rowHeight)) }}
+      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+    >
+      <div className="insights-virtual-spacer" style={{ height: technologies.length * rowHeight }}>
+        <div className="insights-virtual-window" style={{ transform: `translateY(${start * rowHeight}px)` }}>
+          {technologies.slice(start, end).map((technology) => (
+            <div className="insights-technology-row" key={`${technology.category}:${technology.name}`}>
+              <div>
+                <Group gap="xs">
+                  <Text size="sm" fw={700}>{technology.name}</Text>
+                  <Badge size="xs" variant="outline" color={technologyCategoryMeta[category].color}>
+                    {category}
+                  </Badge>
+                  <Badge size="xs" variant="outline" color="gray">{technology.confidence}</Badge>
+                </Group>
+                <Text size="xs" c="dimmed" mt={4} lineClamp={1}>{technology.evidence.join(' · ')}</Text>
+              </div>
+              <Text size="xs" c="dimmed">{technology.version ?? 'Version unavailable'}</Text>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const repositoriesPerPage = 15
 
 const errorMessage = (error: unknown): string => {
@@ -334,6 +525,135 @@ const timeAgo = (value: string, now: number): string => {
   if (hours < 24) return `${hours}h ago`
   const days = Math.floor(hours / 24)
   return `${days}d ago`
+}
+
+const technologyCategoryOrder: TechnologyCategory[] = ['framework', 'library', 'runtime', 'tool']
+const technologyCategoryMeta: Record<TechnologyCategory, { label: string; color: string }> = {
+  framework: { label: 'Frameworks', color: 'teal' },
+  library: { label: 'Libraries', color: 'blue' },
+  runtime: { label: 'Runtimes', color: 'violet' },
+  tool: { label: 'Tools', color: 'orange' },
+}
+
+const formatBytes = (bytes: number): string => {
+  if (bytes < 1_024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = bytes / 1_024
+  let unit = 0
+  while (value >= 1_024 && unit < units.length - 1) {
+    value /= 1_024
+    unit += 1
+  }
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`
+}
+
+const repositoryLanguageIcon = (language: string | null): ReactNode => {
+  let logo: string | null = null
+  switch (language?.toLowerCase()) {
+    case 'typescript': logo = typescriptLogo; break
+    case 'javascript': logo = javascriptLogo; break
+    case 'python': logo = pythonLogo; break
+    case 'php': logo = phpLogo; break
+    case 'html': logo = htmlLogo; break
+    case 'css': logo = cssLogo; break
+    case 'scss':
+    case 'sass': logo = sassLogo; break
+    case 'less': logo = lessLogo; break
+    case 'c#': logo = csharpLogo; break
+    case 'f#': logo = fsharpLogo; break
+    case 'visual basic': logo = visualBasicLogo; break
+    case 'c': logo = cLogo; break
+    case 'c++': logo = cplusplusLogo; break
+    case 'java': logo = javaLogo; break
+    case 'go': logo = goLogo; break
+    case 'rust': logo = rustLogo; break
+    case 'kotlin': logo = kotlinLogo; break
+    case 'swift': logo = swiftLogo; break
+    case 'dart': logo = dartLogo; break
+    case 'ruby': logo = rubyLogo; break
+    case 'scala': logo = scalaLogo; break
+    case 'lua': logo = luaLogo; break
+    case 'r': logo = rLogo; break
+    case 'shell': logo = bashLogo; break
+    case 'powershell': logo = powershellLogo; break
+    case 'sql': logo = sqlLogo; break
+    case 'json':
+    case 'json with comments': logo = jsonLogo; break
+    case 'markdown':
+    case 'mdx': logo = markdownLogo; break
+    case 'yaml': logo = yamlLogo; break
+    case 'xml':
+    case 'xaml': logo = xmlLogo; break
+    case 'graphql': logo = graphqlLogo; break
+    case 'elixir': logo = elixirLogo; break
+    case 'erlang': logo = erlangLogo; break
+    case 'vue': logo = vueLogo; break
+    case 'svelte': logo = svelteLogo; break
+    default: return <IconCode size={23} stroke={2.2} />
+  }
+  return <img className="repository-language-logo" src={logo} alt="" />
+}
+
+const repositoryLanguageColor = (language: string | null): string => {
+  switch (language?.toLowerCase()) {
+    case 'typescript': return '#5ea6e8'
+    case 'javascript': return '#f7df1e'
+    case 'python': return '#ffd43b'
+    case 'php': return '#aeb2d5'
+    case 'html': return '#ff7043'
+    case 'css': return '#42a5f5'
+    case 'c#': return '#b58cff'
+    case 'c++': return '#659ad2'
+    case 'go': return '#5dc9e2'
+    case 'rust': return '#e6a66c'
+    case 'kotlin': return '#b48cff'
+    case 'swift': return '#ff7557'
+    case 'vue': return '#63d7a0'
+    case 'svelte': return '#ff5d3b'
+    default: return '#91a0b2'
+  }
+}
+
+const repositoryExtensionIcon = (extension: string): ReactNode => {
+  const language: Record<string, string> = {
+    '.ts': 'TypeScript', '.tsx': 'TypeScript', '.mts': 'TypeScript', '.cts': 'TypeScript',
+    '.js': 'JavaScript', '.jsx': 'JavaScript', '.mjs': 'JavaScript', '.cjs': 'JavaScript',
+    '.py': 'Python', '.php': 'PHP', '.java': 'Java', '.kt': 'Kotlin', '.kts': 'Kotlin',
+    '.cs': 'C#', '.fs': 'F#', '.vb': 'Visual Basic', '.c': 'C', '.h': 'C',
+    '.cc': 'C++', '.cpp': 'C++', '.cxx': 'C++', '.hpp': 'C++', '.hh': 'C++',
+    '.go': 'Go', '.rs': 'Rust', '.swift': 'Swift', '.dart': 'Dart', '.rb': 'Ruby',
+    '.scala': 'Scala', '.lua': 'Lua', '.r': 'R', '.sh': 'Shell', '.bash': 'Shell',
+    '.ps1': 'PowerShell', '.sql': 'SQL', '.html': 'HTML', '.htm': 'HTML', '.vue': 'Vue',
+    '.svelte': 'Svelte', '.css': 'CSS', '.scss': 'SCSS', '.sass': 'Sass', '.less': 'Less',
+    '.xml': 'XML', '.xaml': 'XAML', '.json': 'JSON', '.jsonc': 'JSON with Comments',
+    '.yaml': 'YAML', '.yml': 'YAML', '.md': 'Markdown', '.mdx': 'MDX',
+    '.graphql': 'GraphQL', '.gql': 'GraphQL', '.ex': 'Elixir', '.exs': 'Elixir',
+    '.erl': 'Erlang', '.hrl': 'Erlang',
+  }
+  const detectedLanguage = language[extension]
+  if (detectedLanguage) return repositoryLanguageIcon(detectedLanguage)
+  if (extension === '.prisma') return <img className="repository-language-logo" src={prismaLogo} alt="" />
+  if (extension === '.csv' || extension === '.tsv') return <IconFileSpreadsheet size={20} stroke={1.8} />
+  if (extension === '.txt') return <IconFileText size={20} stroke={1.8} />
+  if (extension === '.twig') return <IconTemplate size={20} stroke={1.8} />
+  return <IconFileCode size={20} stroke={1.8} />
+}
+
+const repositoryFileIcon = (file: ProjectInsightFile): ReactNode => {
+  const name = file.path.split('/').at(-1)?.toLowerCase() ?? ''
+  if (name === '.env' || name.startsWith('.env.')) return <IconKey size={19} stroke={1.8} />
+  if (name === '.gitignore' || name === '.gitattributes' || name === '.gitmodules') {
+    return <IconBrandGit size={19} stroke={1.8} />
+  }
+  if (file.extension === '.pdf') return <IconFileTypePdf size={20} stroke={1.8} />
+  if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.svg', '.ico', '.bmp', '.tiff']
+    .includes(file.extension)) return <IconPhoto size={20} stroke={1.8} />
+  if (['.zip', '.7z', '.rar', '.tar', '.gz', '.bz2', '.xz'].includes(file.extension)) {
+    return <IconFileZip size={20} stroke={1.8} />
+  }
+  if (file.category === 'config' && file.extension === '(none)') return <IconSettings size={19} stroke={1.8} />
+  if (file.extension === '(none)') return <IconFile size={20} stroke={1.7} />
+  return repositoryExtensionIcon(file.extension)
 }
 
 const mergeRepositoryDetails = (
@@ -412,6 +732,10 @@ export function App() {
   const [workspaceOrderLoading, setWorkspaceOrderLoading] = useState(false)
   const [workspaceOrderSaving, setWorkspaceOrderSaving] = useState(false)
   const [workspaceOrderError, setWorkspaceOrderError] = useState<string | null>(null)
+  const [workspaceTarget, setWorkspaceTarget] = useState<WorkspaceLaunchTarget | null>(null)
+  const [workspaceTargetLoading, setWorkspaceTargetLoading] = useState(false)
+  const [workspaceTargetAction, setWorkspaceTargetAction] = useState<string | null>(null)
+  const [workspaceTargetError, setWorkspaceTargetError] = useState<string | null>(null)
   const [draggedRepositoryKey, setDraggedRepositoryKey] = useState<string | null>(null)
   const [repositoryDropTarget, setRepositoryDropTarget] = useState<string | null>(null)
   const [repositoryLayout, setRepositoryLayout] = useState<RepositoryLayout>('list')
@@ -428,16 +752,19 @@ export function App() {
   const [publishError, setPublishError] = useState<string | null>(null)
   const contentScrollRef = useRef<HTMLDivElement>(null)
   const repositoryResultsScrollRef = useRef<HTMLDivElement>(null)
+  const automaticInsightScanPathsRef = useRef(new Set<string>())
   const [connectOpen, setConnectOpen] = useState(false)
   const [authorizationState, setAuthorizationState] = useState<AuthorizationState>('idle')
   const [authorization, setAuthorization] = useState<GitHubDeviceAuthorization | null>(null)
   const [authorizationError, setAuthorizationError] = useState<string | null>(null)
-  const [settings, setSettings] = useState<AppSettings>({ vscodeApplicationName: '' })
-  const [savedSettings, setSavedSettings] = useState<AppSettings>({ vscodeApplicationName: '' })
+  const [settings, setSettings] = useState<AppSettings>(defaultSettings)
+  const [savedSettings, setSavedSettings] = useState<AppSettings>(defaultSettings)
   const [settingsLoading, setSettingsLoading] = useState(true)
   const [settingsSaving, setSettingsSaving] = useState(false)
   const [settingsError, setSettingsError] = useState<string | null>(null)
   const [settingsSaved, setSettingsSaved] = useState(false)
+  const [updateState, setUpdateState] = useState<AppUpdateState>(emptyUpdateState)
+  const [updateAction, setUpdateAction] = useState<'check' | 'download' | 'install' | null>(null)
   const [configurationSync, setConfigurationSync] = useState<ConfigurationSyncState>(
     emptyConfigurationSyncState,
   )
@@ -472,6 +799,20 @@ export function App() {
   const [cardCommitSync, setCardCommitSync] = useState(false)
   const [cardCommitMessage, setCardCommitMessage] = useState('')
   const [cardCommitError, setCardCommitError] = useState<string | null>(null)
+  const [insightsRepository, setInsightsRepository] = useState<GitHubRepository | null>(null)
+  const [insightsResult, setInsightsResult] = useState<ProjectInsightsResult | null>(null)
+  const [insightsCache, setInsightsCache] = useState<Record<string, ProjectInsightsResult>>({})
+  const [insightsLoading, setInsightsLoading] = useState(false)
+  const [insightsError, setInsightsError] = useState<string | null>(null)
+  const [insightsMode, setInsightsMode] = useState<InsightsMode>('manual')
+  const [insightsTab, setInsightsTab] = useState<InsightsTab>('overview')
+  const [insightsTechnologyTab, setInsightsTechnologyTab] = useState<TechnologyCategory>('framework')
+  const [insightsSearch, setInsightsSearch] = useState('')
+  const [insightsCategory, setInsightsCategory] = useState<string | null>('all')
+  const [insightsLanguage, setInsightsLanguage] = useState<string | null>('all')
+  const [insightsExtension, setInsightsExtension] = useState<string | null>('all')
+  const [insightsProject, setInsightsProject] = useState<string | null>('all')
+  const [insightsMetric, setInsightsMetric] = useState<InsightsMetric>('all')
   const [gitError, setGitError] = useState<string | null>(null)
   const [commitMessage, setCommitMessage] = useState('')
   const [commitDescription, setCommitDescription] = useState('')
@@ -482,6 +823,7 @@ export function App() {
   const [selectedCommitFiles, setSelectedCommitFiles] = useState<RepositoryCommitFile[]>([])
   const [selectedCommitFile, setSelectedCommitFile] = useState<string | null>(null)
   const [relativeTimeNow, setRelativeTimeNow] = useState(Date.now())
+  const [windowMaximized, setWindowMaximized] = useState(false)
   const platform =
     window.desktop?.platform ??
     (navigator.userAgent.includes('Macintosh') ? 'darwin' : 'unknown')
@@ -490,6 +832,12 @@ export function App() {
     const timer = window.setInterval(() => setRelativeTimeNow(Date.now()), 60_000)
     return () => window.clearInterval(timer)
   }, [])
+
+  useEffect(() => {
+    if (platform !== 'win32' || !window.desktop) return
+    void window.desktop.windowControls.isMaximized().then(setWindowMaximized)
+    return window.desktop.windowControls.onMaximizedChanged(setWindowMaximized)
+  }, [platform])
 
   useEffect(() => {
     if (sidebarWidth > 72 && sidebarWidth < 190) setSidebarWidth(72)
@@ -527,6 +875,22 @@ export function App() {
       })
     return () => { cancelled = true }
   }, [selectedWorkspaceId, organizationCatalog.workspaces])
+
+  useEffect(() => {
+    if (!window.desktop || !selectedWorkspaceId) {
+      setWorkspaceTarget(null)
+      setWorkspaceTargetLoading(false)
+      return
+    }
+    let cancelled = false
+    setWorkspaceTargetLoading(true)
+    setWorkspaceTargetError(null)
+    window.desktop.organization.workspaceTarget(selectedWorkspaceId)
+      .then((target) => { if (!cancelled) setWorkspaceTarget(target) })
+      .catch((error) => { if (!cancelled) setWorkspaceTargetError(errorMessage(error)) })
+      .finally(() => { if (!cancelled) setWorkspaceTargetLoading(false) })
+    return () => { cancelled = true }
+  }, [selectedWorkspaceId])
 
   useEffect(() => {
     if (!window.desktop) return
@@ -600,6 +964,25 @@ export function App() {
   }, [])
 
   useEffect(() => {
+    if (!window.desktop) return
+    let cancelled = false
+    void window.desktop.updates.getState()
+      .then((state) => { if (!cancelled) setUpdateState(state) })
+      .catch((error) => {
+        if (!cancelled) {
+          setUpdateState((current) => ({ ...current, phase: 'error', message: errorMessage(error) }))
+        }
+      })
+    const unsubscribe = window.desktop.updates.onStateChanged((state) => {
+      if (!cancelled) setUpdateState(state)
+    })
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [])
+
+  useEffect(() => {
     if (!window.desktop) {
       setConfigurationSyncLoading(false)
       return
@@ -645,6 +1028,27 @@ export function App() {
       setGitStatuses((current) => ({ ...current, [status.path]: status }))
     })
   }, [])
+
+  useEffect(() => {
+    if (!window.desktop) return
+    let cancelled = false
+    const pending = repositories.filter((repository) => repository.localPath &&
+      localStorage.getItem(`myrepos:insights-mode:${repository.localPath}`) === 'automatic' &&
+      !automaticInsightScanPathsRef.current.has(repository.localPath))
+    for (const repository of pending) automaticInsightScanPathsRef.current.add(repository.localPath!)
+    void (async () => {
+      for (const repository of pending) {
+        if (cancelled || !repository.localPath) return
+        try {
+          const result = await window.desktop!.repositories.scanInsights(repository.localPath)
+          if (!cancelled) setInsightsCache((current) => ({ ...current, [repository.localPath!]: result }))
+        } catch {
+          // Background automatic scans remain quiet; opening Insights shows actionable errors.
+        }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [repositories])
 
   useEffect(() => {
     if (activeView !== 'repositories' || !selectedAccountId || !window.desktop) return
@@ -905,7 +1309,7 @@ export function App() {
             ? { ...item, localPath: result.path }
             : item,
         ))
-        setRepositoryTab('local')
+        if (repositoryTab !== 'workspace') setRepositoryTab('local')
         setRepositoryPage(1)
       }
     } catch (error) {
@@ -932,26 +1336,31 @@ export function App() {
           : item,
       ))
       setCloneResult({ fullName: repository.fullName, path: result.path })
-      setRepositoryTab('local')
+      if (repositoryTab !== 'workspace') setRepositoryTab('local')
       setRepositoryPage(1)
     } catch (error) {
       setRepositoriesError(errorMessage(error))
     }
   }
 
-  const addLocalRepository = async (): Promise<void> => {
+  const addLocalRepository = async (forPublishing = false): Promise<void> => {
     if (!window.desktop || !selectedAccountId) return
     setRepositoriesError(null)
 
     try {
+      const requestedAccountId = selectedAccountId === 'all'
+        ? forPublishing ? accounts[0]?.id ?? null : null
+        : Number(selectedAccountId)
       const repository = await window.desktop.repositories.addLocal(
-        selectedAccountId === 'all' ? null : Number(selectedAccountId),
+        requestedAccountId,
+        forPublishing,
       )
       if (!repository) return
       setRepositories((current) => mergeRepositoryDetails([repository], current))
       setCloneResult({ fullName: repository.fullName, path: repository.localPath! })
       setRepositoryTab('local')
       setRepositoryPage(1)
+      if (forPublishing) openPublishRepository(repository)
       void refreshRepositories()
     } catch (error) {
       setRepositoriesError(errorMessage(error))
@@ -1082,6 +1491,9 @@ export function App() {
     setGitError(null)
     try {
       applyGitDetails(await operation())
+      if (gitRepository?.localPath && ['commit', 'fetch', 'pull', 'push'].includes(action)) {
+        setGitHistory(await window.desktop!.repositories.gitHistory(gitRepository.localPath))
+      }
       setDiffTitle(null)
       setDiffText(null)
       return true
@@ -1545,6 +1957,103 @@ export function App() {
     setOrganizationEditorError(null)
   }
 
+  const connectWorkspaceLaunchTarget = async (
+    type: WorkspaceLaunchTarget['type'],
+  ): Promise<void> => {
+    if (!window.desktop || !selectedWorkspaceId) return
+    setWorkspaceTargetAction(`connect:${type}`)
+    setWorkspaceTargetError(null)
+    try {
+      const target = await window.desktop.organization.connectWorkspaceTarget(
+        selectedWorkspaceId,
+        type,
+      )
+      if (target) setWorkspaceTarget(target)
+    } catch (error) {
+      setWorkspaceTargetError(errorMessage(error))
+    } finally {
+      setWorkspaceTargetAction(null)
+    }
+  }
+
+  const scanRepositoryInsights = async (repository: GitHubRepository): Promise<void> => {
+    if (!window.desktop || !repository.localPath) return
+    setInsightsLoading(true)
+    setInsightsError(null)
+    try {
+      const result = await window.desktop.repositories.scanInsights(repository.localPath)
+      setInsightsResult(result)
+      setInsightsCache((current) => ({ ...current, [repository.localPath!]: result }))
+    } catch (error) {
+      setInsightsError(errorMessage(error))
+    } finally {
+      setInsightsLoading(false)
+    }
+  }
+
+  const openRepositoryInsights = (repository: GitHubRepository): void => {
+    if (!repository.localPath) return
+    const savedMode = localStorage.getItem(`myrepos:insights-mode:${repository.localPath}`)
+    const mode: InsightsMode = savedMode === 'off' || savedMode === 'automatic' ||
+      savedMode === 'hybrid' || savedMode === 'manual' ? savedMode : 'manual'
+    const cached = insightsCache[repository.localPath]
+    setInsightsRepository(repository)
+    setInsightsResult(mode === 'off' ? null : cached ?? null)
+    setInsightsError(null)
+    setInsightsMode(mode)
+    setInsightsTab('overview')
+    setInsightsTechnologyTab('framework')
+    setInsightsSearch('')
+    setInsightsCategory('all')
+    setInsightsLanguage('all')
+    setInsightsExtension('all')
+    setInsightsProject('all')
+    setInsightsMetric('all')
+    if (mode === 'automatic' || mode === 'hybrid' && !cached) void scanRepositoryInsights(repository)
+  }
+
+  const changeInsightsMode = (mode: InsightsMode): void => {
+    setInsightsMode(mode)
+    if (!insightsRepository?.localPath) return
+    localStorage.setItem(`myrepos:insights-mode:${insightsRepository.localPath}`, mode)
+    if (mode === 'off') {
+      setInsightsResult(null)
+      return
+    }
+    const cached = insightsCache[insightsRepository.localPath]
+    if (!insightsResult && cached) setInsightsResult(cached)
+    if ((mode === 'automatic' || mode === 'hybrid' && !cached) && !insightsLoading) {
+      void scanRepositoryInsights(insightsRepository)
+    }
+  }
+
+  const openWorkspaceLaunchTarget = async (): Promise<void> => {
+    if (!window.desktop || !selectedWorkspaceId) return
+    setWorkspaceTargetAction('open')
+    setWorkspaceTargetError(null)
+    try {
+      await window.desktop.organization.openWorkspaceTarget(selectedWorkspaceId)
+    } catch (error) {
+      setWorkspaceTargetError(errorMessage(error))
+    } finally {
+      setWorkspaceTargetAction(null)
+    }
+  }
+
+  const disconnectWorkspaceLaunchTarget = async (): Promise<void> => {
+    if (!window.desktop || !selectedWorkspaceId) return
+    setWorkspaceTargetAction('disconnect')
+    setWorkspaceTargetError(null)
+    try {
+      await window.desktop.organization.disconnectWorkspaceTarget(selectedWorkspaceId)
+      setWorkspaceTarget(null)
+    } catch (error) {
+      setWorkspaceTargetError(errorMessage(error))
+    } finally {
+      setWorkspaceTargetAction(null)
+    }
+  }
+
   const openWorkspaceRepositories = (workspaceId: string): void => {
     setSelectedWorkspaceId(workspaceId)
     setSelectedAccountId('all')
@@ -1678,6 +2187,20 @@ export function App() {
       setSettingsError(errorMessage(error))
     } finally {
       setSettingsSaving(false)
+    }
+  }
+
+  const runUpdateAction = async (action: 'check' | 'download' | 'install'): Promise<void> => {
+    if (!window.desktop) return
+    setUpdateAction(action)
+    try {
+      if (action === 'check') setUpdateState(await window.desktop.updates.check())
+      else if (action === 'download') setUpdateState(await window.desktop.updates.download())
+      else await window.desktop.updates.install()
+    } catch (error) {
+      setUpdateState((current) => ({ ...current, phase: 'error', message: errorMessage(error) }))
+    } finally {
+      setUpdateAction(null)
     }
   }
 
@@ -1828,9 +2351,79 @@ export function App() {
   const activeOrganizationItems = activeOrganizationKind && activeOrganizationCopy
     ? organizationCatalog[activeOrganizationCopy.catalogField]
     : []
+  const deferredInsightsSearch = useDeferredValue(insightsSearch)
+  const scopedInsightFiles = useMemo(() => insightsResult?.files.filter((file) =>
+    insightsProject === 'all' || file.projectPath === insightsProject) ?? [],
+  [insightsProject, insightsResult])
+  const filteredInsightFiles = useMemo(() => {
+    const search = deferredInsightsSearch.toLowerCase()
+    return scopedInsightFiles.filter((file) =>
+      (!search || file.path.toLowerCase().includes(search)) &&
+      (insightsCategory === 'all' || file.category === insightsCategory) &&
+      (insightsLanguage === 'all' || file.language === insightsLanguage) &&
+      (insightsExtension === 'all' || file.extension === insightsExtension) &&
+      (insightsMetric === 'all' || insightsMetric === 'lines' && file.lines > 0 ||
+        insightsMetric === 'code' && file.codeLines > 0 || insightsMetric === 'comments' && file.commentLines > 0))
+  }, [deferredInsightsSearch, insightsCategory, insightsExtension, insightsLanguage, insightsMetric, scopedInsightFiles])
+  const scopedInsightTotals = useMemo(() => scopedInsightFiles.reduce((total, file) => ({
+      files: total.files + 1,
+      lines: total.lines + file.lines,
+      codeLines: total.codeLines + file.codeLines,
+      commentLines: total.commentLines + file.commentLines,
+      assets: total.assets + (file.category === 'asset' ? 1 : 0),
+      bytes: total.bytes + file.size,
+    }), { files: 0, lines: 0, codeLines: 0, commentLines: 0, assets: 0, bytes: 0 }),
+  [scopedInsightFiles])
+  const scopedInsightLanguages = useMemo(() => Object.values(scopedInsightFiles.reduce<Record<string, {
+      name: string; files: number; codeLines: number
+    }>>((languages, file) => {
+      if (!file.language) return languages
+      const value = languages[file.language] ?? { name: file.language, files: 0, codeLines: 0 }
+      value.files += 1
+      value.codeLines += file.codeLines
+      languages[file.language] = value
+      return languages
+    }, {})).sort((a, b) => b.codeLines - a.codeLines || b.files - a.files),
+  [scopedInsightFiles])
+  const scopedInsightTechnologies = useMemo(() => insightsResult?.technologies.filter((technology) =>
+      insightsProject === 'all' || technology.evidence.some((evidence) =>
+        insightsProject === '.'
+          ? !evidence.replaceAll('\\', '/').split(': ')[0].includes('/')
+          : evidence.replaceAll('\\', '/').startsWith(`${insightsProject}/`))) ?? [],
+  [insightsProject, insightsResult])
+  const insightTechnologyCounts = useMemo(() => technologyCategoryOrder.reduce<Record<TechnologyCategory, number>>(
+    (counts, category) => {
+      counts[category] = scopedInsightTechnologies.filter((item) => item.category === category).length
+      return counts
+    }, { framework: 0, library: 0, runtime: 0, tool: 0 }),
+  [scopedInsightTechnologies])
+  const activeInsightTechnologies = useMemo(() => scopedInsightTechnologies.filter(
+    (item) => item.category === insightsTechnologyTab),
+  [insightsTechnologyTab, scopedInsightTechnologies])
+  const insightExtensionStats = useMemo(() => insightsResult
+    ? Object.entries(scopedInsightFiles.reduce<Record<string, {
+        files: number; lines: number; codeLines: number; commentLines: number; blankLines: number; bytes: number
+      }>>((counts, file) => {
+        const value = counts[file.extension] ?? {
+          files: 0, lines: 0, codeLines: 0, commentLines: 0, blankLines: 0, bytes: 0,
+        }
+        value.files += 1
+        value.lines += file.lines
+        value.codeLines += file.codeLines
+        value.commentLines += file.commentLines
+        value.blankLines += file.blankLines
+        value.bytes += file.size
+        counts[file.extension] = value
+        return counts
+      }, {})).sort((a, b) => b[1].lines - a[1].lines || b[1].files - a[1].files)
+    : [], [insightsResult, scopedInsightFiles])
 
   return (
-    <div className="app-frame" data-platform={platform}>
+    <div
+      className="app-frame"
+      data-platform={platform}
+      data-maximized={windowMaximized || undefined}
+    >
       {sidebarVisible && (
       <>
       <aside
@@ -1951,6 +2544,40 @@ export function App() {
 
       <main className="main-area">
         <header className="topbar">
+          {platform === 'win32' && window.desktop && (
+            <div className="window-controls" aria-label="Window controls">
+              <button
+                type="button"
+                className="window-control"
+                aria-label="Minimize"
+                title="Minimize"
+                onClick={() => void window.desktop?.windowControls.minimize()}
+              >
+                <IconMinus size={15} stroke={1.5} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className="window-control"
+                aria-label={windowMaximized ? 'Restore' : 'Maximize'}
+                title={windowMaximized ? 'Restore' : 'Maximize'}
+                onClick={() => void window.desktop?.windowControls.toggleMaximize()
+                  .then(setWindowMaximized)}
+              >
+                {windowMaximized
+                  ? <IconRestore size={14} stroke={1.5} aria-hidden="true" />
+                  : <IconSquare size={13} stroke={1.5} aria-hidden="true" />}
+              </button>
+              <button
+                type="button"
+                className="window-control window-control-close"
+                aria-label="Close"
+                title="Close"
+                onClick={() => void window.desktop?.windowControls.close()}
+              >
+                <IconX size={16} stroke={1.5} aria-hidden="true" />
+              </button>
+            </div>
+          )}
           <Tooltip label={`${sidebarVisible ? 'Hide' : 'Show'} sidebar`}>
             <ActionIcon
               className="workspace-menu-button"
@@ -2130,23 +2757,101 @@ export function App() {
               </Tabs.List>
             </Tabs>
             {repositoryTab === 'workspace' ? (
-              <Button
-                size="xs"
-                variant="light"
-                leftSection={<IconBriefcase size={15} />}
-                onClick={() => setActiveView('workspaces')}
-              >
-                Manage workspaces
-              </Button>
+              <Group gap="xs" wrap="nowrap">
+                {workspaceTarget && (
+                  <Tooltip label={workspaceTarget.path}>
+                    <Button
+                      size="xs"
+                      leftSection={<IconBrandVscode size={15} />}
+                      loading={workspaceTargetAction === 'open'}
+                      disabled={Boolean(workspaceTargetAction)}
+                      onClick={() => void openWorkspaceLaunchTarget()}
+                    >
+                      Open in VS Code
+                    </Button>
+                  </Tooltip>
+                )}
+                <Menu position="bottom-end" shadow="xl" width={245} withinPortal>
+                  <Menu.Target>
+                    <Button
+                      size="xs"
+                      variant="light"
+                      leftSection={workspaceTarget
+                        ? <IconLink size={15} />
+                        : <IconFolderSearch size={15} />}
+                      loading={workspaceTargetLoading || Boolean(workspaceTargetAction?.startsWith('connect:'))}
+                      disabled={workspaceTargetLoading || Boolean(workspaceTargetAction)}
+                    >
+                      {workspaceTarget ? 'Connected' : 'Connect'}
+                    </Button>
+                  </Menu.Target>
+                  <Menu.Dropdown>
+                    {workspaceTarget && (
+                      <>
+                        <Menu.Label>{workspaceTarget.type === 'folder'
+                          ? 'Connected folder'
+                          : 'Connected VS Code workspace'}</Menu.Label>
+                        <Menu.Item disabled className="workspace-target-path">
+                          {workspaceTarget.path}
+                        </Menu.Item>
+                        <Menu.Divider />
+                      </>
+                    )}
+                    <Menu.Item
+                      leftSection={<IconFolderOpen size={15} />}
+                      onClick={() => void connectWorkspaceLaunchTarget('folder')}
+                    >
+                      {workspaceTarget ? 'Change to folder' : 'Connect folder'}
+                    </Menu.Item>
+                    <Menu.Item
+                      leftSection={<IconFileCode size={15} />}
+                      onClick={() => void connectWorkspaceLaunchTarget('code-workspace')}
+                    >
+                      {workspaceTarget ? 'Change to .code-workspace' : 'Connect .code-workspace'}
+                    </Menu.Item>
+                    {workspaceTarget && (
+                      <>
+                        <Menu.Divider />
+                        <Menu.Item
+                          color="red"
+                          leftSection={<IconUnlink size={15} />}
+                          onClick={() => void disconnectWorkspaceLaunchTarget()}
+                        >
+                          Disconnect
+                        </Menu.Item>
+                      </>
+                    )}
+                  </Menu.Dropdown>
+                </Menu>
+                <Button
+                  size="xs"
+                  variant="subtle"
+                  color="gray"
+                  leftSection={<IconBriefcase size={15} />}
+                  onClick={() => setActiveView('workspaces')}
+                >
+                  Manage
+                </Button>
+              </Group>
             ) : (
-              <Button
-                size="xs"
-                variant="light"
-                leftSection={<IconFolderSearch size={15} />}
-                onClick={() => void addLocalRepository()}
-              >
-                Add local repository
-              </Button>
+              <Group gap="xs" wrap="nowrap">
+                <Button
+                  size="xs"
+                  variant="light"
+                  leftSection={<IconFolderSearch size={15} />}
+                  onClick={() => void addLocalRepository()}
+                >
+                  Add local repository
+                </Button>
+                <Button
+                  size="xs"
+                  leftSection={<IconUpload size={15} />}
+                  disabled={accounts.length === 0}
+                  onClick={() => void addLocalRepository(true)}
+                >
+                  Publish folder
+                </Button>
+              </Group>
             )}
             </>
           ) : activeOrganizationCopy ? (
@@ -2198,7 +2903,14 @@ export function App() {
               size="sm"
               leftSection={<IconDeviceFloppy size={16} />}
               loading={settingsSaving}
-              disabled={settingsLoading || settings.vscodeApplicationName === savedSettings.vscodeApplicationName}
+              disabled={
+                settingsLoading ||
+                (
+                  settings.vscodeApplicationName === savedSettings.vscodeApplicationName &&
+                  settings.automaticallyCheckForUpdates === savedSettings.automaticallyCheckForUpdates &&
+                  settings.automaticallyDownloadUpdates === savedSettings.automaticallyDownloadUpdates
+                )
+              }
               onClick={() => void saveSettings()}
             >
               Save settings
@@ -2645,6 +3357,11 @@ export function App() {
                   {workspaceOrderError}
                 </Alert>
               )}
+              {repositoryTab === 'workspace' && workspaceTargetError && (
+                <Alert mt="lg" color="red" icon={<IconAlertCircle size={17} />}>
+                  {workspaceTargetError}
+                </Alert>
+              )}
 
               {cloneResult && (
                 <Alert mt="lg" color="teal" icon={<IconCheck size={17} />}>
@@ -2717,14 +3434,22 @@ export function App() {
                   )}
                   {!repositorySearch && activeRepositoryOrganizationFilterCount === 0 &&
                     repositoryTab === 'local' && (
-                    <Button
-                      mt="xs"
-                      variant="light"
-                      leftSection={<IconFolderSearch size={16} />}
-                      onClick={() => void addLocalRepository()}
-                    >
-                      Add local repository
-                    </Button>
+                    <Group mt="xs" gap="xs">
+                      <Button
+                        variant="light"
+                        leftSection={<IconFolderSearch size={16} />}
+                        onClick={() => void addLocalRepository()}
+                      >
+                        Add local repository
+                      </Button>
+                      <Button
+                        leftSection={<IconUpload size={16} />}
+                        disabled={accounts.length === 0}
+                        onClick={() => void addLocalRepository(true)}
+                      >
+                        Publish folder
+                      </Button>
+                    </Group>
                   )}
                   {!repositorySearch && activeRepositoryOrganizationFilterCount === 0 &&
                     repositoryTab === 'workspace' && (
@@ -2772,6 +3497,7 @@ export function App() {
                       data-files-open={gitRepository?.localPath === repository.localPath || undefined}
                       data-selected={selectedRepositoryKeys.includes(repositoryKey) || undefined}
                       data-selecting={repositorySelectionMode || undefined}
+                      data-clickable={repository.localPath || repositorySelectionMode || undefined}
                       data-dragging={draggedRepositoryKey === repositoryKey || undefined}
                       data-drop-target={repositoryDropTarget === repositoryKey &&
                         draggedRepositoryKey !== repositoryKey || undefined}
@@ -2787,6 +3513,35 @@ export function App() {
                         const sourceKey = draggedRepositoryKey || event.dataTransfer.getData('text/plain')
                         if (sourceKey) void reorderWorkspaceRepository(sourceKey, repositoryKey)
                       }}
+                      role={repository.localPath || repositorySelectionMode ? 'button' : undefined}
+                      tabIndex={repository.localPath || repositorySelectionMode ? 0 : undefined}
+                      aria-label={repository.localPath
+                        ? `Open files for ${repository.fullName}`
+                        : repositorySelectionMode ? `Select ${repository.fullName}` : undefined}
+                      onClick={(event) => {
+                        const target = event.target
+                        const interactive = target instanceof Element
+                          ? target.closest(
+                              'button, a, input, textarea, select, [role="button"], [draggable="true"]',
+                            )
+                          : null
+                        if (interactive && interactive !== event.currentTarget) return
+                        if (repositorySelectionMode) {
+                          toggleRepositorySelection(repository)
+                        } else if (repository.localPath) {
+                          void openGitPanel(repository)
+                        }
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.target !== event.currentTarget ||
+                          (event.key !== 'Enter' && event.key !== ' ')) return
+                        event.preventDefault()
+                        if (repositorySelectionMode) {
+                          toggleRepositorySelection(repository)
+                        } else if (repository.localPath) {
+                          void openGitPanel(repository)
+                        }
+                      }}
                       radius="lg"
                       key={`${repository.accountId}:${repository.fullName}`}
                     >
@@ -2800,6 +3555,16 @@ export function App() {
                       )}
                       <div className="repository-details">
                         <Group gap={8} wrap="wrap">
+                          <span
+                            className="repository-language-icon"
+                            style={{ color: repositoryLanguageColor(repository.language) }}
+                            title={repository.language ?? 'Primary language unavailable'}
+                            aria-label={repository.language
+                              ? `Primary language: ${repository.language}`
+                              : 'Primary language unavailable'}
+                          >
+                            {repositoryLanguageIcon(repository.language)}
+                          </span>
                           {repositoryColor && (
                             <span
                               className="repository-color-dot"
@@ -3072,6 +3837,17 @@ export function App() {
                               </Button>
                             )}
                             <Button
+                              className="repository-insights-button"
+                              size="xs"
+                              variant="subtle"
+                              color="gray"
+                              leftSection={<IconChartBar size={14} />}
+                              onClick={() => openRepositoryInsights(repository)}
+                            >
+                              Insights
+                            </Button>
+                            <Button
+                              className="repository-files-button"
                               size="xs"
                               variant="subtle"
                               color="gray"
@@ -3489,7 +4265,18 @@ export function App() {
                                       key={commit.hash}
                                       onClick={() => void showCommitDiff(commit)}
                                     >
-                                      <Text size="xs" fw={650} lineClamp={2}>{commit.subject}</Text>
+                                      <div className="scm-history-subject">
+                                        <Text size="xs" fw={650} lineClamp={2}>{commit.subject}</Text>
+                                        {commit.unpushed && (
+                                          <span
+                                            className="scm-history-unpushed"
+                                            title="Not pushed to the upstream branch"
+                                            aria-label="Not pushed"
+                                          >
+                                            <IconArrowUp size={13} stroke={2.2} />
+                                          </span>
+                                        )}
+                                      </div>
                                       <Group gap={7} mt={4} wrap="nowrap">
                                         <Text size="10px" c="teal.4">{commit.shortHash}</Text>
                                         <Text size="10px" c="dimmed" truncate>{commit.author}</Text>
@@ -4180,6 +4967,120 @@ export function App() {
               </Paper>
 
               <Paper className="settings-card" radius="lg" mt={28}>
+                <Group justify="space-between" align="flex-start" wrap="nowrap">
+                  <Group gap="sm" wrap="nowrap">
+                    <ThemeIcon variant="light" color="teal" size={40} radius="md">
+                      <IconDownload size={22} />
+                    </ThemeIcon>
+                    <div>
+                      <Text fw={680}>Application updates</Text>
+                      <Text size="xs" c="dimmed">Stable channel · GitHub Releases</Text>
+                    </div>
+                  </Group>
+                  <Badge
+                    variant="light"
+                    color={
+                      updateState.phase === 'error' ? 'red' :
+                      updateState.phase === 'downloaded' ? 'teal' :
+                      updateState.phase === 'available' || updateState.phase === 'downloading' ? 'blue' : 'gray'
+                    }
+                  >
+                    {updateState.phase === 'up-to-date' ? 'Up to date' : updateState.phase.replace('-', ' ')}
+                  </Badge>
+                </Group>
+
+                <Paper className="update-status" radius="md" mt="lg">
+                  <Group justify="space-between" align="center" wrap="wrap">
+                    <div>
+                      <Text size="sm" fw={650}>
+                        MyRepos {updateState.currentVersion || 'development'}
+                      </Text>
+                      <Text size="xs" c={updateState.phase === 'error' ? 'red.4' : 'dimmed'} mt={3}>
+                        {updateState.message || 'Ready to check for a newer stable release.'}
+                      </Text>
+                    </div>
+                    <Group gap="xs">
+                      {updateState.phase === 'available' && (
+                        <Button
+                          size="xs"
+                          leftSection={<IconDownload size={14} />}
+                          loading={updateAction === 'download'}
+                          onClick={() => void runUpdateAction('download')}
+                        >
+                          Download {updateState.availableVersion}
+                        </Button>
+                      )}
+                      {updateState.phase === 'downloaded' && (
+                        <Button
+                          size="xs"
+                          leftSection={<IconRefresh size={14} />}
+                          loading={updateAction === 'install'}
+                          onClick={() => void runUpdateAction('install')}
+                        >
+                          Restart and install
+                        </Button>
+                      )}
+                      {updateState.phase !== 'downloaded' && (
+                        <Button
+                          size="xs"
+                          variant="light"
+                          leftSection={<IconRefresh size={14} />}
+                          loading={updateState.phase === 'checking' || updateAction === 'check'}
+                          disabled={
+                            !updateState.packaged ||
+                            updateState.phase === 'downloading' ||
+                            updateAction === 'download'
+                          }
+                          onClick={() => void runUpdateAction('check')}
+                        >
+                          Check for updates
+                        </Button>
+                      )}
+                    </Group>
+                  </Group>
+                  {updateState.phase === 'downloading' && (
+                    <div className="update-progress">
+                      <Progress value={updateState.progress ?? 0} animated size="sm" radius="xl" />
+                      <Text size="xs" c="dimmed">
+                        {updateState.transferred !== null && updateState.total !== null
+                          ? `${formatBytes(updateState.transferred)} of ${formatBytes(updateState.total)}`
+                          : 'Preparing download…'}
+                      </Text>
+                    </div>
+                  )}
+                </Paper>
+
+                <Stack gap="sm" mt="lg">
+                  <Switch
+                    checked={settings.automaticallyCheckForUpdates}
+                    disabled={settingsLoading}
+                    label="Automatically check for updates"
+                    description="Checks shortly after launch and every six hours while MyRepos is running."
+                    onChange={(event) => {
+                      setSettings((current) => ({
+                        ...current,
+                        automaticallyCheckForUpdates: event.currentTarget.checked,
+                      }))
+                      setSettingsSaved(false)
+                    }}
+                  />
+                  <Switch
+                    checked={settings.automaticallyDownloadUpdates}
+                    disabled={settingsLoading}
+                    label="Automatically download available updates"
+                    description="Installation waits until you choose Restart and install."
+                    onChange={(event) => {
+                      setSettings((current) => ({
+                        ...current,
+                        automaticallyDownloadUpdates: event.currentTarget.checked,
+                      }))
+                      setSettingsSaved(false)
+                    }}
+                  />
+                </Stack>
+              </Paper>
+
+              <Paper className="settings-card" radius="lg" mt={28}>
                 <Group gap="sm" mb="lg" wrap="nowrap">
                   <ThemeIcon variant="light" color="blue" size={40} radius="md">
                     <IconBrandVscode size={22} />
@@ -4198,7 +5099,10 @@ export function App() {
                   disabled={settingsLoading || platform !== 'darwin'}
                   leftSection={<IconBrandVscode size={16} />}
                   onChange={(event) => {
-                    setSettings({ vscodeApplicationName: event.currentTarget.value })
+                    setSettings((current) => ({
+                      ...current,
+                      vscodeApplicationName: event.currentTarget.value,
+                    }))
                     setSettingsError(null)
                     setSettingsSaved(false)
                   }}
@@ -4214,6 +5118,433 @@ export function App() {
           )}
         </div>
       </main>
+
+      <Modal
+        opened={Boolean(insightsRepository)}
+        onClose={() => setInsightsRepository(null)}
+        title={insightsRepository ? `Insights · ${insightsRepository.fullName}` : 'Insights'}
+        size="calc(100vw - 64px)"
+        centered
+        closeButtonProps={{ className: 'insights-close-button', 'aria-label': 'Close Insights' }}
+        classNames={{ content: 'insights-modal', body: 'insights-modal-body' }}
+      >
+        <div className="insights-toolbar">
+          <div>
+            <Text size="sm" fw={700}>Project intelligence</Text>
+            <Text size="xs" c="dimmed">
+              {insightsResult
+                ? `Scanned ${timeAgo(insightsResult.scannedAt, relativeTimeNow)} in ${insightsResult.durationMs.toLocaleString()} ms`
+                : 'Files stay on this machine and are analyzed locally.'}
+            </Text>
+          </div>
+          <Group gap="xs" wrap="nowrap">
+            <Select
+              size="xs"
+              aria-label="Insights scan mode"
+              value={insightsMode}
+              allowDeselect={false}
+              data={[
+                { value: 'off', label: 'Off' },
+                { value: 'manual', label: 'Manual' },
+                { value: 'automatic', label: 'Automatic' },
+                { value: 'hybrid', label: 'Hybrid' },
+              ]}
+              onChange={(value) => changeInsightsMode((value as InsightsMode | null) ?? 'manual')}
+            />
+            <Button
+              size="xs"
+              leftSection={<IconChartBar size={15} />}
+              loading={insightsLoading}
+              disabled={insightsMode === 'off' || !insightsRepository?.localPath}
+              onClick={() => insightsRepository && void scanRepositoryInsights(insightsRepository)}
+            >
+              {insightsResult ? 'Rescan project' : 'Scan project'}
+            </Button>
+          </Group>
+        </div>
+
+        {insightsError && (
+          <Alert color="red" icon={<IconAlertCircle size={17} />} mb="md">{insightsError}</Alert>
+        )}
+
+        {insightsLoading && !insightsResult ? (
+          <div className="insights-empty">
+            <Loader size="md" />
+            <Text fw={650}>Scanning the project…</Text>
+            <Text size="xs" c="dimmed">Classifying files, counting lines, and detecting technologies.</Text>
+          </div>
+        ) : !insightsResult ? (
+          <div className="insights-empty">
+            <IconChartBar size={34} stroke={1.5} />
+            <Text fw={650}>{insightsMode === 'off' ? 'Insights are off' : 'No scan report yet'}</Text>
+            <Text size="xs" c="dimmed">
+              {insightsMode === 'off'
+                ? 'Choose a scan mode to enable Insights for this repository.'
+                : 'Scan the project to build its local intelligence report.'}
+            </Text>
+          </div>
+        ) : (
+          <>
+            <Group justify="space-between" mt="sm" gap="sm">
+              <Text size="xs" c="dimmed">Report scope</Text>
+              <Select
+                size="xs"
+                value={insightsProject}
+                allowDeselect={false}
+                searchable
+                data={[
+                  { value: 'all', label: `Entire repository (${insightsResult.projects.length} projects)` },
+                  ...insightsResult.projects.map((item) => ({ value: item.path, label: `${item.name} · ${item.path}` })),
+                ]}
+                onChange={(value) => {
+                  setInsightsProject(value ?? 'all')
+                  setInsightsLanguage('all')
+                  setInsightsExtension('all')
+                  setInsightsMetric('all')
+                }}
+              />
+            </Group>
+            <div className="insights-stats">
+              {[
+                { label: 'Files', value: scopedInsightTotals.files, metric: 'all' as const },
+                { label: 'Lines', value: scopedInsightTotals.lines, metric: 'lines' as const },
+                { label: 'Code', value: scopedInsightTotals.codeLines, metric: 'code' as const },
+                { label: 'Comments', value: scopedInsightTotals.commentLines, metric: 'comments' as const },
+              ].map((stat) => (
+                <UnstyledButton
+                  className="insights-stat"
+                  key={stat.label}
+                  onClick={() => {
+                    setInsightsMetric(stat.metric)
+                    setInsightsCategory('all')
+                    setInsightsTab('files')
+                  }}
+                >
+                  <span>{stat.label}</span>
+                  <strong>{stat.value.toLocaleString()}</strong>
+                </UnstyledButton>
+              ))}
+              <UnstyledButton
+                className="insights-stat"
+                onClick={() => {
+                  setInsightsMetric('all')
+                  setInsightsCategory('asset')
+                  setInsightsTab('files')
+                }}
+              >
+                <span>Assets</span>
+                <strong>{scopedInsightTotals.assets.toLocaleString()}</strong>
+              </UnstyledButton>
+              <UnstyledButton className="insights-stat" onClick={() => setInsightsTab('files')}>
+                <span>Size</span>
+                <strong>{formatBytes(scopedInsightTotals.bytes)}</strong>
+              </UnstyledButton>
+            </div>
+
+            <div className="insights-tabs" role="tablist" aria-label="Insights report sections">
+              {(['overview', 'files', 'technologies', 'projects'] as InsightsTab[]).map((tab) => (
+                <button
+                  type="button"
+                  role="tab"
+                  data-active={insightsTab === tab || undefined}
+                  aria-selected={insightsTab === tab}
+                  key={tab}
+                  onClick={() => setInsightsTab(tab)}
+                >
+                  {tab[0].toUpperCase() + tab.slice(1)}
+                </button>
+              ))}
+            </div>
+
+            <div className="insights-content">
+              {insightsTab === 'overview' && (
+                <div className="insights-overview-grid">
+                  <section className="insights-section">
+                    <Group justify="space-between" mb="sm">
+                      <Text fw={700}>Languages</Text>
+                      <Badge variant="light">{scopedInsightLanguages.length}</Badge>
+                    </Group>
+                    <div className="insights-ranking">
+                      {scopedInsightLanguages.length === 0 ? (
+                        <Text size="xs" c="dimmed">No recognized source languages.</Text>
+                      ) : scopedInsightLanguages.slice(0, 15).map((language) => (
+                        <UnstyledButton
+                          className="insights-ranking-row"
+                          key={language.name}
+                          onClick={() => {
+                            setInsightsLanguage(language.name)
+                            setInsightsMetric('all')
+                            setInsightsTab('files')
+                          }}
+                        >
+                          <span className="insights-language-name">
+                            <span
+                              className="insights-language-icon"
+                              data-on-light={['Markdown', 'Shell'].includes(language.name) || undefined}
+                              style={{ color: repositoryLanguageColor(language.name) }}
+                              aria-hidden="true"
+                            >
+                              {repositoryLanguageIcon(language.name)}
+                            </span>
+                            <span>{language.name}</span>
+                          </span>
+                          <span>{language.files.toLocaleString()} files</span>
+                          <strong>{language.codeLines.toLocaleString()} lines</strong>
+                        </UnstyledButton>
+                      ))}
+                    </div>
+                  </section>
+                  <section className="insights-section">
+                    <Group justify="space-between" mb="sm">
+                      <Text fw={700}>Extensions</Text>
+                      <Badge variant="light">{insightExtensionStats.length}</Badge>
+                    </Group>
+                    <div className="insights-extension-table">
+                      <div className="insights-extension-row insights-extension-head">
+                        <span>Ext</span><span>Files</span><span>Lines</span><span>Code</span>
+                        <span>Comments</span><span>Blank</span><span>Size</span>
+                      </div>
+                      {insightExtensionStats.slice(0, 15).map(([extension, stats]) => (
+                        <UnstyledButton
+                          className="insights-extension-row"
+                          key={extension}
+                          onClick={() => {
+                            setInsightsExtension(extension)
+                            setInsightsMetric('all')
+                            setInsightsTab('files')
+                          }}
+                        >
+                          <span className="insights-extension-name">
+                            <span
+                              className="insights-extension-icon"
+                              data-on-light={['.md', '.mdx', '.sh', '.bash', '.prisma'].includes(extension) || undefined}
+                              aria-hidden="true"
+                            >
+                              {repositoryExtensionIcon(extension)}
+                            </span>
+                            <span>{extension}</span>
+                          </span>
+                          <span>{stats.files.toLocaleString()}</span>
+                          <span>{stats.lines.toLocaleString()}</span>
+                          <span>{stats.codeLines.toLocaleString()}</span>
+                          <span>{stats.commentLines.toLocaleString()}</span>
+                          <span>{stats.blankLines.toLocaleString()}</span>
+                          <span>{formatBytes(stats.bytes)}</span>
+                        </UnstyledButton>
+                      ))}
+                    </div>
+                  </section>
+                  <section className="insights-section">
+                    <Group justify="space-between" mb="sm">
+                      <Text fw={700}>Technologies</Text>
+                      <Badge variant="light">{scopedInsightTechnologies.length}</Badge>
+                    </Group>
+                    <div className="insights-technology-groups">
+                      {technologyCategoryOrder.map((category) => {
+                        const technologies = scopedInsightTechnologies.filter((item) => item.category === category)
+                        if (technologies.length === 0) return null
+                        return (
+                          <div className="insights-technology-group" key={category}>
+                            <Text size="10px" fw={800} c={`${technologyCategoryMeta[category].color}.4`}>
+                              {technologyCategoryMeta[category].label} · {technologies.length}
+                            </Text>
+                            <div className="insights-chip-list">
+                              {technologies.slice(0, 12).map((technology) => (
+                                <Badge
+                                  variant="outline"
+                                  color={technologyCategoryMeta[category].color}
+                                  key={`${technology.category}:${technology.name}`}
+                                >
+                                  {technology.name}{technology.version ? ` ${technology.version}` : ''}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <Button size="compact-xs" variant="subtle" mt="md" onClick={() => setInsightsTab('technologies')}>
+                      View evidence
+                    </Button>
+                  </section>
+                  <section className="insights-section">
+                    <Group justify="space-between" mb="sm">
+                      <Text fw={700}>Projects</Text>
+                      <Badge variant="light">{insightsResult.projects.length}</Badge>
+                    </Group>
+                    <div className="insights-ranking">
+                      {insightsResult.projects.slice(0, 15).map((project) => (
+                        <UnstyledButton
+                          className="insights-ranking-row"
+                          key={project.path}
+                          onClick={() => {
+                            setInsightsProject(project.path)
+                            setInsightsLanguage('all')
+                            setInsightsExtension('all')
+                            setInsightsMetric('all')
+                            setInsightsTab('overview')
+                          }}
+                        >
+                          <span>{project.name}</span>
+                          <span>{project.path}</span>
+                          <strong>{project.files.toLocaleString()} files</strong>
+                        </UnstyledButton>
+                      ))}
+                    </div>
+                  </section>
+                </div>
+              )}
+
+              {insightsTab === 'files' && (
+                <>
+                  <div className="insights-filters">
+                    <TextInput
+                      size="xs"
+                      placeholder="Filter path"
+                      value={insightsSearch}
+                      leftSection={<IconSearch size={14} />}
+                      onChange={(event) => setInsightsSearch(event.currentTarget.value)}
+                    />
+                    <Select
+                      size="xs" value={insightsCategory} allowDeselect={false}
+                      data={['all', 'source', 'text', 'config', 'asset', 'archive', 'binary'].map((value) => ({
+                        value, label: value === 'all' ? 'All categories' : value[0].toUpperCase() + value.slice(1),
+                      }))}
+                      onChange={(value) => setInsightsCategory(value ?? 'all')}
+                    />
+                    <Select
+                      size="xs" value={insightsLanguage} allowDeselect={false} searchable
+                      data={[{ value: 'all', label: 'All languages' }, ...insightsResult.languages.map((item) => ({ value: item.name, label: item.name }))]}
+                      onChange={(value) => setInsightsLanguage(value ?? 'all')}
+                    />
+                    <Select
+                      size="xs" value={insightsExtension} allowDeselect={false} searchable
+                      data={[{ value: 'all', label: 'All extensions' }, ...insightExtensionStats.map(([value, stats]) => ({ value, label: `${value} (${stats.files} files · ${stats.lines.toLocaleString()} lines)` }))]}
+                      onChange={(value) => setInsightsExtension(value ?? 'all')}
+                    />
+                    <Select
+                      size="xs" value={insightsProject} allowDeselect={false} searchable
+                      data={[{ value: 'all', label: 'All projects' }, ...insightsResult.projects.map((item) => ({ value: item.path, label: item.path }))]}
+                      onChange={(value) => setInsightsProject(value ?? 'all')}
+                    />
+                    <Button
+                      size="compact-xs" variant="subtle" color="gray"
+                      onClick={() => {
+                        setInsightsSearch(''); setInsightsCategory('all'); setInsightsLanguage('all')
+                        setInsightsExtension('all'); setInsightsProject('all'); setInsightsMetric('all')
+                      }}
+                    >
+                      Clear filters
+                    </Button>
+                  </div>
+                  <Text size="xs" c="dimmed" mb="xs">
+                    {filteredInsightFiles.length.toLocaleString()} matching files
+                    {' · virtualized rendering'}
+                  </Text>
+                  <VirtualizedInsightFiles files={filteredInsightFiles} />
+                </>
+              )}
+
+              {insightsTab === 'technologies' && (
+                <div className="insights-technologies-view">
+                  {scopedInsightTechnologies.length === 0 ? (
+                    <Text size="sm" c="dimmed">No supported frameworks or libraries detected yet.</Text>
+                  ) : (
+                    <>
+                      <div className="insights-technology-summary">
+                        {technologyCategoryOrder.map((category) => {
+                          const count = insightTechnologyCounts[category]
+                          return (
+                            <UnstyledButton
+                              className="insights-technology-summary-card"
+                              data-category={category}
+                              data-active={insightsTechnologyTab === category || undefined}
+                              key={category}
+                              onClick={() => setInsightsTechnologyTab(category)}
+                            >
+                              <span>{technologyCategoryMeta[category].label}</span>
+                              <strong>{count.toLocaleString()}</strong>
+                            </UnstyledButton>
+                          )
+                        })}
+                      </div>
+                      <div className="insights-technology-subtabs" role="tablist" aria-label="Technology categories">
+                        {technologyCategoryOrder.map((category) => {
+                          const count = insightTechnologyCounts[category]
+                          return (
+                            <button
+                              type="button"
+                              role="tab"
+                              data-category={category}
+                              data-active={insightsTechnologyTab === category || undefined}
+                              aria-selected={insightsTechnologyTab === category}
+                              key={category}
+                              onClick={() => setInsightsTechnologyTab(category)}
+                            >
+                              {technologyCategoryMeta[category].label}
+                              <span>{count}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                      <section
+                        className="insights-technology-category insights-technology-category--active"
+                        data-category={insightsTechnologyTab}
+                      >
+                        {activeInsightTechnologies.length === 0 ? (
+                          <div className="insights-technology-empty">
+                            <Text size="sm" fw={650}>No {technologyCategoryMeta[insightsTechnologyTab].label.toLowerCase()} detected</Text>
+                            <Text size="xs" c="dimmed">This scan found no confirmed or likely matches in this category.</Text>
+                          </div>
+                        ) : (
+                          <VirtualizedTechnologies
+                            technologies={activeInsightTechnologies}
+                            category={insightsTechnologyTab}
+                          />
+                        )}
+                      </section>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {insightsTab === 'projects' && (
+                <div className="insights-project-list">
+                  {insightsResult.projects.map((project) => (
+                    <UnstyledButton
+                      className="insights-project-row"
+                      key={project.path}
+                      onClick={() => {
+                        setInsightsProject(project.path)
+                        setInsightsLanguage('all')
+                        setInsightsExtension('all')
+                        setInsightsMetric('all')
+                        setInsightsTab('overview')
+                      }}
+                    >
+                      <div>
+                        <Text size="sm" fw={700}>{project.name}</Text>
+                        <Text size="xs" c="dimmed">{project.path}</Text>
+                      </div>
+                      <div className="insights-chip-list">
+                        {project.markers.map((marker) => <Badge size="xs" variant="outline" key={marker}>{marker}</Badge>)}
+                      </div>
+                      <Text size="xs">{project.files.toLocaleString()} files · {project.lines.toLocaleString()} lines</Text>
+                    </UnstyledButton>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {insightsResult.warnings.length > 0 && (
+              <Alert color="yellow" icon={<IconAlertCircle size={17} />} mt="md">
+                {insightsResult.warnings.length} scan warning{insightsResult.warnings.length === 1 ? '' : 's'}.
+                {' '}{insightsResult.warnings[0]}
+              </Alert>
+            )}
+          </>
+        )}
+      </Modal>
 
       <Modal
         opened={configurationSetupOpen}
@@ -4372,7 +5703,9 @@ export function App() {
         <Stack gap="md">
           <Alert color="blue" variant="light" icon={<IconUpload size={17} />}>
             This creates the GitHub repository, adds it as <code>origin</code>, and pushes the
-            current branch with upstream tracking. Uncommitted files remain local.
+            current branch with upstream tracking. If the folder has no commit yet, MyRepos stages
+            all non-ignored files and creates an <strong>Initial commit</strong>. Review its
+            <code>.gitignore</code> before publishing.
           </Alert>
           {publishError && (
             <Alert color="red" icon={<IconAlertCircle size={17} />}>{publishError}</Alert>
@@ -4440,8 +5773,7 @@ export function App() {
           />
           <Group justify="space-between" wrap="nowrap">
             <Text size="xs" c="dimmed">
-              At least one local commit is required. GitHub permissions decide which organizations
-              this account may publish to.
+              GitHub permissions decide which organizations this account may publish to.
             </Text>
             <Group gap="xs" wrap="nowrap">
               <Button

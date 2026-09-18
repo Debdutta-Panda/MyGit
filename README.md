@@ -12,6 +12,43 @@ cp .env.example .env
 npm run dev
 ```
 
+## Local releases
+
+Build packages for the current machine automatically:
+
+```powershell
+npm.cmd run package
+```
+
+The command detects the host operating system: Windows produces an NSIS installer, macOS produces DMG
+and ZIP packages for Intel and Apple Silicon, and Linux produces AppImage and DEB packages for x64 and
+ARM64. Packages and update metadata are written to `release/`. Each operating system must build its own
+packages locally; macOS packages must be built on macOS.
+
+Explicit platform commands are also available:
+
+```powershell
+npm.cmd run package:win
+npm.cmd run package:mac
+npm.cmd run package:linux
+```
+
+To publish manually, create a release at `https://github.com/Debdutta-Panda/MyGit/releases/new`, use tag
+`v0.1.0` for package version `0.1.0`, and upload every generated file from `release/`.
+
+To publish directly from the terminal, provide a GitHub token with repository Contents write access:
+
+```powershell
+$env:GH_TOKEN = 'YOUR_GITHUB_TOKEN'
+npm.cmd run publish:github
+Remove-Item Env:GH_TOKEN
+```
+
+`publish:github` also detects the current operating system and uploads that machine's packages directly
+to the matching GitHub Release. Run it once on each operating system whose downloads you want to offer.
+Before each release, update the version in `package.json`. Keep the release tag in the form
+`v<package-version>`. Never commit a GitHub token or place it in `.env`.
+
 ### GitHub sign-in setup
 
 1. Create a GitHub OAuth App in **Settings → Developer settings → OAuth Apps**.
