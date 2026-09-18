@@ -17,6 +17,9 @@ import type {
   RepositoryCommitFile,
   RepositoryFileRevision,
   RepositoryFilePreview,
+  RepositoryChangeAnalytics,
+  RepositoryChangeCommit,
+  RepositoryAnalyticsRange,
   RepositoryWorkingTreeFile,
   RepositoryBranch,
   RepositoryBranchState,
@@ -158,6 +161,18 @@ const validatedFile = (file: unknown): string => {
     throw new Error('Invalid Git file selection.')
   }
   return file
+}
+
+const validatedAnalyticsRange = (range: unknown): RepositoryAnalyticsRange => {
+  if (range === '30d' || range === '90d' || range === '1y' || range === 'all') return range
+  throw new Error('Invalid analytics time range.')
+}
+
+const currentRenamePath = (path: string): string => {
+  const bracedRename = path.match(/^(.*)\{[^{}]* => ([^{}]*)\}(.*)$/)
+  if (bracedRename) return `${bracedRename[1]}${bracedRename[2]}${bracedRename[3]}`
+  const renameSeparator = path.lastIndexOf(' => ')
+  return renameSeparator >= 0 ? path.slice(renameSeparator + 4) : path
 }
 
 const verifiedWorkingTreeFile = async (
@@ -735,6 +750,63 @@ export const registerRepositoryActionHandlers = (): void => {
         mimeType,
         dataUrl: `data:${mimeType};base64,${content.toString('base64')}`,
         size: target.size,
+      }
+    },
+  )
+  ipcMain.handle(
+    'repositories:git-change-analytics',
+    async (_event, path: unknown, requestedRange: unknown): Promise<RepositoryChangeAnalytics> => {
+      const repositoryPath = await verifiedClonePath(path)
+      const range = validatedAnalyticsRange(requestedRange)
+      const maxCommits = 3_000
+      const since = range === '30d'
+        ? '30 days ago'
+        : range === '90d' ? '90 days ago' : range === '1y' ? '1 year ago' : null
+      const args = [
+        'log', '--date=iso-strict', '--find-renames', `-n${maxCommits + 1}`,
+        '--pretty=format:%x1e%H%x1f%h%x1f%an%x1f%ae%x1f%cI%x1f%s', '--numstat',
+      ]
+      if (since) args.splice(1, 0, `--since=${since}`)
+      const output = await runGit(repositoryPath, args, {
+        successCodes: [0, 128],
+        outputLimit: 50_000_000,
+        timeoutMs: 90_000,
+      })
+      const parsed = output.split('\x1e').flatMap((block): RepositoryChangeCommit[] => {
+        const lines = block.trim().split(/\r?\n/)
+        const header = lines.shift()
+        if (!header) return []
+        const [hash, shortHash, author, authorEmail, committedAt, ...subjectParts] =
+          header.split('\x1f')
+        if (!hash || !shortHash || !committedAt) return []
+        return [{
+          hash,
+          shortHash,
+          author: author || 'Unknown',
+          authorEmail: authorEmail || '',
+          committedAt,
+          subject: subjectParts.join('\x1f'),
+          files: lines.flatMap((line) => {
+            const parts = line.split('\t')
+            if (parts.length < 3) return []
+            const [added, deleted, ...pathParts] = parts
+            const filePath = currentRenamePath(pathParts.join('\t').trim())
+            if (!filePath) return []
+            const binary = added === '-' || deleted === '-'
+            return [{
+              path: filePath,
+              additions: binary ? 0 : Number.parseInt(added, 10) || 0,
+              deletions: binary ? 0 : Number.parseInt(deleted, 10) || 0,
+              binary,
+            }]
+          }),
+        }]
+      })
+      return {
+        range,
+        commits: parsed.slice(0, maxCommits),
+        truncated: parsed.length > maxCommits,
+        maxCommits,
       }
     },
   )

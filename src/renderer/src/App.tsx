@@ -45,6 +45,7 @@ import vueLogo from 'devicon/icons/vuejs/vuejs-original.svg'
 import xmlLogo from 'devicon/icons/xml/xml-original.svg'
 import yamlLogo from 'devicon/icons/yaml/yaml-original.svg'
 import { FileIcon, FolderIcon } from '@react-symbols/icons/utils'
+import { marked } from 'marked'
 import {
   ActionIcon,
   Alert,
@@ -152,6 +153,8 @@ import type {
   RepositoryCheckoutTarget,
   RepositoryCommit,
   RepositoryCommitFile,
+  RepositoryChangeAnalytics as RepositoryChangeAnalyticsData,
+  RepositoryAnalyticsRange,
   RepositoryFilePreview,
   RepositoryFileRevision,
   RepositoryGitDetails,
@@ -168,12 +171,14 @@ import type {
 } from '../../shared/desktop-api'
 import myReposIcon from './assets/myrepos-icon.png'
 import { ReadOnlyMonaco } from './ReadOnlyMonaco'
+import { SqlSchemaPreview } from './SqlSchemaPreview'
+import { RepositoryChangeAnalytics } from './RepositoryChangeAnalytics'
 
 type AuthorizationState = 'idle' | 'starting' | 'waiting'
 type ActiveView = 'accounts' | 'repositories' | 'workspaces' | 'groups' | 'tags' | 'settings'
 type RepositoryTab = 'local' | 'github' | 'workspace'
 type RepositoryLayout = 'list' | 'grid'
-type FilesPanelTab = 'changes' | 'files' | 'history'
+type FilesPanelTab = 'changes' | 'files' | 'history' | 'analytics'
 type InsightsTab = 'overview' | 'files' | 'technologies' | 'projects'
 type InsightsMode = 'off' | 'manual' | 'automatic' | 'hybrid'
 type InsightsMetric = 'all' | 'lines' | 'code' | 'comments'
@@ -181,13 +186,15 @@ type TechnologyCategory = ProjectInsightsResult['technologies'][number]['categor
 type BulkGitOperation = 'sync' | 'fetch' | 'pull' | 'push'
 type BulkGitTarget = 'visible' | 'selected' | 'visible-copies' | 'selected-copies' | 'push-needed'
 type FileHistoryView = 'diff' | 'content' | 'compare'
-type WorkingTreeView = 'code' | 'preview'
-type WorkingTreePreviewKind = 'html' | 'svg' | 'pdf' | 'image' | 'audio' | 'video'
+type WorkingTreeView = 'code' | 'preview' | 'both'
+type WorkingTreePreviewKind = 'html' | 'svg' | 'markdown' | 'sql' | 'pdf' | 'image' | 'audio' | 'video'
 
 const workingTreePreviewKind = (path: string): WorkingTreePreviewKind | null => {
   const extension = path.slice(path.lastIndexOf('.')).toLowerCase()
   if (extension === '.html' || extension === '.htm') return 'html'
   if (extension === '.svg') return 'svg'
+  if (extension === '.md' || extension === '.markdown') return 'markdown'
+  if (extension === '.sql') return 'sql'
   if (extension === '.pdf') return 'pdf'
   if (['.avif', '.bmp', '.gif', '.ico', '.jpeg', '.jpg', '.png', '.webp'].includes(extension)) {
     return 'image'
@@ -208,10 +215,20 @@ const previewContentSecurityPolicy = [
   "frame-src 'none'",
 ].join('; ')
 
-const sandboxedTextPreview = (kind: 'html' | 'svg', content: string): string => {
+const sandboxedTextPreview = (
+  kind: 'html' | 'svg' | 'markdown',
+  content: string,
+): string => {
   const policy = `<meta http-equiv="Content-Security-Policy" content="${previewContentSecurityPolicy}">`
   if (kind === 'svg') {
     return `<!doctype html><html><head>${policy}<style>html,body{height:100%;margin:0}body{display:grid;place-items:center;background:#fff}svg{max-width:100%;max-height:100%}</style></head><body>${content}</body></html>`
+  }
+  if (kind === 'markdown') {
+    const rendered = marked.parse(content, { async: false, gfm: true }) as string
+    return `<!doctype html><html><head>${policy}<style>
+      :root{color-scheme:dark}*{box-sizing:border-box}body{max-width:920px;margin:0 auto;padding:32px 38px;color:#c9d1d9;background:#0d1117;font:15px/1.62 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow-wrap:anywhere}
+      h1,h2,h3,h4,h5,h6{margin:1.5em 0 .65em;color:#f0f6fc;line-height:1.25}h1,h2{padding-bottom:.35em;border-bottom:1px solid #30363d}h1{font-size:2em}h2{font-size:1.5em}a{color:#58a6ff}p,ul,ol,blockquote,pre,table{margin:0 0 1em}blockquote{margin-left:0;padding:.1em 1em;color:#8b949e;border-left:4px solid #3b434b}code{padding:.15em .35em;border-radius:4px;background:#242a32;font:13px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}pre{padding:16px;overflow:auto;border:1px solid #30363d;border-radius:7px;background:#161b22}pre code{padding:0;background:transparent}table{width:100%;border-collapse:collapse}th,td{padding:7px 12px;border:1px solid #30363d;text-align:left}tr:nth-child(2n){background:#161b22}img{max-width:100%;height:auto}hr{height:1px;border:0;background:#30363d}
+    </style></head><body>${rendered}</body></html>`
   }
   if (/<head(?:\s[^>]*)?>/i.test(content)) {
     return content.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${policy}`)
@@ -844,6 +861,7 @@ export function App() {
   const [repositoryPaneWidth, setRepositoryPaneWidth] = useState(430)
   const [scmNavigatorWidth, setScmNavigatorWidth] = useState(290)
   const [commitFilesWidth, setCommitFilesWidth] = useState(300)
+  const [workingTreeCodeWidth, setWorkingTreeCodeWidth] = useState(520)
   const [organizationCatalog, setOrganizationCatalog] = useState<OrganizationCatalog>(emptyOrganizationCatalog)
   const [organizationAssignments, setOrganizationAssignments] = useState<Record<string, RepositoryOrganization>>({})
   const [repositoryColors, setRepositoryColors] = useState<Record<string, string>>({})
@@ -982,6 +1000,11 @@ export function App() {
   const [workingTreeContentError, setWorkingTreeContentError] = useState<string | null>(null)
   const [workingTreeView, setWorkingTreeView] = useState<WorkingTreeView>('code')
   const [workingTreePreview, setWorkingTreePreview] = useState<RepositoryFilePreview | null>(null)
+  const [changeAnalytics, setChangeAnalytics] = useState<RepositoryChangeAnalyticsData | null>(null)
+  const [changeAnalyticsRange, setChangeAnalyticsRange] = useState<RepositoryAnalyticsRange>('90d')
+  const [changeAnalyticsLoading, setChangeAnalyticsLoading] = useState(false)
+  const [changeAnalyticsError, setChangeAnalyticsError] = useState<string | null>(null)
+  const [changeAnalyticsRefreshVersion, setChangeAnalyticsRefreshVersion] = useState(0)
   const [gitHistory, setGitHistory] = useState<RepositoryCommit[]>([])
   const [historyCommitterFilter, setHistoryCommitterFilter] = useState(allCommittersFilter)
   const [gitPanelLoading, setGitPanelLoading] = useState(false)
@@ -1464,7 +1487,8 @@ export function App() {
     ? workingTreePreviewKind(selectedWorkingTreeFile)
     : null
   const workingTreeCanShowCode = selectedWorkingTreePreviewKind === null ||
-    selectedWorkingTreePreviewKind === 'html' || selectedWorkingTreePreviewKind === 'svg'
+    selectedWorkingTreePreviewKind === 'html' || selectedWorkingTreePreviewKind === 'svg' ||
+    selectedWorkingTreePreviewKind === 'markdown' || selectedWorkingTreePreviewKind === 'sql'
   const workingTree = useMemo(() => buildWorkingTree(workingTreeFiles), [workingTreeFiles])
   const visibleWorkingTree = useMemo(
     () => filterWorkingTree(workingTree, workingTreeSearch),
@@ -1583,6 +1607,31 @@ export function App() {
       cancelled = true
     }
   }, [filesPanelTab, gitRepository?.localPath, workingTreeIncludeIgnored, workingTreeRefreshVersion])
+
+  useEffect(() => {
+    if (!window.desktop || filesPanelTab !== 'analytics' || !gitRepository?.localPath) return
+    let cancelled = false
+    setChangeAnalyticsLoading(true)
+    setChangeAnalyticsError(null)
+    void window.desktop.repositories.gitChangeAnalytics(
+      gitRepository.localPath,
+      changeAnalyticsRange,
+    ).then((result) => {
+      if (!cancelled) setChangeAnalytics(result)
+    }).catch((error) => {
+      if (!cancelled) setChangeAnalyticsError(errorMessage(error))
+    }).finally(() => {
+      if (!cancelled) setChangeAnalyticsLoading(false)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    changeAnalyticsRange,
+    changeAnalyticsRefreshVersion,
+    filesPanelTab,
+    gitRepository?.localPath,
+  ])
 
   const resetAuthorization = (): void => {
     setAuthorizationState('idle')
@@ -2115,6 +2164,9 @@ export function App() {
     setWorkingTreePreview(null)
     setWorkingTreeView('code')
     setWorkingTreeContentError(null)
+    setChangeAnalytics(null)
+    setChangeAnalyticsRange('90d')
+    setChangeAnalyticsError(null)
     setGitHistory([])
     setHistoryCommitterFilter(allCommittersFilter)
     setGitError(null)
@@ -2169,6 +2221,10 @@ export function App() {
       }
       if (gitRepository?.localPath && ['commit', 'fetch', 'pull', 'push'].includes(action)) {
         setGitHistory(await window.desktop!.repositories.gitHistory(gitRepository.localPath))
+        setChangeAnalytics(null)
+        if (filesPanelTab === 'analytics') {
+          setChangeAnalyticsRefreshVersion((version) => version + 1)
+        }
       }
       setDiffTitle(null)
       setDiffText(null)
@@ -2611,7 +2667,8 @@ export function App() {
     setWorkingTreeContentLoading(true)
     setWorkingTreeContentError(null)
     try {
-      if (previewKind && previewKind !== 'html' && previewKind !== 'svg') {
+      if (previewKind && previewKind !== 'html' && previewKind !== 'svg' &&
+        previewKind !== 'markdown' && previewKind !== 'sql') {
         setWorkingTreePreview(await window.desktop.repositories.gitWorkingFilePreview(
           gitRepository.localPath,
           file.path,
@@ -3431,8 +3488,9 @@ export function App() {
   }
 
   const historyFilesShown = filesPanelTab === 'history' && commitFilesVisible
-  const scmHasContent = scmNavigatorVisible || historyFilesShown || diffVisible
-  const scmGridColumns = [
+  const scmHasContent = filesPanelTab === 'analytics' || scmNavigatorVisible ||
+    historyFilesShown || diffVisible
+  const scmGridColumns = filesPanelTab === 'analytics' ? 'minmax(0, 1fr)' : [
     scmNavigatorVisible ? `${scmNavigatorWidth}px` : null,
     scmNavigatorVisible && (historyFilesShown || diffVisible) ? '6px' : null,
     historyFilesShown ? `${commitFilesWidth}px` : null,
@@ -3841,7 +3899,7 @@ export function App() {
                 leftSection={scmNavigatorVisible
                   ? <IconLayoutSidebarLeftCollapse size={15} />
                   : <IconLayoutSidebarLeftExpand size={15} />}
-                disabled={!gitRepository}
+                disabled={!gitRepository || filesPanelTab === 'analytics'}
                 onClick={() => setScmNavigatorVisible((visible) => !visible)}
               >
                 {scmNavigatorVisible ? 'Hide' : 'Show'} {filesPanelTab} navigator
@@ -3859,7 +3917,7 @@ export function App() {
                 leftSection={diffVisible
                   ? <IconLayoutSidebarRightCollapse size={15} />
                   : <IconLayoutSidebarRightExpand size={15} />}
-                disabled={!gitRepository}
+                disabled={!gitRepository || filesPanelTab === 'analytics'}
                 onClick={() => setDiffVisible((visible) => !visible)}
               >
                 {diffVisible ? 'Hide' : 'Show'} {filesPanelTab === 'files' ? 'preview' : 'diff'} pane
@@ -5255,6 +5313,16 @@ export function App() {
                         >
                           History
                         </button>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={filesPanelTab === 'analytics'}
+                          data-active={filesPanelTab === 'analytics' || undefined}
+                          onClick={() => setFilesPanelTab('analytics')}
+                        >
+                          Analytics
+                        </button>
+                        {filesPanelTab !== 'analytics' && (
                         <Tooltip label={`${scmNavigatorVisible ? 'Hide' : 'Show'} ${filesPanelTab} navigator`}>
                           <ActionIcon
                             className="pane-local-toggle"
@@ -5268,6 +5336,7 @@ export function App() {
                               : <IconLayoutSidebarLeftExpand size={17} />}
                           </ActionIcon>
                         </Tooltip>
+                        )}
                       </div>
                       <Group gap={2} wrap="nowrap">
                       {filesPanelTab === 'history' && selectedCommitHash && (
@@ -5312,7 +5381,7 @@ export function App() {
                           </ActionIcon>
                         </Tooltip>
                       )}
-                      {!diffVisible && (
+                      {!diffVisible && filesPanelTab !== 'analytics' && (
                       <Tooltip label={`Show ${filesPanelTab === 'files' ? 'preview' : 'diff'} pane`}>
                         <ActionIcon
                           variant="light"
@@ -5417,7 +5486,21 @@ export function App() {
                             data-tab={filesPanelTab}
                             style={{ gridTemplateColumns: scmGridColumns }}
                           >
-                            {scmNavigatorVisible && (
+                            {filesPanelTab === 'analytics' && (
+                              <RepositoryChangeAnalytics
+                                data={changeAnalytics}
+                                loading={changeAnalyticsLoading}
+                                error={changeAnalyticsError}
+                                range={changeAnalyticsRange}
+                                onRangeChange={(range) => {
+                                  setChangeAnalytics(null)
+                                  setChangeAnalyticsRange(range)
+                                }}
+                                onRefresh={() => setChangeAnalyticsRefreshVersion((version) => version + 1)}
+                                onOpenFile={(path) => void openFileHistory(path)}
+                              />
+                            )}
+                            {scmNavigatorVisible && filesPanelTab !== 'analytics' && (
                             <section className="scm-navigator">
                               {filesPanelTab === 'changes' ? (
                                 <>
@@ -5777,7 +5860,8 @@ export function App() {
                             </section>
                             )}
 
-                            {scmNavigatorVisible && (historyFilesShown || diffVisible) && (
+                            {filesPanelTab !== 'analytics' && scmNavigatorVisible &&
+                              (historyFilesShown || diffVisible) && (
                             <HorizontalSplitter
                               label={`Resize ${filesPanelTab} navigator`}
                               value={scmNavigatorWidth}
@@ -5895,7 +5979,7 @@ export function App() {
                               />
                             )}
 
-                            {diffVisible && (
+                            {diffVisible && filesPanelTab !== 'analytics' && (
                             <section className="scm-diff-workspace">
                               <div className="scm-diff-header">
                                 <Text size="xs" fw={650} truncate>
@@ -5971,6 +6055,17 @@ export function App() {
                                     >
                                       Preview
                                     </Button>
+                                    {workingTreeCanShowCode && (
+                                      <Button
+                                        size="compact-xs"
+                                        variant={workingTreeView === 'both' ? 'filled' : 'subtle'}
+                                        color={workingTreeView === 'both' ? 'teal' : 'gray'}
+                                        leftSection={<IconLayoutGrid size={13} />}
+                                        onClick={() => setWorkingTreeView('both')}
+                                      >
+                                        Both
+                                      </Button>
+                                    )}
                                   </Group>
                                 )}
                                 {activeFileHistoryPath && (
@@ -5986,7 +6081,7 @@ export function App() {
                                     </ActionIcon>
                                   </Tooltip>
                                 )}
-                                {filesPanelTab === 'files' && workingTreeView === 'code' &&
+                                {filesPanelTab === 'files' && workingTreeView !== 'preview' &&
                                   workingTreeContent !== null && (
                                   <CopyButton value={workingTreeContent} timeout={1600}>
                                     {({ copied, copy }) => (
@@ -6030,9 +6125,73 @@ export function App() {
                                       {workingTreeContentError}
                                     </Alert>
                                   </div>
+                                ) : workingTreeView === 'both' &&
+                                  selectedWorkingTreePreviewKind === 'sql' &&
+                                  workingTreeContent !== null ? (
+                                  <div className="working-tree-both">
+                                    <div
+                                      className="working-tree-both-code"
+                                      style={{ width: workingTreeCodeWidth }}
+                                    >
+                                      <ReadOnlyMonaco
+                                        path={selectedWorkingTreeFile ?? 'schema.sql'}
+                                        value={workingTreeContent}
+                                      />
+                                    </div>
+                                    <HorizontalSplitter
+                                      label="Resize code and SQL preview panes"
+                                      value={workingTreeCodeWidth}
+                                      resetValue={520}
+                                      min={120}
+                                      max={3000}
+                                      reserveEnd={120}
+                                      onChange={setWorkingTreeCodeWidth}
+                                    />
+                                    <SqlSchemaPreview sql={workingTreeContent} />
+                                  </div>
+                                ) : workingTreeView === 'both' &&
+                                  (selectedWorkingTreePreviewKind === 'html' ||
+                                    selectedWorkingTreePreviewKind === 'svg' ||
+                                    selectedWorkingTreePreviewKind === 'markdown') &&
+                                  workingTreeContent !== null ? (
+                                  <div className="working-tree-both">
+                                    <div
+                                      className="working-tree-both-code"
+                                      style={{ width: workingTreeCodeWidth }}
+                                    >
+                                      <ReadOnlyMonaco
+                                        path={selectedWorkingTreeFile ?? 'untitled.txt'}
+                                        value={workingTreeContent}
+                                      />
+                                    </div>
+                                    <HorizontalSplitter
+                                      label="Resize code and preview panes"
+                                      value={workingTreeCodeWidth}
+                                      resetValue={520}
+                                      min={120}
+                                      max={3000}
+                                      reserveEnd={120}
+                                      onChange={setWorkingTreeCodeWidth}
+                                    />
+                                    <iframe
+                                      className="working-tree-document-preview"
+                                      title={`Preview of ${selectedWorkingTreeFile ?? 'file'}`}
+                                      sandbox=""
+                                      referrerPolicy="no-referrer"
+                                      srcDoc={sandboxedTextPreview(
+                                        selectedWorkingTreePreviewKind,
+                                        workingTreeContent,
+                                      )}
+                                    />
+                                  </div>
+                                ) : workingTreeView === 'preview' &&
+                                  selectedWorkingTreePreviewKind === 'sql' &&
+                                  workingTreeContent !== null ? (
+                                  <SqlSchemaPreview sql={workingTreeContent} />
                                 ) : workingTreeView === 'preview' &&
                                   (selectedWorkingTreePreviewKind === 'html' ||
-                                    selectedWorkingTreePreviewKind === 'svg') &&
+                                    selectedWorkingTreePreviewKind === 'svg' ||
+                                    selectedWorkingTreePreviewKind === 'markdown') &&
                                   workingTreeContent !== null ? (
                                   <iframe
                                     className="working-tree-document-preview"

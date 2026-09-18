@@ -70,7 +70,11 @@ Each working copy also has a complete branch manager for local and remote discov
 
 File history follows a path across renames and exposes every committed revision with exact commit time, recorded push time, per-commit diffs, complete historical contents, two-revision comparison, and one-click restoration into the working tree. It is available from both the Changes file list and every file in a selected commit.
 
-The Files tab provides a searchable hierarchical view of the current working tree, including tracked and untracked files, optional ignored files, aggregated folder status, live refresh, VS Code-style file and folder icons, read-only Monaco code views, sandboxed HTML/SVG previews, PDF/image/audio/video previews, copying, and direct access to each file's history.
+The Files tab provides a searchable hierarchical view of the current working tree, including tracked and untracked files, optional ignored files, aggregated folder status, live refresh, VS Code-style file and folder icons, read-only Monaco code views, sandboxed Markdown/HTML/SVG previews with Code, Preview, and split Both modes, PDF/image/audio/video previews, copying, and direct access to each file's history.
+
+SQL files add a local, non-executing schema preview with table-list, field-detail, and relationship-diagram views. SQL preview also supports the Code, Preview, and resizable Both modes.
+
+The repository Analytics tab summarizes Git change activity over the last 30 days, 90 days, year, or full history. It groups additions and deletions by commit, day, week, or month and ranks high-churn files, folders, and contributors, with file rankings linking directly into file history.
 
 Settings can connect a portable configuration repository in three ways: create and publish a managed GitHub repository, clone an existing GitHub repository, or use an existing local Git repository. MyRepos stores the portable data in `.myrepos/config.json` and can commit/push changes automatically or pull, push, and sync manually. The file contains organization metadata, repository colors, assignments, workspace ordering, and working-copy label preferences; credentials, absolute local paths, and machine-specific availability are deliberately excluded.
 

@@ -79,6 +79,8 @@ const desktopApi: DesktopApi = {
       ipcRenderer.invoke('repositories:git-working-file-content', path, file),
     gitWorkingFilePreview: (path, file) =>
       ipcRenderer.invoke('repositories:git-working-file-preview', path, file),
+    gitChangeAnalytics: (path, range) =>
+      ipcRenderer.invoke('repositories:git-change-analytics', path, range),
     gitFileHistory: (path, file) => ipcRenderer.invoke('repositories:git-file-history', path, file),
     gitFileRevisionDiff: (path, commitHash, file) =>
       ipcRenderer.invoke('repositories:git-file-revision-diff', path, commitHash, file),

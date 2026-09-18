@@ -189,6 +189,32 @@ export interface RepositoryFilePreview {
   size: number
 }
 
+export type RepositoryAnalyticsRange = '30d' | '90d' | '1y' | 'all'
+
+export interface RepositoryChangeFileStat {
+  path: string
+  additions: number
+  deletions: number
+  binary: boolean
+}
+
+export interface RepositoryChangeCommit {
+  hash: string
+  shortHash: string
+  author: string
+  authorEmail: string
+  committedAt: string
+  subject: string
+  files: RepositoryChangeFileStat[]
+}
+
+export interface RepositoryChangeAnalytics {
+  range: RepositoryAnalyticsRange
+  commits: RepositoryChangeCommit[]
+  truncated: boolean
+  maxCommits: number
+}
+
 export interface RepositoryFileRevision extends RepositoryCommit {
   path: string
   previousPath: string | null
@@ -390,6 +416,10 @@ export interface DesktopApi {
     gitWorkingTree: (path: string, includeIgnored: boolean) => Promise<RepositoryWorkingTreeFile[]>
     gitWorkingFileContent: (path: string, file: string) => Promise<string>
     gitWorkingFilePreview: (path: string, file: string) => Promise<RepositoryFilePreview>
+    gitChangeAnalytics: (
+      path: string,
+      range: RepositoryAnalyticsRange,
+    ) => Promise<RepositoryChangeAnalytics>
     gitFileHistory: (path: string, file: string) => Promise<RepositoryFileRevision[]>
     gitFileRevisionDiff: (path: string, commitHash: string, file: string) => Promise<string>
     gitFileContent: (path: string, commitHash: string, file: string) => Promise<string>
