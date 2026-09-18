@@ -11,6 +11,7 @@ import {
   refreshedCredentials,
   runGitClone,
 } from './github-repositories'
+import { refreshLegacyWorkingCopyProjections } from './working-copy-store'
 import type {
   ConfigurationSyncAction,
   ConfigurationSyncState,
@@ -53,6 +54,12 @@ interface PortableConfiguration {
   groups: PortableItem[]
   tags: PortableItem[]
   repositories: PortableRepository[]
+  workingCopyPreferences?: Array<{
+    accountId: number
+    fullName: string
+    preferredLabel: string | null
+    workspaceLabels: Record<string, string>
+  }>
 }
 
 interface GitOptions {
@@ -180,6 +187,19 @@ const exportConfiguration = (): PortableConfiguration => {
   const tags = db.prepare(`
     SELECT repository_id, tag_id FROM repository_tags
   `).all() as unknown as Array<{ repository_id: string; tag_id: string }>
+  const preferredCopies = db.prepare(`
+    SELECT account_id, full_name, label FROM working_copies WHERE is_preferred = 1
+  `).all() as unknown as Array<{ account_id: number; full_name: string; label: string }>
+  const workspaceCopies = db.prepare(`
+    SELECT selection.account_id, selection.full_name, selection.workspace_id, copy.label
+    FROM workspace_working_copies selection
+    JOIN working_copies copy ON copy.id = selection.working_copy_id
+  `).all() as unknown as Array<{
+    account_id: number
+    full_name: string
+    workspace_id: string
+    label: string
+  }>
 
   return {
     format: 'myrepos-configuration',
@@ -201,6 +221,25 @@ const exportConfiguration = (): PortableConfiguration => {
         .map((row) => row.group_id),
       tagIds: tags.filter((row) => row.repository_id === repository.id)
         .map((row) => row.tag_id),
+    })),
+    workingCopyPreferences: [...new Map([
+      ...preferredCopies.map((copy) => [
+        `${copy.account_id}:${copy.full_name.toLowerCase()}`,
+        { accountId: copy.account_id, fullName: copy.full_name },
+      ] as const),
+      ...workspaceCopies.map((copy) => [
+        `${copy.account_id}:${copy.full_name.toLowerCase()}`,
+        { accountId: copy.account_id, fullName: copy.full_name },
+      ] as const),
+    ]).values()].map((repository) => ({
+      ...repository,
+      preferredLabel: preferredCopies.find((copy) =>
+        copy.account_id === repository.accountId &&
+        copy.full_name.toLowerCase() === repository.fullName.toLowerCase())?.label ?? null,
+      workspaceLabels: Object.fromEntries(workspaceCopies
+        .filter((copy) => copy.account_id === repository.accountId &&
+          copy.full_name.toLowerCase() === repository.fullName.toLowerCase())
+        .map((copy) => [copy.workspace_id, copy.label])),
     })),
   }
 }
@@ -292,11 +331,47 @@ const importConfiguration = (config: PortableConfiguration): void => {
         `).run(row.id, id)
       })
     }
+
+    for (const preference of config.workingCopyPreferences ?? []) {
+      if (!Number.isInteger(preference.accountId) || !preference.fullName?.includes('/')) continue
+      if (preference.preferredLabel) {
+        const copy = db.prepare(`
+          SELECT id FROM working_copies
+          WHERE account_id = ? AND full_name = ? COLLATE NOCASE AND label = ? COLLATE NOCASE
+          LIMIT 1
+        `).get(preference.accountId, preference.fullName, preference.preferredLabel) as
+          { id: string } | undefined
+        if (copy) {
+          db.prepare(`
+            UPDATE working_copies SET is_preferred = 0
+            WHERE account_id = ? AND full_name = ? COLLATE NOCASE
+          `).run(preference.accountId, preference.fullName)
+          db.prepare('UPDATE working_copies SET is_preferred = 1 WHERE id = ?').run(copy.id)
+        }
+      }
+      for (const [remoteWorkspaceId, label] of Object.entries(preference.workspaceLabels ?? {})) {
+        const workspaceId = mappings.workspace.get(remoteWorkspaceId)
+        if (!workspaceId || typeof label !== 'string') continue
+        const copy = db.prepare(`
+          SELECT id FROM working_copies
+          WHERE account_id = ? AND full_name = ? COLLATE NOCASE AND label = ? COLLATE NOCASE
+          LIMIT 1
+        `).get(preference.accountId, preference.fullName, label) as { id: string } | undefined
+        if (copy) db.prepare(`
+          INSERT INTO workspace_working_copies (
+            workspace_id, provider, account_id, full_name, working_copy_id
+          ) VALUES (?, 'github', ?, ?, ?)
+          ON CONFLICT(workspace_id, provider, account_id, full_name) DO UPDATE SET
+            working_copy_id = excluded.working_copy_id
+        `).run(workspaceId, preference.accountId, preference.fullName, copy.id)
+      }
+    }
     db.exec('COMMIT')
   } catch (error) {
     db.exec('ROLLBACK')
     throw error
   }
+  refreshLegacyWorkingCopyProjections()
 }
 
 const configurationFile = (repositoryPath: string): string => join(repositoryPath, CONFIGURATION_PATH)

@@ -83,6 +83,41 @@ const createSchema = (db: DatabaseSync): void => {
     CREATE INDEX IF NOT EXISTS repositories_local_path_idx
       ON repositories(local_path);
 
+    CREATE TABLE IF NOT EXISTS working_copies (
+      id TEXT PRIMARY KEY,
+      provider TEXT NOT NULL DEFAULT 'github',
+      account_id INTEGER NOT NULL,
+      full_name TEXT NOT NULL COLLATE NOCASE,
+      local_path TEXT NOT NULL UNIQUE,
+      label TEXT NOT NULL,
+      copy_type TEXT NOT NULL DEFAULT 'clone'
+        CHECK (copy_type IN ('clone', 'worktree', 'local')),
+      is_preferred INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      last_synced_at TEXT,
+      last_opened_at TEXT,
+      last_seen_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS working_copies_repository_idx
+      ON working_copies(provider, account_id, full_name, is_preferred);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS working_copies_one_preferred_idx
+      ON working_copies(provider, account_id, full_name)
+      WHERE is_preferred = 1;
+
+    CREATE TABLE IF NOT EXISTS repository_commit_pushes (
+      provider TEXT NOT NULL DEFAULT 'github',
+      account_id INTEGER NOT NULL,
+      full_name TEXT NOT NULL COLLATE NOCASE,
+      commit_hash TEXT NOT NULL,
+      pushed_at TEXT NOT NULL,
+      PRIMARY KEY(provider, account_id, full_name, commit_hash)
+    );
+
+    CREATE INDEX IF NOT EXISTS repository_commit_pushes_repository_idx
+      ON repository_commit_pushes(provider, account_id, full_name, pushed_at);
+
     CREATE TABLE IF NOT EXISTS app_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       vscode_application_name TEXT NOT NULL DEFAULT '',
@@ -117,6 +152,22 @@ const createSchema = (db: DatabaseSync): void => {
       workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
       target_type TEXT NOT NULL CHECK (target_type IN ('folder', 'code-workspace')),
       target_path TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS workspace_working_copies (
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      account_id INTEGER NOT NULL,
+      full_name TEXT NOT NULL COLLATE NOCASE,
+      working_copy_id TEXT NOT NULL REFERENCES working_copies(id) ON DELETE CASCADE,
+      PRIMARY KEY(workspace_id, provider, account_id, full_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS workspace_checkouts (
+      workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+      root_path TEXT NOT NULL,
+      code_workspace_path TEXT,
+      updated_at TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS groups (
@@ -228,6 +279,21 @@ const createSchema = (db: DatabaseSync): void => {
       VALUES (6, datetime('now'));
     INSERT OR IGNORE INTO schema_migrations (version, applied_at)
       VALUES (7, datetime('now'));
+    INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+      VALUES (8, datetime('now'));
+    INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+      VALUES (9, datetime('now'));
+  `)
+
+  db.exec(`
+    INSERT OR IGNORE INTO working_copies (
+      id, provider, account_id, full_name, local_path, label, copy_type,
+      is_preferred, created_at, last_synced_at, last_seen_at
+    )
+    SELECT id, provider, account_id, full_name, local_path, 'Primary', 'clone',
+           1, cloned_at, last_synced_at, cloned_at
+    FROM repositories
+    WHERE local_path IS NOT NULL AND local_path <> '';
   `)
 }
 
@@ -359,6 +425,17 @@ export const initializeDatabase = async (): Promise<void> => {
   try {
     createSchema(db)
     await migrateLegacyJson(db)
+    // Legacy JSON is imported after schema creation, so run the idempotent projection once more.
+    db.exec(`
+      INSERT OR IGNORE INTO working_copies (
+        id, provider, account_id, full_name, local_path, label, copy_type,
+        is_preferred, created_at, last_synced_at, last_seen_at
+      )
+      SELECT id, provider, account_id, full_name, local_path, 'Primary', 'clone',
+             1, cloned_at, last_synced_at, cloned_at
+      FROM repositories
+      WHERE local_path IS NOT NULL AND local_path <> '';
+    `)
     await chmod(databasePath(), 0o600)
     database = db
   } catch (error) {

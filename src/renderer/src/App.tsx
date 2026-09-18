@@ -44,6 +44,7 @@ import visualBasicLogo from 'devicon/icons/visualbasic/visualbasic-original.svg'
 import vueLogo from 'devicon/icons/vuejs/vuejs-original.svg'
 import xmlLogo from 'devicon/icons/xml/xml-original.svg'
 import yamlLogo from 'devicon/icons/yaml/yaml-original.svg'
+import { FileIcon, FolderIcon } from '@react-symbols/icons/utils'
 import {
   ActionIcon,
   Alert,
@@ -83,6 +84,8 @@ import {
   IconBriefcase,
   IconChartBar,
   IconCheck,
+  IconChevronDown,
+  IconChevronRight,
   IconCommand,
   IconCode,
   IconCopy,
@@ -97,10 +100,12 @@ import {
   IconFileZip,
   IconFilter,
   IconFolderOpen,
+  IconFolderPlus,
   IconFolderSearch,
   IconFolders,
   IconGitBranch,
   IconGitCommit,
+  IconGitFork,
   IconGripVertical,
   IconLayoutGrid,
   IconLayoutList,
@@ -141,30 +146,81 @@ import type {
   OrganizationItem,
   OrganizationKind,
   RepositoryChangedFile,
+  RepositoryBranch,
+  RepositoryBranchState,
+  RepositoryCheckoutStrategy,
+  RepositoryCheckoutTarget,
   RepositoryCommit,
   RepositoryCommitFile,
+  RepositoryFilePreview,
+  RepositoryFileRevision,
   RepositoryGitDetails,
   RepositoryGitStatus,
   RepositoryOrganization,
   RepositoryOrganizationEntry,
+  RepositoryWorkingCopy,
+  RepositoryWorkingTreeFile,
   ProjectInsightsResult,
   ProjectInsightFile,
   ProjectInsightTechnology,
   WorkspaceLaunchTarget,
+  WorkspaceProvisionResult,
 } from '../../shared/desktop-api'
 import myReposIcon from './assets/myrepos-icon.png'
+import { ReadOnlyMonaco } from './ReadOnlyMonaco'
 
 type AuthorizationState = 'idle' | 'starting' | 'waiting'
 type ActiveView = 'accounts' | 'repositories' | 'workspaces' | 'groups' | 'tags' | 'settings'
 type RepositoryTab = 'local' | 'github' | 'workspace'
 type RepositoryLayout = 'list' | 'grid'
-type FilesPanelTab = 'changes' | 'history'
+type FilesPanelTab = 'changes' | 'files' | 'history'
 type InsightsTab = 'overview' | 'files' | 'technologies' | 'projects'
 type InsightsMode = 'off' | 'manual' | 'automatic' | 'hybrid'
 type InsightsMetric = 'all' | 'lines' | 'code' | 'comments'
 type TechnologyCategory = ProjectInsightsResult['technologies'][number]['category']
 type BulkGitOperation = 'sync' | 'fetch' | 'pull' | 'push'
-type BulkGitTarget = 'visible' | 'selected'
+type BulkGitTarget = 'visible' | 'selected' | 'visible-copies' | 'selected-copies' | 'push-needed'
+type FileHistoryView = 'diff' | 'content' | 'compare'
+type WorkingTreeView = 'code' | 'preview'
+type WorkingTreePreviewKind = 'html' | 'svg' | 'pdf' | 'image' | 'audio' | 'video'
+
+const workingTreePreviewKind = (path: string): WorkingTreePreviewKind | null => {
+  const extension = path.slice(path.lastIndexOf('.')).toLowerCase()
+  if (extension === '.html' || extension === '.htm') return 'html'
+  if (extension === '.svg') return 'svg'
+  if (extension === '.pdf') return 'pdf'
+  if (['.avif', '.bmp', '.gif', '.ico', '.jpeg', '.jpg', '.png', '.webp'].includes(extension)) {
+    return 'image'
+  }
+  if (['.m4a', '.mp3', '.ogg', '.wav'].includes(extension)) return 'audio'
+  if (['.mov', '.mp4', '.webm'].includes(extension)) return 'video'
+  return null
+}
+
+const previewContentSecurityPolicy = [
+  "default-src 'none'",
+  "img-src data: blob:",
+  "media-src data: blob:",
+  "font-src data:",
+  "style-src 'unsafe-inline'",
+  "script-src 'none'",
+  "connect-src 'none'",
+  "frame-src 'none'",
+].join('; ')
+
+const sandboxedTextPreview = (kind: 'html' | 'svg', content: string): string => {
+  const policy = `<meta http-equiv="Content-Security-Policy" content="${previewContentSecurityPolicy}">`
+  if (kind === 'svg') {
+    return `<!doctype html><html><head>${policy}<style>html,body{height:100%;margin:0}body{display:grid;place-items:center;background:#fff}svg{max-width:100%;max-height:100%}</style></head><body>${content}</body></html>`
+  }
+  if (/<head(?:\s[^>]*)?>/i.test(content)) {
+    return content.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${policy}`)
+  }
+  if (/<html(?:\s[^>]*)?>/i.test(content)) {
+    return content.replace(/<html(?:\s[^>]*)?>/i, (html) => `${html}<head>${policy}</head>`)
+  }
+  return `<!doctype html><html><head>${policy}</head><body>${content}</body></html>`
+}
 
 const bulkGitOperationLabel: Record<BulkGitOperation, string> = {
   sync: 'Sync',
@@ -179,6 +235,79 @@ interface BulkGitResult {
   status: 'pending' | 'running' | 'success' | 'error'
   message?: string
 }
+
+interface WorkingTreeNode {
+  name: string
+  path: string
+  type: 'folder' | 'file'
+  tracked: boolean
+  ignored: boolean
+  children: WorkingTreeNode[]
+}
+
+interface MutableWorkingTreeNode extends WorkingTreeNode {
+  childMap: Map<string, MutableWorkingTreeNode>
+  children: MutableWorkingTreeNode[]
+}
+
+const buildWorkingTree = (files: RepositoryWorkingTreeFile[]): WorkingTreeNode[] => {
+  const root = new Map<string, MutableWorkingTreeNode>()
+  for (const file of files) {
+    const parts = file.path.split('/').filter(Boolean)
+    let parent = root
+    let currentPath = ''
+    for (let index = 0; index < parts.length; index += 1) {
+      const name = parts[index]
+      currentPath = currentPath ? `${currentPath}/${name}` : name
+      const type = index === parts.length - 1 ? 'file' : 'folder'
+      let node = parent.get(name)
+      if (!node) {
+        node = {
+          name,
+          path: currentPath,
+          type,
+          tracked: file.tracked,
+          ignored: file.ignored,
+          children: [],
+          childMap: new Map(),
+        }
+        parent.set(name, node)
+      } else if (type === 'folder') {
+        node.tracked ||= file.tracked
+        node.ignored &&= file.ignored
+      }
+      parent = node.childMap
+    }
+  }
+  const finalize = (nodes: Iterable<MutableWorkingTreeNode>): WorkingTreeNode[] =>
+    [...nodes]
+      .sort((left, right) => left.type === right.type
+        ? left.name.localeCompare(right.name, undefined, { numeric: true })
+        : left.type === 'folder' ? -1 : 1)
+      .map(({ childMap, ...node }) => ({
+        ...node,
+        children: finalize(childMap.values()),
+      }))
+  return finalize(root.values())
+}
+
+const filterWorkingTree = (nodes: WorkingTreeNode[], query: string): WorkingTreeNode[] => {
+  const normalized = query.trim().toLowerCase()
+  if (!normalized) return nodes
+  return nodes.flatMap((node): WorkingTreeNode[] => {
+    if (node.path.toLowerCase().includes(normalized)) return [node]
+    if (node.type === 'file') return []
+    const children = filterWorkingTree(node.children, normalized)
+    return children.length > 0 ? [{ ...node, children }] : []
+  })
+}
+
+const workingTreeChangeCount = (
+  node: WorkingTreeNode,
+  changes: Map<string, RepositoryChangedFile>,
+): number => node.type === 'file'
+  ? Number(changes.has(node.path))
+  : node.children.reduce((total, child) => total + workingTreeChangeCount(child, changes), 0)
 
 const emptyOrganizationCatalog = (): OrganizationCatalog => ({
   workspaces: [],
@@ -527,6 +656,40 @@ const timeAgo = (value: string, now: number): string => {
   return `${days}d ago`
 }
 
+const historyDateTimeFormatter = new Intl.DateTimeFormat(undefined, {
+  day: '2-digit',
+  month: 'short',
+  year: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+})
+
+const historyDateTime = (value: string): string => historyDateTimeFormatter.format(new Date(value))
+
+const allCommittersFilter = '__all_committers__'
+const committerColors = [
+  '#5cc8ff',
+  '#ff8a65',
+  '#b794f4',
+  '#66d9a8',
+  '#ffd166',
+  '#ff6fae',
+  '#9be564',
+  '#a5b4fc',
+  '#f6ad55',
+  '#4fd1c5',
+  '#fc8181',
+  '#90cdf4',
+]
+
+const committerColor = (name: string): string => {
+  let hash = 0
+  for (const character of name.trim().toLocaleLowerCase()) {
+    hash = ((hash << 5) - hash + character.codePointAt(0)!) | 0
+  }
+  return committerColors[Math.abs(hash) % committerColors.length]
+}
+
 const technologyCategoryOrder: TechnologyCategory[] = ['framework', 'library', 'runtime', 'tool']
 const technologyCategoryMeta: Record<TechnologyCategory, { label: string; color: string }> = {
   framework: { label: 'Frameworks', color: 'teal' },
@@ -716,6 +879,7 @@ export function App() {
   const [bulkGitOperation, setBulkGitOperation] = useState<BulkGitOperation>('sync')
   const [bulkGitRunning, setBulkGitRunning] = useState(false)
   const [bulkGitResults, setBulkGitResults] = useState<BulkGitResult[]>([])
+  const [bulkPushNeededPaths, setBulkPushNeededPaths] = useState<string[]>([])
   const [accounts, setAccounts] = useState<GitHubAccount[]>([])
   const [accountsLoading, setAccountsLoading] = useState(true)
   const [accountsError, setAccountsError] = useState<string | null>(null)
@@ -742,6 +906,20 @@ export function App() {
   const [repositoryPage, setRepositoryPage] = useState(1)
   const [cloningRepository, setCloningRepository] = useState<string | null>(null)
   const [cloneResult, setCloneResult] = useState<{ fullName: string; path: string } | null>(null)
+  const [workingCopyRepository, setWorkingCopyRepository] = useState<GitHubRepository | null>(null)
+  const [workingCopies, setWorkingCopies] = useState<RepositoryWorkingCopy[]>([])
+  const [workingCopyLabels, setWorkingCopyLabels] = useState<Record<string, string>>({})
+  const [workingCopyLabelDraft, setWorkingCopyLabelDraft] = useState('')
+  const [workingCopyFolderDraft, setWorkingCopyFolderDraft] = useState('')
+  const [workingCopyAction, setWorkingCopyAction] = useState<string | null>(null)
+  const [workingCopyError, setWorkingCopyError] = useState<string | null>(null)
+  const [worktreeBranch, setWorktreeBranch] = useState('')
+  const [worktreeCreateBranch, setWorktreeCreateBranch] = useState(true)
+  const [workspaceWorkingCopySelections, setWorkspaceWorkingCopySelections] =
+    useState<Record<string, string>>({})
+  const [workspaceProvisioning, setWorkspaceProvisioning] = useState(false)
+  const [workspaceProvisionResult, setWorkspaceProvisionResult] =
+    useState<WorkspaceProvisionResult | null>(null)
   const [publishRepository, setPublishRepository] = useState<GitHubRepository | null>(null)
   const [publishAccountId, setPublishAccountId] = useState<string | null>(null)
   const [publishOwner, setPublishOwner] = useState('')
@@ -752,6 +930,7 @@ export function App() {
   const [publishError, setPublishError] = useState<string | null>(null)
   const contentScrollRef = useRef<HTMLDivElement>(null)
   const repositoryResultsScrollRef = useRef<HTMLDivElement>(null)
+  const workingTreeRefreshTimerRef = useRef<number | null>(null)
   const automaticInsightScanPathsRef = useRef(new Set<string>())
   const [connectOpen, setConnectOpen] = useState(false)
   const [authorizationState, setAuthorizationState] = useState<AuthorizationState>('idle')
@@ -790,7 +969,21 @@ export function App() {
   const [gitDetails, setGitDetails] = useState<RepositoryGitDetails | null>(null)
   const [filesPanelTab, setFilesPanelTab] = useState<FilesPanelTab>('changes')
   const [fileSearch, setFileSearch] = useState('')
+  const [workingTreeFiles, setWorkingTreeFiles] = useState<RepositoryWorkingTreeFile[]>([])
+  const [workingTreeSearch, setWorkingTreeSearch] = useState('')
+  const [workingTreeIncludeIgnored, setWorkingTreeIncludeIgnored] = useState(false)
+  const [workingTreeExpandedFolders, setWorkingTreeExpandedFolders] = useState<string[]>([])
+  const [workingTreeLoading, setWorkingTreeLoading] = useState(false)
+  const [workingTreeRefreshVersion, setWorkingTreeRefreshVersion] = useState(0)
+  const [workingTreeError, setWorkingTreeError] = useState<string | null>(null)
+  const [selectedWorkingTreeFile, setSelectedWorkingTreeFile] = useState<string | null>(null)
+  const [workingTreeContent, setWorkingTreeContent] = useState<string | null>(null)
+  const [workingTreeContentLoading, setWorkingTreeContentLoading] = useState(false)
+  const [workingTreeContentError, setWorkingTreeContentError] = useState<string | null>(null)
+  const [workingTreeView, setWorkingTreeView] = useState<WorkingTreeView>('code')
+  const [workingTreePreview, setWorkingTreePreview] = useState<RepositoryFilePreview | null>(null)
   const [gitHistory, setGitHistory] = useState<RepositoryCommit[]>([])
+  const [historyCommitterFilter, setHistoryCommitterFilter] = useState(allCommittersFilter)
   const [gitPanelLoading, setGitPanelLoading] = useState(false)
   const [gitAction, setGitAction] = useState<string | null>(null)
   const [cardGitAction, setCardGitAction] = useState<string | null>(null)
@@ -822,6 +1015,31 @@ export function App() {
   const [selectedCommitHash, setSelectedCommitHash] = useState<string | null>(null)
   const [selectedCommitFiles, setSelectedCommitFiles] = useState<RepositoryCommitFile[]>([])
   const [selectedCommitFile, setSelectedCommitFile] = useState<string | null>(null)
+  const [fileHistoryFile, setFileHistoryFile] = useState<string | null>(null)
+  const [fileHistoryRevisions, setFileHistoryRevisions] = useState<RepositoryFileRevision[]>([])
+  const [fileHistoryRevisionHash, setFileHistoryRevisionHash] = useState<string | null>(null)
+  const [fileHistoryCompareHash, setFileHistoryCompareHash] = useState<string | null>(null)
+  const [fileHistoryView, setFileHistoryView] = useState<FileHistoryView>('diff')
+  const [fileHistoryText, setFileHistoryText] = useState<string | null>(null)
+  const [fileHistoryLoading, setFileHistoryLoading] = useState(false)
+  const [fileHistoryAction, setFileHistoryAction] = useState<string | null>(null)
+  const [fileHistoryError, setFileHistoryError] = useState<string | null>(null)
+  const [fileHistoryNotice, setFileHistoryNotice] = useState<string | null>(null)
+  const [branchManagerOpen, setBranchManagerOpen] = useState(false)
+  const [branchState, setBranchState] = useState<RepositoryBranchState | null>(null)
+  const [branchSearch, setBranchSearch] = useState('')
+  const [branchAction, setBranchAction] = useState<string | null>(null)
+  const [branchError, setBranchError] = useState<string | null>(null)
+  const [branchNotice, setBranchNotice] = useState<string | null>(null)
+  const [branchCreateVisible, setBranchCreateVisible] = useState(false)
+  const [branchCreateName, setBranchCreateName] = useState('')
+  const [branchCreateStart, setBranchCreateStart] = useState('HEAD')
+  const [branchCreateCheckout, setBranchCreateCheckout] = useState(true)
+  const [branchRename, setBranchRename] = useState<RepositoryBranch | null>(null)
+  const [branchRenameName, setBranchRenameName] = useState('')
+  const [checkoutTarget, setCheckoutTarget] = useState<RepositoryCheckoutTarget | null>(null)
+  const [checkoutStrategy, setCheckoutStrategy] =
+    useState<RepositoryCheckoutStrategy>('require-clean')
   const [relativeTimeNow, setRelativeTimeNow] = useState(Date.now())
   const [windowMaximized, setWindowMaximized] = useState(false)
   const platform =
@@ -889,6 +1107,18 @@ export function App() {
       .then((target) => { if (!cancelled) setWorkspaceTarget(target) })
       .catch((error) => { if (!cancelled) setWorkspaceTargetError(errorMessage(error)) })
       .finally(() => { if (!cancelled) setWorkspaceTargetLoading(false) })
+    return () => { cancelled = true }
+  }, [selectedWorkspaceId])
+
+  useEffect(() => {
+    if (!window.desktop || !selectedWorkspaceId) {
+      setWorkspaceWorkingCopySelections({})
+      return
+    }
+    let cancelled = false
+    void window.desktop.workingCopies.workspaceSelections(selectedWorkspaceId)
+      .then((selections) => { if (!cancelled) setWorkspaceWorkingCopySelections(selections) })
+      .catch((error) => { if (!cancelled) setWorkspaceTargetError(errorMessage(error)) })
     return () => { cancelled = true }
   }, [selectedWorkspaceId])
 
@@ -1024,10 +1254,26 @@ export function App() {
 
   useEffect(() => {
     if (!window.desktop) return
-    return window.desktop.repositories.onStatusChanged((status) => {
+    const unsubscribe = window.desktop.repositories.onStatusChanged((status) => {
       setGitStatuses((current) => ({ ...current, [status.path]: status }))
+      if (filesPanelTab === 'files' && status.path === gitRepository?.localPath) {
+        if (workingTreeRefreshTimerRef.current !== null) {
+          window.clearTimeout(workingTreeRefreshTimerRef.current)
+        }
+        workingTreeRefreshTimerRef.current = window.setTimeout(() => {
+          setWorkingTreeRefreshVersion((version) => version + 1)
+          void window.desktop!.repositories.gitDetails(status.path).then(setGitDetails).catch(() => undefined)
+        }, 350)
+      }
     })
-  }, [])
+    return () => {
+      unsubscribe()
+      if (workingTreeRefreshTimerRef.current !== null) {
+        window.clearTimeout(workingTreeRefreshTimerRef.current)
+        workingTreeRefreshTimerRef.current = null
+      }
+    }
+  }, [filesPanelTab, gitRepository?.localPath])
 
   useEffect(() => {
     if (!window.desktop) return
@@ -1152,6 +1398,8 @@ export function App() {
   const listedConflictCount = listedRepositoriesWithChanges.reduce((total, status) =>
     total + status.conflicts, 0)
   const listedPushNeededCount = listedRepositoryStatuses.filter((status) => status.ahead > 0).length
+  const listedPushNeededRepositories = pagedRepositories.filter((repository) =>
+    Boolean(repository.localPath && (gitStatuses[repository.localPath]?.ahead ?? 0) > 0))
   const listedPullNeededCount = listedRepositoryStatuses.filter((status) => status.behind > 0).length
   const listedHasStatus = listedConflictCount > 0 || listedChangeCount > 0 ||
     listedPushNeededCount > 0 || listedPullNeededCount > 0
@@ -1160,9 +1408,104 @@ export function App() {
   )
   const visibleLocalRepositories = visibleRepositories.filter((repository) => repository.localPath)
   const selectedLocalRepositories = selectedRepositories.filter((repository) => repository.localPath)
-  const bulkGitRepositories = bulkGitTarget === 'selected'
-    ? selectedLocalRepositories
-    : visibleLocalRepositories
+  const repositoriesWithAllCopies = (items: GitHubRepository[]): GitHubRepository[] =>
+    items.flatMap((repository) => repository.workingCopies
+      .filter((copy) => copy.available)
+      .map((copy) => ({
+        ...repository,
+        fullName: `${repository.fullName} [${copy.label}]`,
+        localPath: copy.path,
+        lastSyncedAt: copy.lastSyncedAt,
+        preferredWorkingCopyId: copy.id,
+      })))
+  const bulkGitRepositories = bulkGitTarget === 'push-needed'
+    ? repositories.filter((repository) =>
+        Boolean(repository.localPath && bulkPushNeededPaths.includes(repository.localPath)))
+    : bulkGitTarget === 'selected'
+      ? selectedLocalRepositories
+      : bulkGitTarget === 'visible-copies'
+        ? repositoriesWithAllCopies(visibleRepositories)
+        : bulkGitTarget === 'selected-copies'
+          ? repositoriesWithAllCopies(selectedRepositories)
+          : visibleLocalRepositories
+  const bulkGitCompleted = bulkGitResults.length > 0 && bulkGitResults.every((result) =>
+    result.status === 'success' || result.status === 'error')
+  const bulkGitFailedKeys = new Set(bulkGitResults
+    .filter((result) => result.status === 'error')
+    .map((result) => result.repositoryKey))
+  const bulkGitRetryRepositories = bulkGitRepositories.filter((repository) =>
+    bulkGitFailedKeys.has(`${repositoryOrganizationKey(repository)}:${repository.localPath}`))
+  const filteredBranches = (branchState?.branches ?? []).filter((branch) => {
+    const query = branchSearch.trim().toLowerCase()
+    return !query || branch.name.toLowerCase().includes(query) ||
+      branch.remote?.toLowerCase().includes(query) || branch.commitHash.startsWith(query)
+  })
+  const branchStartOptions = [
+    { value: 'HEAD', label: `Current HEAD${branchState?.currentBranch ? ` · ${branchState.currentBranch}` : ''}` },
+    ...(selectedCommitHash ? [{
+      value: selectedCommitHash,
+      label: `Selected commit · ${selectedCommitHash.slice(0, 7)}`,
+    }] : []),
+    ...(branchState?.branches ?? []).map((branch) => ({
+      value: branch.ref,
+      label: `${branch.kind === 'remote' ? `${branch.remote}/` : ''}${branch.name}`,
+    })),
+  ].filter((option, index, items) => items.findIndex((item) => item.value === option.value) === index)
+  const selectedFileRevision = fileHistoryRevisions.find((revision) =>
+    revision.hash === fileHistoryRevisionHash) ?? null
+  const compareFileRevision = fileHistoryRevisions.find((revision) =>
+    revision.hash === fileHistoryCompareHash) ?? null
+  const activeFileHistoryPath = filesPanelTab === 'history'
+    ? selectedCommitFile
+    : filesPanelTab === 'files'
+      ? selectedWorkingTreeFile
+      : selectedDiffPath
+  const selectedWorkingTreePreviewKind = selectedWorkingTreeFile
+    ? workingTreePreviewKind(selectedWorkingTreeFile)
+    : null
+  const workingTreeCanShowCode = selectedWorkingTreePreviewKind === null ||
+    selectedWorkingTreePreviewKind === 'html' || selectedWorkingTreePreviewKind === 'svg'
+  const workingTree = useMemo(() => buildWorkingTree(workingTreeFiles), [workingTreeFiles])
+  const visibleWorkingTree = useMemo(
+    () => filterWorkingTree(workingTree, workingTreeSearch),
+    [workingTree, workingTreeSearch],
+  )
+  const workingTreeChanges = useMemo(() => new Map(
+    (gitDetails?.files ?? []).map((file) => [file.path, file]),
+  ), [gitDetails])
+  const workingTreeFileIndex = useMemo(() => new Map(
+    workingTreeFiles.map((file) => [file.path, file]),
+  ), [workingTreeFiles])
+  const historyCommitters = useMemo(() => {
+    const committers = new Map<string, {
+      name: string
+      email: string
+      count: number
+      avatarUrl: string | null
+    }>()
+    for (const commit of gitHistory) {
+      const email = commit.authorEmail.trim().toLowerCase()
+      const existing = committers.get(email)
+      committers.set(email, {
+        name: commit.author,
+        email,
+        count: (existing?.count ?? 0) + 1,
+        avatarUrl: existing?.avatarUrl ?? commit.authorAvatarUrl,
+      })
+    }
+    return [...committers.values()]
+      .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))
+  }, [gitHistory])
+  const activeHistoryCommitterFilter = historyCommitterFilter === allCommittersFilter ||
+    historyCommitters.some((committer) => committer.email === historyCommitterFilter)
+    ? historyCommitterFilter
+    : allCommittersFilter
+  const visibleGitHistory = activeHistoryCommitterFilter === allCommittersFilter
+    ? gitHistory
+    : gitHistory.filter((commit) =>
+        commit.authorEmail.trim().toLowerCase() === activeHistoryCommitterFilter)
+  const activeHistoryCommitter = historyCommitters.find((committer) =>
+    committer.email === activeHistoryCommitterFilter) ?? null
   const pagedRepositoryKeys = pagedRepositories.map(repositoryOrganizationKey)
   const selectedOnPageCount = pagedRepositoryKeys.filter((key) =>
     selectedRepositoryKeys.includes(key),
@@ -1179,7 +1522,11 @@ export function App() {
     !workspaceOrderLoading && !workspaceOrderSaving && !repositorySearch.trim() &&
     activeRepositoryOrganizationFilterCount === 0
   const monitoredPaths = activeView === 'repositories'
-    ? pagedRepositories.flatMap((repository) => repository.localPath ? [repository.localPath] : [])
+    ? pagedRepositories.flatMap((repository) => {
+        const preferred = repository.workingCopies.find((copy) =>
+          copy.id === repository.preferredWorkingCopyId) ?? repository.workingCopies[0]
+        return repository.localPath && preferred?.available ? [repository.localPath] : []
+      })
     : []
   const monitoredPathsKey = JSON.stringify(monitoredPaths)
 
@@ -1202,6 +1549,40 @@ export function App() {
       cancelled = true
     }
   }, [monitoredPathsKey])
+
+  useEffect(() => {
+    if (!window.desktop || filesPanelTab !== 'files' || !gitRepository?.localPath) return
+    let cancelled = false
+    setWorkingTreeLoading(true)
+    setWorkingTreeError(null)
+    void window.desktop.repositories.gitWorkingTree(
+      gitRepository.localPath,
+      workingTreeIncludeIgnored,
+    ).then((files) => {
+      if (cancelled) return
+      setWorkingTreeFiles(files)
+      setWorkingTreeExpandedFolders((current) => current.length > 0
+        ? current
+        : [...new Set(files.flatMap((file) => {
+            const slash = file.path.indexOf('/')
+            return slash > 0 ? [file.path.slice(0, slash)] : []
+          }))])
+      if (selectedWorkingTreeFile && !files.some((file) => file.path === selectedWorkingTreeFile)) {
+        setSelectedWorkingTreeFile(null)
+        setWorkingTreeContent(null)
+        setWorkingTreePreview(null)
+        setWorkingTreeView('code')
+        setWorkingTreeContentError(null)
+      }
+    }).catch((error) => {
+      if (!cancelled) setWorkingTreeError(errorMessage(error))
+    }).finally(() => {
+      if (!cancelled) setWorkingTreeLoading(false)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [filesPanelTab, gitRepository?.localPath, workingTreeIncludeIgnored, workingTreeRefreshVersion])
 
   const resetAuthorization = (): void => {
     setAuthorizationState('idle')
@@ -1291,6 +1672,263 @@ export function App() {
     repositoryResultsScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
+  const applyWorkingCopies = (
+    repository: GitHubRepository,
+    copies: RepositoryWorkingCopy[],
+  ): void => {
+    const preferred = copies.find((copy) => copy.preferred) ?? copies[0]
+    setWorkingCopies(copies)
+    setWorkingCopyLabels(Object.fromEntries(copies.map((copy) => [copy.id, copy.label])))
+    setRepositories((current) => current.map((item) =>
+      item.accountId === repository.accountId &&
+      item.fullName.toLowerCase() === repository.fullName.toLowerCase()
+        ? {
+            ...item,
+            workingCopies: copies,
+            preferredWorkingCopyId: preferred?.id ?? null,
+            localPath: preferred?.path ?? null,
+            lastSyncedAt: preferred?.lastSyncedAt ?? null,
+          }
+        : item))
+    setWorkingCopyRepository((current) => current ? {
+      ...current,
+      workingCopies: copies,
+      preferredWorkingCopyId: preferred?.id ?? null,
+      localPath: preferred?.path ?? null,
+      lastSyncedAt: preferred?.lastSyncedAt ?? null,
+    } : current)
+  }
+
+  const loadWorkingCopies = async (repository: GitHubRepository): Promise<void> => {
+    if (!window.desktop) return
+    setWorkingCopyAction('loading')
+    setWorkingCopyError(null)
+    try {
+      const copies = await window.desktop.workingCopies.list(
+        repository.accountId,
+        repository.fullName,
+      )
+      applyWorkingCopies(repository, copies)
+      const statuses = await window.desktop.repositories.monitor(
+        copies.filter((copy) => copy.available).slice(0, 100).map((copy) => copy.path),
+      )
+      setGitStatuses((current) => ({
+        ...current,
+        ...Object.fromEntries(statuses.map((status) => [status.path, status])),
+      }))
+    } catch (error) {
+      setWorkingCopyError(errorMessage(error))
+    } finally {
+      setWorkingCopyAction(null)
+    }
+  }
+
+  const openWorkingCopyManager = (repository: GitHubRepository): void => {
+    setWorkingCopyRepository(repository)
+    setWorkingCopies(repository.workingCopies ?? [])
+    setWorkingCopyLabels(Object.fromEntries(
+      (repository.workingCopies ?? []).map((copy) => [copy.id, copy.label]),
+    ))
+    setWorkingCopyLabelDraft('')
+    setWorkingCopyFolderDraft(`${repository.name}-copy`)
+    setWorktreeBranch('')
+    setWorktreeCreateBranch(true)
+    setWorkingCopyError(null)
+    void loadWorkingCopies(repository)
+  }
+
+  const reloadManagedWorkingCopies = async (): Promise<void> => {
+    if (!workingCopyRepository) return
+    await loadWorkingCopies(workingCopyRepository)
+  }
+
+  const cloneAnotherWorkingCopy = async (): Promise<void> => {
+    if (!window.desktop || !workingCopyRepository) return
+    setWorkingCopyAction('clone')
+    setWorkingCopyError(null)
+    try {
+      const result = await window.desktop.workingCopies.clone(
+        workingCopyRepository.accountId,
+        workingCopyRepository.fullName,
+        {
+          folderName: workingCopyFolderDraft.trim() || undefined,
+          label: workingCopyLabelDraft.trim() || undefined,
+        },
+      )
+      if (result) {
+        setCloneResult({ fullName: workingCopyRepository.fullName, path: result.path })
+        setWorkingCopyLabelDraft('')
+        await reloadManagedWorkingCopies()
+      }
+    } catch (error) {
+      setWorkingCopyError(errorMessage(error))
+    } finally {
+      setWorkingCopyAction(null)
+    }
+  }
+
+  const locateAnotherWorkingCopy = async (): Promise<void> => {
+    if (!window.desktop || !workingCopyRepository) return
+    setWorkingCopyAction('locate')
+    setWorkingCopyError(null)
+    try {
+      const copy = await window.desktop.workingCopies.locate(
+        workingCopyRepository.accountId,
+        workingCopyRepository.fullName,
+        workingCopyLabelDraft.trim() || undefined,
+      )
+      if (copy) {
+        setWorkingCopyLabelDraft('')
+        await reloadManagedWorkingCopies()
+      }
+    } catch (error) {
+      setWorkingCopyError(errorMessage(error))
+    } finally {
+      setWorkingCopyAction(null)
+    }
+  }
+
+  const saveWorkingCopyLabel = async (copy: RepositoryWorkingCopy): Promise<void> => {
+    if (!window.desktop) return
+    setWorkingCopyAction(`label:${copy.id}`)
+    setWorkingCopyError(null)
+    try {
+      await window.desktop.workingCopies.updateLabel(copy.id, workingCopyLabels[copy.id] ?? copy.label)
+      await reloadManagedWorkingCopies()
+    } catch (error) {
+      setWorkingCopyError(errorMessage(error))
+    } finally {
+      setWorkingCopyAction(null)
+    }
+  }
+
+  const preferWorkingCopy = async (copy: RepositoryWorkingCopy): Promise<void> => {
+    if (!window.desktop || !workingCopyRepository) return
+    setWorkingCopyAction(`prefer:${copy.id}`)
+    setWorkingCopyError(null)
+    try {
+      applyWorkingCopies(
+        workingCopyRepository,
+        await window.desktop.workingCopies.setPreferred(copy.id),
+      )
+    } catch (error) {
+      setWorkingCopyError(errorMessage(error))
+    } finally {
+      setWorkingCopyAction(null)
+    }
+  }
+
+  const relocateManagedWorkingCopy = async (copy: RepositoryWorkingCopy): Promise<void> => {
+    if (!window.desktop) return
+    setWorkingCopyAction(`relocate:${copy.id}`)
+    setWorkingCopyError(null)
+    try {
+      const relocated = await window.desktop.workingCopies.relocate(copy.id)
+      if (relocated) await reloadManagedWorkingCopies()
+    } catch (error) {
+      setWorkingCopyError(errorMessage(error))
+    } finally {
+      setWorkingCopyAction(null)
+    }
+  }
+
+  const detachManagedWorkingCopy = async (copy: RepositoryWorkingCopy): Promise<void> => {
+    if (!window.desktop || !window.confirm(
+      `Detach “${copy.label}” from MyRepos? Its folder will remain untouched.`,
+    )) return
+    setWorkingCopyAction(`detach:${copy.id}`)
+    try {
+      await window.desktop.workingCopies.detach(copy.id)
+      await reloadManagedWorkingCopies()
+    } catch (error) {
+      setWorkingCopyError(errorMessage(error))
+    } finally {
+      setWorkingCopyAction(null)
+    }
+  }
+
+  const trashManagedWorkingCopy = async (copy: RepositoryWorkingCopy): Promise<void> => {
+    if (!window.desktop) return
+    const status = gitStatuses[copy.path]
+    const changeCount = status
+      ? status.staged + status.unstaged + status.untracked + status.conflicts
+      : 0
+    if (changeCount > 0 && !window.confirm(
+      `“${copy.label}” has ${changeCount} uncommitted changes. Continue toward moving it to Trash?`,
+    )) return
+    if (!window.confirm(
+      `Move the entire folder “${copy.path}” to Trash and detach it from MyRepos?`,
+    )) return
+    setWorkingCopyAction(`trash:${copy.id}`)
+    try {
+      await window.desktop.workingCopies.trash(copy.id)
+      await reloadManagedWorkingCopies()
+    } catch (error) {
+      setWorkingCopyError(errorMessage(error))
+    } finally {
+      setWorkingCopyAction(null)
+    }
+  }
+
+  const createManagedWorktree = async (): Promise<void> => {
+    if (!window.desktop || !workingCopyRepository || !worktreeBranch.trim()) return
+    const source = workingCopies.find((copy) => copy.preferred && copy.available) ??
+      workingCopies.find((copy) => copy.available)
+    if (!source) {
+      setWorkingCopyError('An available working copy is required to create a worktree.')
+      return
+    }
+    setWorkingCopyAction('worktree')
+    setWorkingCopyError(null)
+    try {
+      const copy = await window.desktop.workingCopies.createWorktree(
+        source.id,
+        worktreeBranch.trim(),
+        worktreeCreateBranch,
+        workingCopyLabelDraft.trim() || worktreeBranch.trim(),
+      )
+      if (copy) {
+        setWorktreeBranch('')
+        setWorkingCopyLabelDraft('')
+        await reloadManagedWorkingCopies()
+      }
+    } catch (error) {
+      setWorkingCopyError(errorMessage(error))
+    } finally {
+      setWorkingCopyAction(null)
+    }
+  }
+
+  const chooseWorkingCopyForWorkspace = async (copy: RepositoryWorkingCopy): Promise<void> => {
+    if (!window.desktop || !selectedWorkspaceId || !workingCopyRepository) return
+    setWorkingCopyAction(`workspace:${copy.id}`)
+    try {
+      await window.desktop.workingCopies.setForWorkspace(selectedWorkspaceId, copy.id)
+      const key = repositoryOrganizationKey(workingCopyRepository)
+      setWorkspaceWorkingCopySelections((current) => ({ ...current, [key]: copy.id }))
+    } catch (error) {
+      setWorkingCopyError(errorMessage(error))
+    } finally {
+      setWorkingCopyAction(null)
+    }
+  }
+
+  const syncManagedWorkingCopy = async (copy: RepositoryWorkingCopy): Promise<void> => {
+    if (!window.desktop) return
+    setWorkingCopyAction(`sync:${copy.id}`)
+    setWorkingCopyError(null)
+    try {
+      await window.desktop.repositories.gitPull(copy.path)
+      const details = await window.desktop.repositories.gitPush(copy.path)
+      setGitStatuses((current) => ({ ...current, [details.status.path]: details.status }))
+      await reloadManagedWorkingCopies()
+    } catch (error) {
+      setWorkingCopyError(errorMessage(error))
+    } finally {
+      setWorkingCopyAction(null)
+    }
+  }
+
   const cloneRepository = async (repository: GitHubRepository): Promise<void> => {
     if (!window.desktop || !selectedAccountId) return
     setCloningRepository(repository.fullName)
@@ -1306,7 +1944,16 @@ export function App() {
         setCloneResult({ fullName: repository.fullName, path: result.path })
         setRepositories((current) => current.map((item) =>
           item.fullName === repository.fullName
-            ? { ...item, localPath: result.path }
+            ? {
+                ...item,
+                localPath: result.path,
+                workingCopies: result.workingCopy
+                  ? [...item.workingCopies.filter((copy) => copy.id !== result.workingCopy!.id), result.workingCopy]
+                  : item.workingCopies,
+                preferredWorkingCopyId: result.workingCopy?.preferred
+                  ? result.workingCopy.id
+                  : item.preferredWorkingCopyId,
+              }
             : item,
         ))
         if (repositoryTab !== 'workspace') setRepositoryTab('local')
@@ -1332,7 +1979,16 @@ export function App() {
 
       setRepositories((current) => current.map((item) =>
         item.fullName === repository.fullName
-          ? { ...item, localPath: result.path }
+          ? {
+              ...item,
+              localPath: result.path,
+              workingCopies: result.workingCopy
+                ? [...item.workingCopies.filter((copy) => copy.id !== result.workingCopy!.id), result.workingCopy]
+                : item.workingCopies,
+              preferredWorkingCopyId: result.workingCopy?.preferred
+                ? result.workingCopy.id
+                : item.preferredWorkingCopyId,
+            }
           : item,
       ))
       setCloneResult({ fullName: repository.fullName, path: result.path })
@@ -1449,8 +2105,25 @@ export function App() {
     setGitDetails(null)
     setFilesPanelTab('changes')
     setFileSearch('')
+    setWorkingTreeFiles([])
+    setWorkingTreeSearch('')
+    setWorkingTreeIncludeIgnored(false)
+    setWorkingTreeExpandedFolders([])
+    setWorkingTreeError(null)
+    setSelectedWorkingTreeFile(null)
+    setWorkingTreeContent(null)
+    setWorkingTreePreview(null)
+    setWorkingTreeView('code')
+    setWorkingTreeContentError(null)
     setGitHistory([])
+    setHistoryCommitterFilter(allCommittersFilter)
     setGitError(null)
+    setBranchManagerOpen(false)
+    setBranchState(null)
+    setBranchError(null)
+    setBranchNotice(null)
+    setCheckoutTarget(null)
+    setBranchRename(null)
     setCommitMessage('')
     setCommitDescription('')
     setDiffTitle(null)
@@ -1491,6 +2164,9 @@ export function App() {
     setGitError(null)
     try {
       applyGitDetails(await operation())
+      if (filesPanelTab === 'files') {
+        setWorkingTreeRefreshVersion((version) => version + 1)
+      }
       if (gitRepository?.localPath && ['commit', 'fetch', 'pull', 'push'].includes(action)) {
         setGitHistory(await window.desktop!.repositories.gitHistory(gitRepository.localPath))
       }
@@ -1502,6 +2178,226 @@ export function App() {
       return false
     } finally {
       setGitAction(null)
+    }
+  }
+
+  const reloadGitWorkspace = async (): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath) return
+    const [details, history] = await Promise.all([
+      window.desktop.repositories.gitDetails(gitRepository.localPath),
+      window.desktop.repositories.gitHistory(gitRepository.localPath),
+    ])
+    applyGitDetails(details)
+    setGitHistory(history)
+    setSelectedCommitHash(null)
+    setSelectedCommitFiles([])
+    setSelectedCommitFile(null)
+    setSelectedDiffPath(null)
+    setDiffTitle(null)
+    setDiffText(null)
+  }
+
+  const loadBranches = async (fetchRemote = false): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath) return
+    setBranchAction(fetchRemote ? 'fetch' : 'loading')
+    setBranchError(null)
+    try {
+      if (fetchRemote) {
+        const details = await window.desktop.repositories.gitFetch(gitRepository.localPath)
+        applyGitDetails(details)
+      }
+      setBranchState(await window.desktop.repositories.gitBranches(gitRepository.localPath))
+    } catch (error) {
+      const message = errorMessage(error)
+      setBranchError(message)
+      if (!branchManagerOpen && !checkoutTarget) setGitError(message)
+    } finally {
+      setBranchAction(null)
+    }
+  }
+
+  const openBranchManager = (startPoint = 'HEAD'): void => {
+    setBranchManagerOpen(true)
+    setBranchState(null)
+    setBranchSearch('')
+    setBranchError(null)
+    setBranchNotice(null)
+    setBranchCreateVisible(startPoint !== 'HEAD')
+    setBranchCreateName('')
+    setBranchCreateStart(startPoint)
+    void loadBranches()
+  }
+
+  const applyBranchState = async (
+    state: RepositoryBranchState,
+    notice?: string,
+  ): Promise<void> => {
+    setBranchState(state)
+    setBranchNotice(notice ?? null)
+    await reloadGitWorkspace()
+  }
+
+  const executeCheckout = async (
+    target: RepositoryCheckoutTarget,
+    strategy: RepositoryCheckoutStrategy,
+  ): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath) return
+    setBranchAction(`checkout:${target.ref}`)
+    setBranchError(null)
+    setBranchNotice(null)
+    try {
+      const state = await window.desktop.repositories.gitCheckout(
+        gitRepository.localPath,
+        target,
+        strategy,
+      )
+      await applyBranchState(
+        state,
+        strategy === 'stash' && !gitDetails?.status.clean
+          ? 'Local changes were saved in Git stash before checkout.'
+          : target.kind === 'commit'
+            ? `Checked out ${target.name} in detached HEAD mode.`
+            : `Switched to ${target.name}.`,
+      )
+      setCheckoutTarget(null)
+    } catch (error) {
+      const message = errorMessage(error)
+      setBranchError(message)
+      if (!branchManagerOpen && !checkoutTarget) setGitError(message)
+    } finally {
+      setBranchAction(null)
+    }
+  }
+
+  const requestCheckout = (target: RepositoryCheckoutTarget): void => {
+    if (gitDetails?.status.clean && target.kind !== 'commit') {
+      void executeCheckout(target, 'require-clean')
+      return
+    }
+    setCheckoutTarget(target)
+    setCheckoutStrategy(gitDetails?.status.clean ? 'require-clean' : 'carry')
+    setBranchError(null)
+  }
+
+  const createBranch = async (): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath || !branchCreateName.trim()) return
+    setBranchAction('create')
+    setBranchError(null)
+    try {
+      const state = await window.desktop.repositories.gitCreateBranch(
+        gitRepository.localPath,
+        branchCreateName.trim(),
+        branchCreateStart,
+        branchCreateCheckout,
+      )
+      await applyBranchState(state, branchCreateCheckout
+        ? `Created and switched to ${branchCreateName.trim()}.`
+        : `Created ${branchCreateName.trim()}.`)
+      setBranchCreateName('')
+      setBranchCreateVisible(false)
+    } catch (error) {
+      setBranchError(errorMessage(error))
+    } finally {
+      setBranchAction(null)
+    }
+  }
+
+  const renameBranch = async (): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath || !branchRename || !branchRenameName.trim()) return
+    setBranchAction(`rename:${branchRename.ref}`)
+    setBranchError(null)
+    try {
+      const state = await window.desktop.repositories.gitRenameBranch(
+        gitRepository.localPath,
+        branchRename.name,
+        branchRenameName.trim(),
+      )
+      await applyBranchState(state, `Renamed ${branchRename.name} to ${branchRenameName.trim()}.`)
+      setBranchRename(null)
+    } catch (error) {
+      setBranchError(errorMessage(error))
+    } finally {
+      setBranchAction(null)
+    }
+  }
+
+  const deleteLocalBranch = async (branch: RepositoryBranch, force: boolean): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath) return
+    const warning = force
+      ? `Force-delete local branch “${branch.name}”? Unmerged commits may become difficult to recover.`
+      : `Delete merged local branch “${branch.name}”?`
+    if (!window.confirm(warning)) return
+    setBranchAction(`delete:${branch.ref}`)
+    setBranchError(null)
+    try {
+      setBranchState(await window.desktop.repositories.gitDeleteBranch(
+        gitRepository.localPath,
+        branch.name,
+        force,
+      ))
+      setBranchNotice(`Deleted local branch ${branch.name}.`)
+    } catch (error) {
+      setBranchError(errorMessage(error))
+    } finally {
+      setBranchAction(null)
+    }
+  }
+
+  const deleteRemoteBranch = async (branch: RepositoryBranch): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath || !branch.remote) return
+    if (!window.confirm(
+      `Delete “${branch.remote}/${branch.name}” from the remote? This affects every collaborator.`,
+    )) return
+    setBranchAction(`delete:${branch.ref}`)
+    setBranchError(null)
+    try {
+      setBranchState(await window.desktop.repositories.gitDeleteRemoteBranch(
+        gitRepository.localPath,
+        branch.remote,
+        branch.name,
+      ))
+      setBranchNotice(`Deleted remote branch ${branch.remote}/${branch.name}.`)
+    } catch (error) {
+      setBranchError(errorMessage(error))
+    } finally {
+      setBranchAction(null)
+    }
+  }
+
+  const publishCurrentBranch = async (): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath || !branchState?.currentBranch) return
+    setBranchAction('publish')
+    setBranchError(null)
+    try {
+      const details = await window.desktop.repositories.gitPush(gitRepository.localPath)
+      applyGitDetails(details)
+      setBranchState(await window.desktop.repositories.gitBranches(gitRepository.localPath))
+      setGitHistory(await window.desktop.repositories.gitHistory(gitRepository.localPath))
+      setBranchNotice(`Published ${branchState.currentBranch}.`)
+    } catch (error) {
+      setBranchError(errorMessage(error))
+    } finally {
+      setBranchAction(null)
+    }
+  }
+
+  const restoreLatestStash = async (): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath) return
+    setBranchAction('stash-pop')
+    setBranchError(null)
+    try {
+      const state = await window.desktop.repositories.gitPopStash(gitRepository.localPath)
+      await applyBranchState(state, 'Restored the latest stashed changes into this working copy.')
+    } catch (error) {
+      setBranchError(`Could not restore the stash cleanly: ${errorMessage(error)}`)
+      try {
+        setBranchState(await window.desktop.repositories.gitBranches(gitRepository.localPath))
+        await reloadGitWorkspace()
+      } catch {
+        // Keep the original stash error visible.
+      }
+    } finally {
+      setBranchAction(null)
     }
   }
 
@@ -1564,41 +2460,45 @@ export function App() {
   }
 
   const openBulkGit = (target: BulkGitTarget): void => {
+    setBulkPushNeededPaths([])
     setBulkGitTarget(target)
     setBulkGitOperation('sync')
     setBulkGitResults([])
     setBulkGitOpen(true)
   }
 
-  const runBulkGitOperation = async (): Promise<void> => {
-    if (!window.desktop || bulkGitRepositories.length === 0) return
-    const targets = [...bulkGitRepositories]
+  const runBulkGitOperation = async (
+    requestedTargets: GitHubRepository[] = bulkGitRepositories,
+    requestedOperation: BulkGitOperation = bulkGitOperation,
+  ): Promise<void> => {
+    if (!window.desktop || requestedTargets.length === 0) return
+    const targets = [...requestedTargets]
     setBulkGitRunning(true)
     setBulkGitResults(targets.map((repository) => ({
-      repositoryKey: repositoryOrganizationKey(repository),
+      repositoryKey: `${repositoryOrganizationKey(repository)}:${repository.localPath}`,
       fullName: repository.fullName,
       status: 'pending',
     })))
 
     for (const repository of targets) {
-      const repositoryKey = repositoryOrganizationKey(repository)
+      const repositoryKey = `${repositoryOrganizationKey(repository)}:${repository.localPath}`
       const repositoryPath = repository.localPath!
       setBulkGitResults((current) => current.map((result) =>
         result.repositoryKey === repositoryKey ? { ...result, status: 'running' } : result))
       try {
         let details: RepositoryGitDetails
-        if (bulkGitOperation === 'sync') {
+        if (requestedOperation === 'sync') {
           await window.desktop.repositories.gitPull(repositoryPath)
           details = await window.desktop.repositories.gitPush(repositoryPath)
-        } else if (bulkGitOperation === 'fetch') {
+        } else if (requestedOperation === 'fetch') {
           details = await window.desktop.repositories.gitFetch(repositoryPath)
-        } else if (bulkGitOperation === 'pull') {
+        } else if (requestedOperation === 'pull') {
           details = await window.desktop.repositories.gitPull(repositoryPath)
         } else {
           details = await window.desktop.repositories.gitPush(repositoryPath)
         }
         setGitStatuses((current) => ({ ...current, [details.status.path]: details.status }))
-        if (bulkGitOperation === 'sync') {
+        if (requestedOperation === 'sync') {
           const syncedAt = new Date().toISOString()
           setRepositories((current) => current.map((item) =>
             item.localPath === repositoryPath ? { ...item, lastSyncedAt: syncedAt } : item,
@@ -1624,6 +2524,18 @@ export function App() {
 
     setRelativeTimeNow(Date.now())
     setBulkGitRunning(false)
+  }
+
+  const pushListedRepositories = (): void => {
+    if (listedPushNeededRepositories.length === 0 || bulkGitRunning) return
+    const targets = [...listedPushNeededRepositories]
+    setBulkPushNeededPaths(targets.flatMap((repository) =>
+      repository.localPath ? [repository.localPath] : []))
+    setBulkGitTarget('push-needed')
+    setBulkGitOperation('push')
+    setBulkGitResults([])
+    setBulkGitOpen(true)
+    void runBulkGitOperation(targets, 'push')
   }
 
   const commitFromCard = async (): Promise<void> => {
@@ -1689,6 +2601,34 @@ export function App() {
     }
   }
 
+  const showWorkingTreeFile = async (file: RepositoryWorkingTreeFile): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath) return
+    const previewKind = workingTreePreviewKind(file.path)
+    setSelectedWorkingTreeFile(file.path)
+    setWorkingTreeContent(null)
+    setWorkingTreePreview(null)
+    setWorkingTreeView(previewKind ? 'preview' : 'code')
+    setWorkingTreeContentLoading(true)
+    setWorkingTreeContentError(null)
+    try {
+      if (previewKind && previewKind !== 'html' && previewKind !== 'svg') {
+        setWorkingTreePreview(await window.desktop.repositories.gitWorkingFilePreview(
+          gitRepository.localPath,
+          file.path,
+        ))
+      } else {
+        setWorkingTreeContent(await window.desktop.repositories.gitWorkingFileContent(
+          gitRepository.localPath,
+          file.path,
+        ))
+      }
+    } catch (error) {
+      setWorkingTreeContentError(errorMessage(error))
+    } finally {
+      setWorkingTreeContentLoading(false)
+    }
+  }
+
   const showCommitDiff = async (commit: RepositoryCommit): Promise<void> => {
     if (!window.desktop || !gitRepository?.localPath) return
     setGitAction(`history:${commit.hash}`)
@@ -1739,6 +2679,106 @@ export function App() {
       setGitError(errorMessage(error))
     } finally {
       setGitAction(null)
+    }
+  }
+
+  const showFileRevision = async (
+    revision: RepositoryFileRevision,
+    view: FileHistoryView = 'diff',
+  ): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath) return
+    setFileHistoryRevisionHash(revision.hash)
+    setFileHistoryView(view)
+    setFileHistoryAction(`view:${revision.hash}:${view}`)
+    setFileHistoryError(null)
+    try {
+      const text = view === 'content'
+        ? await window.desktop.repositories.gitFileContent(
+            gitRepository.localPath,
+            revision.hash,
+            revision.path,
+          )
+        : await window.desktop.repositories.gitFileRevisionDiff(
+            gitRepository.localPath,
+            revision.hash,
+            revision.path,
+          )
+      setFileHistoryText(text || (view === 'content'
+        ? 'This revision is empty.'
+        : 'This revision has no textual diff.'))
+    } catch (error) {
+      setFileHistoryText(null)
+      setFileHistoryError(errorMessage(error))
+    } finally {
+      setFileHistoryAction(null)
+    }
+  }
+
+  const openFileHistory = async (file: string): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath) return
+    setFileHistoryFile(file)
+    setFileHistoryRevisions([])
+    setFileHistoryRevisionHash(null)
+    setFileHistoryCompareHash(null)
+    setFileHistoryText(null)
+    setFileHistoryView('diff')
+    setFileHistoryError(null)
+    setFileHistoryNotice(null)
+    setFileHistoryLoading(true)
+    try {
+      const revisions = await window.desktop.repositories.gitFileHistory(gitRepository.localPath, file)
+      setFileHistoryRevisions(revisions)
+      if (revisions[0]) await showFileRevision(revisions[0], 'diff')
+    } catch (error) {
+      setFileHistoryError(errorMessage(error))
+    } finally {
+      setFileHistoryLoading(false)
+    }
+  }
+
+  const compareFileRevisions = async (): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath || !selectedFileRevision || !compareFileRevision) return
+    setFileHistoryAction('compare')
+    setFileHistoryError(null)
+    try {
+      const text = await window.desktop.repositories.gitCompareFileRevisions(
+        gitRepository.localPath,
+        compareFileRevision.hash,
+        compareFileRevision.path,
+        selectedFileRevision.hash,
+        selectedFileRevision.path,
+      )
+      setFileHistoryView('compare')
+      setFileHistoryText(text || 'The selected file revisions are identical.')
+    } catch (error) {
+      setFileHistoryError(errorMessage(error))
+    } finally {
+      setFileHistoryAction(null)
+    }
+  }
+
+  const restoreFileRevision = async (): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath || !selectedFileRevision) return
+    if (!window.confirm(
+      `Restore “${selectedFileRevision.path}” from commit ${selectedFileRevision.shortHash}? This writes the historical version into your working tree without committing it.`,
+    )) return
+    setFileHistoryAction('restore')
+    setFileHistoryError(null)
+    setFileHistoryNotice(null)
+    try {
+      const details = await window.desktop.repositories.gitRestoreFile(
+        gitRepository.localPath,
+        selectedFileRevision.hash,
+        selectedFileRevision.path,
+      )
+      applyGitDetails(details)
+      setFileHistoryNotice(
+        `Restored ${selectedFileRevision.path} from ${selectedFileRevision.shortHash} into the working tree.`,
+      )
+    } catch (error) {
+      setFileHistoryError(errorMessage(error))
+    } finally {
+      setFileHistoryAction(null)
     }
   }
 
@@ -1969,6 +3009,62 @@ export function App() {
         type,
       )
       if (target) setWorkspaceTarget(target)
+    } catch (error) {
+      setWorkspaceTargetError(errorMessage(error))
+    } finally {
+      setWorkspaceTargetAction(null)
+    }
+  }
+
+  const provisionWorkspaceWorkingCopies = async (): Promise<void> => {
+    if (!window.desktop || !selectedWorkspaceId) return
+    setWorkspaceProvisioning(true)
+    setWorkspaceTargetError(null)
+    setWorkspaceProvisionResult(null)
+    try {
+      const result = await window.desktop.workingCopies.provisionWorkspace(
+        selectedWorkspaceId,
+        selectedRepositoryKeys,
+      )
+      if (result) {
+        setWorkspaceProvisionResult(result)
+        setWorkspaceWorkingCopySelections(
+          await window.desktop.workingCopies.workspaceSelections(selectedWorkspaceId),
+        )
+        await refreshRepositories()
+      }
+    } catch (error) {
+      setWorkspaceTargetError(errorMessage(error))
+    } finally {
+      setWorkspaceProvisioning(false)
+    }
+  }
+
+  const cloneSelectedWorkingCopies = async (): Promise<void> => {
+    if (!window.desktop || selectedRepositoryKeys.length === 0) return
+    setWorkspaceProvisioning(true)
+    setRepositoriesError(null)
+    setWorkspaceProvisionResult(null)
+    try {
+      const result = await window.desktop.workingCopies.cloneBatch(selectedRepositoryKeys)
+      if (result) {
+        setWorkspaceProvisionResult(result)
+        await refreshRepositories()
+      }
+    } catch (error) {
+      setRepositoriesError(errorMessage(error))
+    } finally {
+      setWorkspaceProvisioning(false)
+    }
+  }
+
+  const generateWorkspaceFile = async (): Promise<void> => {
+    if (!window.desktop || !selectedWorkspaceId) return
+    setWorkspaceTargetAction('generate')
+    setWorkspaceTargetError(null)
+    try {
+      const target = await window.desktop.workingCopies.generateCodeWorkspace(selectedWorkspaceId)
+      setWorkspaceTarget(target)
     } catch (error) {
       setWorkspaceTargetError(errorMessage(error))
     } finally {
@@ -2222,6 +3318,11 @@ export function App() {
     ])))
     setRepositoryColors(Object.fromEntries(appearances.flatMap((entry) =>
       entry.color ? [[entry.repositoryKey, entry.color]] : [])))
+    if (selectedWorkspaceId) {
+      setWorkspaceWorkingCopySelections(
+        await window.desktop.workingCopies.workspaceSelections(selectedWorkspaceId),
+      )
+    }
   }
 
   const loadConfigurationRemoteRepositories = async (accountId: string): Promise<void> => {
@@ -2417,6 +3518,81 @@ export function App() {
         return counts
       }, {})).sort((a, b) => b[1].lines - a[1].lines || b[1].files - a[1].files)
     : [], [insightsResult, scopedInsightFiles])
+
+  const renderWorkingTreeNodes = (nodes: WorkingTreeNode[], depth = 0): ReactNode => nodes.map((node) => {
+    const expanded = Boolean(workingTreeSearch.trim()) || workingTreeExpandedFolders.includes(node.path)
+    const change = node.type === 'file' ? workingTreeChanges.get(node.path) : undefined
+    const changedChildren = node.type === 'folder' ? workingTreeChangeCount(node, workingTreeChanges) : 0
+    const state = change
+      ? change.conflicted ? '!' : change.untracked ? 'U' : change.staged ? 'S' : 'M'
+      : node.ignored ? 'I' : null
+    const file = node.type === 'file' ? workingTreeFileIndex.get(node.path) : null
+    return (
+      <div className="working-tree-node" key={`${node.type}:${node.path}`}>
+        <div
+          className="working-tree-row"
+          data-selected={selectedWorkingTreeFile === node.path || undefined}
+          data-ignored={node.ignored || undefined}
+          style={{ paddingLeft: 7 + depth * 15 }}
+        >
+          <UnstyledButton
+            className="working-tree-select"
+            disabled={node.type === 'file' && !file}
+            onClick={() => {
+              if (node.type === 'folder') {
+                setWorkingTreeExpandedFolders((current) => current.includes(node.path)
+                  ? current.filter((path) => path !== node.path)
+                  : [...current, node.path])
+              } else if (file) {
+                void showWorkingTreeFile(file)
+              }
+            }}
+          >
+            <span className="working-tree-chevron">
+              {node.type === 'folder'
+                ? expanded ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />
+                : null}
+            </span>
+            <span className="working-tree-type-icon" aria-hidden="true">
+              {node.type === 'folder'
+                ? <FolderIcon folderName={node.name} width={19} height={19} />
+                : <FileIcon fileName={node.name} autoAssign width={18} height={18} />}
+            </span>
+            <Text
+              component="span"
+              size="sm"
+              fw={node.type === 'folder' ? 650 : 560}
+              truncate
+              title={node.path}
+            >
+              {node.name}
+            </Text>
+          </UnstyledButton>
+          {node.type === 'folder' && changedChildren > 0 && (
+            <span className="working-tree-folder-count" title={`${changedChildren} changed files`}>
+              {changedChildren}
+            </span>
+          )}
+          {state && <span className="working-tree-state" data-state={state}>{state}</span>}
+          {node.type === 'file' && (
+            <Tooltip label={`History for ${node.path}`}>
+              <ActionIcon
+                className="working-tree-history"
+                size="sm"
+                variant="subtle"
+                color="gray"
+                aria-label={`Show history for ${node.path}`}
+                onClick={() => void openFileHistory(node.path)}
+              >
+                <IconGitCommit size={14} />
+              </ActionIcon>
+            </Tooltip>
+          )}
+        </div>
+        {node.type === 'folder' && expanded && renderWorkingTreeNodes(node.children, depth + 1)}
+      </div>
+    )
+  })
 
   return (
     <div
@@ -2686,7 +3862,7 @@ export function App() {
                 disabled={!gitRepository}
                 onClick={() => setDiffVisible((visible) => !visible)}
               >
-                {diffVisible ? 'Hide' : 'Show'} diff pane
+                {diffVisible ? 'Hide' : 'Show'} {filesPanelTab === 'files' ? 'preview' : 'diff'} pane
               </Menu.Item>
               <Menu.Item
                 color="teal"
@@ -2779,13 +3955,30 @@ export function App() {
                       leftSection={workspaceTarget
                         ? <IconLink size={15} />
                         : <IconFolderSearch size={15} />}
-                      loading={workspaceTargetLoading || Boolean(workspaceTargetAction?.startsWith('connect:'))}
-                      disabled={workspaceTargetLoading || Boolean(workspaceTargetAction)}
+                      loading={workspaceTargetLoading || workspaceProvisioning ||
+                        Boolean(workspaceTargetAction?.startsWith('connect:'))}
+                      disabled={workspaceTargetLoading || workspaceProvisioning || Boolean(workspaceTargetAction)}
                     >
-                      {workspaceTarget ? 'Connected' : 'Connect'}
+                      Workspace
                     </Button>
                   </Menu.Target>
                   <Menu.Dropdown>
+                    <Menu.Label>Workspace lifecycle</Menu.Label>
+                    <Menu.Item
+                      leftSection={<IconFolderPlus size={15} />}
+                      onClick={() => void provisionWorkspaceWorkingCopies()}
+                    >
+                      {selectedRepositoryKeys.length > 0
+                        ? 'Create checkout for selected repositories'
+                        : 'Create complete workspace checkout'}
+                    </Menu.Item>
+                    <Menu.Item
+                      leftSection={<IconFileCode size={15} />}
+                      onClick={() => void generateWorkspaceFile()}
+                    >
+                      Generate VS Code workspace
+                    </Menu.Item>
+                    <Menu.Divider />
                     {workspaceTarget && (
                       <>
                         <Menu.Label>{workspaceTarget.type === 'folder'
@@ -3101,8 +4294,18 @@ export function App() {
                       </Tooltip>
                     )}
                     {listedPushNeededCount > 0 && (
-                      <Tooltip label={`${listedPushNeededCount} ${listedPushNeededCount === 1 ? 'repository needs' : 'repositories need'} push`}>
-                        <Badge variant="filled" color="pink" size="sm">
+                      <Tooltip label={`Push ${listedPushNeededCount} ${listedPushNeededCount === 1 ? 'repository' : 'repositories'} shown on this page`}>
+                        <Badge
+                          component="button"
+                          type="button"
+                          className="repository-summary-action"
+                          variant="filled"
+                          color="pink"
+                          size="sm"
+                          aria-label={`Push ${listedPushNeededCount} ${listedPushNeededCount === 1 ? 'repository' : 'repositories'}`}
+                          disabled={bulkGitRunning}
+                          onClick={pushListedRepositories}
+                        >
                           ↑ {listedPushNeededCount} push
                         </Badge>
                       </Tooltip>
@@ -3303,6 +4506,16 @@ export function App() {
                     </Button>
                     <Button
                       size="xs"
+                      variant="light"
+                      leftSection={<IconFolderPlus size={15} />}
+                      loading={workspaceProvisioning}
+                      disabled={selectedRepositories.length === 0 || workspaceProvisioning}
+                      onClick={() => void cloneSelectedWorkingCopies()}
+                    >
+                      Clone copies
+                    </Button>
+                    <Button
+                      size="xs"
                       leftSection={<IconTags size={15} />}
                       disabled={selectedRepositories.length === 0}
                       onClick={openBulkOrganization}
@@ -3468,7 +4681,10 @@ export function App() {
                   {pagedRepositories.map((repository) => {
                     const repositoryKey = repositoryOrganizationKey(repository)
                     const repositoryColor = repositoryColors[repositoryKey]
-                    const gitStatus = repository.localPath
+                    const preferredWorkingCopy = repository.workingCopies.find((copy) =>
+                      copy.id === repository.preferredWorkingCopyId) ?? repository.workingCopies[0]
+                    const preferredWorkingCopyAvailable = preferredWorkingCopy?.available ?? false
+                    const gitStatus = repository.localPath && preferredWorkingCopyAvailable
                       ? gitStatuses[repository.localPath]
                       : undefined
                     const changeCount = gitStatus
@@ -3487,7 +4703,9 @@ export function App() {
                       style={repositoryColor
                         ? ({ '--repository-color': repositoryColor } as CSSProperties)
                         : undefined}
-                      data-status={gitStatus && !gitStatus.error
+                      data-status={repository.localPath && !preferredWorkingCopyAvailable
+                        ? 'missing'
+                        : gitStatus && !gitStatus.error
                         ? gitStatus.conflicts > 0
                           ? 'conflict'
                           : gitStatus.ahead > 0 || gitStatus.behind > 0
@@ -3623,6 +4841,14 @@ export function App() {
                                       : `${changeCount} changes`}
                             </Badge>
                           )}
+                          {repository.localPath && !preferredWorkingCopyAvailable && (
+                            <Badge size="xs" variant="filled" color="red">Copy missing</Badge>
+                          )}
+                          {repository.workingCopies.length > 1 && (
+                            <Badge size="xs" variant="outline" color="blue">
+                              {repository.workingCopies.length} working copies
+                            </Badge>
+                          )}
                           {selectedAccountId === 'all' && (
                             <Badge size="xs" variant="outline" color="gray">
                               @{repository.accountLogin}
@@ -3670,7 +4896,11 @@ export function App() {
                         )}
                         {repository.localPath && (
                           <Group gap={7} mt="sm" className="git-status-row">
-                            {!gitStatus ? (
+                            {!preferredWorkingCopyAvailable ? (
+                              <Text size="xs" c="red.4">
+                                Preferred copy is missing · {preferredWorkingCopy?.label}
+                              </Text>
+                            ) : !gitStatus ? (
                               <>
                                 <Loader size={12} />
                                 <Text size="xs">Checking Git status…</Text>
@@ -3754,7 +4984,21 @@ export function App() {
                             <IconExternalLink size={17} />
                           </ActionIcon>
                         )}
-                        {repository.localPath ? (
+                        <Tooltip label={repository.workingCopies.length === 0
+                          ? 'Add a working copy'
+                          : `Manage ${repository.workingCopies.length} working ${repository.workingCopies.length === 1
+                            ? 'copy'
+                            : 'copies'}`}>
+                          <ActionIcon
+                            variant="subtle"
+                            color="gray"
+                            aria-label={`Manage working copies for ${repository.fullName}`}
+                            onClick={() => openWorkingCopyManager(repository)}
+                          >
+                            <IconCopy size={17} />
+                          </ActionIcon>
+                        </Tooltip>
+                        {repository.localPath && preferredWorkingCopyAvailable ? (
                           <Group gap="xs" wrap="nowrap">
                             {gitStatus && gitStatus.behind > 0 && (
                               <Button
@@ -3875,6 +5119,16 @@ export function App() {
                               </ActionIcon>
                             </Tooltip>
                           </Group>
+                        ) : repository.workingCopies.length > 0 ? (
+                          <Button
+                            size="xs"
+                            variant="light"
+                            color="red"
+                            leftSection={<IconRestore size={14} />}
+                            onClick={() => openWorkingCopyManager(repository)}
+                          >
+                            Repair copies
+                          </Button>
                         ) : (
                           <>
                             <Tooltip label="Locate an existing clone">
@@ -3986,6 +5240,15 @@ export function App() {
                         <button
                           type="button"
                           role="tab"
+                          aria-selected={filesPanelTab === 'files'}
+                          data-active={filesPanelTab === 'files' || undefined}
+                          onClick={() => setFilesPanelTab('files')}
+                        >
+                          Files
+                        </button>
+                        <button
+                          type="button"
+                          role="tab"
                           aria-selected={filesPanelTab === 'history'}
                           data-active={filesPanelTab === 'history' || undefined}
                           onClick={() => setFilesPanelTab('history')}
@@ -4007,6 +5270,36 @@ export function App() {
                         </Tooltip>
                       </div>
                       <Group gap={2} wrap="nowrap">
+                      {filesPanelTab === 'history' && selectedCommitHash && (
+                        <>
+                          <Tooltip label={`Checkout ${selectedCommitHash.slice(0, 7)} (detached)`}>
+                            <ActionIcon
+                              variant="light"
+                              color="violet"
+                              aria-label={`Checkout commit ${selectedCommitHash.slice(0, 7)}`}
+                              disabled={Boolean(gitAction) || Boolean(branchAction)}
+                              onClick={() => requestCheckout({
+                                kind: 'commit',
+                                ref: selectedCommitHash,
+                                name: selectedCommitHash.slice(0, 7),
+                              })}
+                            >
+                              <IconGitCommit size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                          <Tooltip label={`Create branch from ${selectedCommitHash.slice(0, 7)}`}>
+                            <ActionIcon
+                              variant="subtle"
+                              color="gray"
+                              aria-label={`Create branch from commit ${selectedCommitHash.slice(0, 7)}`}
+                              disabled={Boolean(gitAction) || Boolean(branchAction)}
+                              onClick={() => openBranchManager(selectedCommitHash)}
+                            >
+                              <IconGitBranch size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        </>
+                      )}
                       {filesPanelTab === 'history' && !commitFilesVisible && (
                         <Tooltip label="Show commit files">
                           <ActionIcon
@@ -4020,11 +5313,11 @@ export function App() {
                         </Tooltip>
                       )}
                       {!diffVisible && (
-                      <Tooltip label="Show diff">
+                      <Tooltip label={`Show ${filesPanelTab === 'files' ? 'preview' : 'diff'} pane`}>
                         <ActionIcon
                           variant="light"
                           color="teal"
-                          aria-label="Show diff"
+                          aria-label={`Show ${filesPanelTab === 'files' ? 'preview' : 'diff'} pane`}
                           onClick={() => setDiffVisible(true)}
                         >
                           <IconLayoutSidebarRightExpand size={17} />
@@ -4053,15 +5346,19 @@ export function App() {
                       <Stack gap="md">
                         <Group justify="space-between" align="flex-start" wrap="wrap">
                           <Group gap="xs">
-                            <Badge
+                            <Button
+                              size="compact-xs"
                               variant="light"
                               color={gitDetails?.status.conflicts
                                 ? 'red'
                                 : gitDetails?.status.clean ? 'teal' : 'orange'}
                               leftSection={<IconGitBranch size={12} />}
+                              onClick={() => openBranchManager()}
                             >
-                              {gitDetails?.status.branch ?? 'Repository'}
-                            </Badge>
+                              {gitDetails?.status.branch ?? (branchState
+                                ? `Detached ${branchState.currentCommit.slice(0, 7)}`
+                                : 'Detached HEAD')}
+                            </Button>
                             {gitDetails && gitDetails.status.ahead > 0 && (
                               <Badge variant="outline" color="teal">↑ {gitDetails.status.ahead}</Badge>
                             )}
@@ -4183,6 +5480,18 @@ export function App() {
                                               </span>
                                               <Text component="span" size="xs" truncate>{file.path}</Text>
                                             </UnstyledButton>
+                                            <Tooltip label="File history">
+                                              <ActionIcon
+                                                size="sm"
+                                                variant="subtle"
+                                                color="gray"
+                                                disabled={Boolean(gitAction)}
+                                                aria-label={`Show history for ${file.path}`}
+                                                onClick={() => void openFileHistory(file.path)}
+                                              >
+                                                <IconGitCommit size={14} />
+                                              </ActionIcon>
+                                            </Tooltip>
                                             <Tooltip label={file.staged ? 'Unstage file' : 'Stage file'}>
                                               <ActionIcon
                                                 size="sm"
@@ -4253,14 +5562,158 @@ export function App() {
                                     </Button>
                                   </div>
                                 </>
+                              ) : filesPanelTab === 'files' ? (
+                                <>
+                                  <div className="working-tree-toolbar">
+                                    <TextInput
+                                      size="xs"
+                                      aria-label="Search repository files"
+                                      placeholder="Search files and folders"
+                                      value={workingTreeSearch}
+                                      leftSection={<IconSearch size={14} />}
+                                      onChange={(event) => setWorkingTreeSearch(event.currentTarget.value)}
+                                    />
+                                    <Group justify="space-between" gap={8} mt={7} wrap="nowrap">
+                                      <Switch
+                                        size="xs"
+                                        label="Ignored"
+                                        checked={workingTreeIncludeIgnored}
+                                        onChange={(event) =>
+                                          setWorkingTreeIncludeIgnored(event.currentTarget.checked)}
+                                      />
+                                      <Group gap={5} wrap="nowrap">
+                                        <Text size="10px" c="dimmed">
+                                          {workingTreeFiles.length} files
+                                        </Text>
+                                        <Tooltip label="Refresh current tree">
+                                          <ActionIcon
+                                            size="sm"
+                                            variant="subtle"
+                                            color="gray"
+                                            aria-busy={workingTreeLoading}
+                                            aria-label="Refresh current file tree"
+                                            onClick={() => {
+                                              if (!workingTreeLoading) {
+                                                setWorkingTreeRefreshVersion((version) => version + 1)
+                                              }
+                                            }}
+                                          >
+                                            <IconRefresh size={14} />
+                                          </ActionIcon>
+                                        </Tooltip>
+                                      </Group>
+                                    </Group>
+                                  </div>
+                                  <div className="working-tree-list">
+                                    {workingTreeError && (
+                                      <Alert color="red" icon={<IconAlertCircle size={15} />}>
+                                        {workingTreeError}
+                                      </Alert>
+                                    )}
+                                    {workingTreeLoading && workingTreeFiles.length === 0 ? (
+                                      <Group justify="center" p="xl"><Loader size="sm" /></Group>
+                                    ) : visibleWorkingTree.length === 0 ? (
+                                      <div className="working-tree-empty">
+                                        <IconFolderSearch size={25} stroke={1.5} />
+                                        <Text size="xs" fw={650}>
+                                          {workingTreeSearch ? 'No matching files' : 'No files to show'}
+                                        </Text>
+                                        <Text size="10px" c="dimmed" ta="center">
+                                          {workingTreeSearch
+                                            ? 'Try a different path or filename.'
+                                            : 'Ignored files remain hidden unless enabled.'}
+                                        </Text>
+                                      </div>
+                                    ) : renderWorkingTreeNodes(visibleWorkingTree)}
+                                  </div>
+                                </>
                               ) : (
+                                <>
+                                <div className="scm-history-filter">
+                                  <Select
+                                    size="xs"
+                                    searchable
+                                    allowDeselect={false}
+                                    aria-label="Filter history by committer"
+                                    placeholder="All committers"
+                                    value={activeHistoryCommitterFilter}
+                                    leftSection={activeHistoryCommitterFilter === allCommittersFilter
+                                      ? <IconUsers size={14} />
+                                      : <Avatar
+                                          className="scm-committer-avatar"
+                                          size={22}
+                                          radius="xl"
+                                          src={activeHistoryCommitter?.avatarUrl}
+                                          data-image={activeHistoryCommitter?.avatarUrl ? true : undefined}
+                                          style={activeHistoryCommitter?.avatarUrl ? undefined : {
+                                            backgroundColor: committerColor(activeHistoryCommitterFilter),
+                                          }}
+                                        >
+                                          {activeHistoryCommitter?.name.trim()[0]?.toUpperCase() ?? '?'}
+                                        </Avatar>}
+                                    data={[
+                                      {
+                                        value: allCommittersFilter,
+                                        label: `All committers (${gitHistory.length})`,
+                                      },
+                                      ...historyCommitters.map((committer) => ({
+                                        value: committer.email,
+                                        label: `${committer.name} (${committer.count})`,
+                                      })),
+                                    ]}
+                                    renderOption={({ option }) => (
+                                      <Group gap={8} wrap="nowrap">
+                                        {option.value === allCommittersFilter
+                                          ? <IconUsers size={14} />
+                                          : <Avatar
+                                              className="scm-committer-avatar"
+                                              size={26}
+                                              radius="xl"
+                                              src={historyCommitters.find((committer) =>
+                                                committer.email === option.value)?.avatarUrl}
+                                              data-image={historyCommitters.some((committer) =>
+                                                committer.email === option.value && committer.avatarUrl) || undefined}
+                                              style={historyCommitters.some((committer) =>
+                                                committer.email === option.value && committer.avatarUrl)
+                                                ? undefined
+                                                : { backgroundColor: committerColor(option.value) }}
+                                            >
+                                              {historyCommitters.find((committer) =>
+                                                committer.email === option.value)?.name.trim()[0]?.toUpperCase() ?? '?'}
+                                            </Avatar>}
+                                        <div className="scm-committer-option">
+                                          <Text size="xs" truncate>{option.label}</Text>
+                                          {option.value !== allCommittersFilter && (
+                                            <Text size="9px" c="dimmed" truncate>{option.value}</Text>
+                                          )}
+                                        </div>
+                                      </Group>
+                                    )}
+                                    onChange={(value) => {
+                                      setHistoryCommitterFilter(value ?? allCommittersFilter)
+                                      setSelectedCommitHash(null)
+                                      setSelectedCommitFiles([])
+                                      setSelectedCommitFile(null)
+                                      setDiffTitle(null)
+                                      setDiffText(null)
+                                    }}
+                                  />
+                                  {activeHistoryCommitterFilter !== allCommittersFilter && (
+                                    <Text size="10px" c="dimmed" mt={5}>
+                                      {visibleGitHistory.length} of {gitHistory.length} commits
+                                    </Text>
+                                  )}
+                                </div>
                                 <div className="scm-history-list">
                                   {gitHistory.length === 0 ? (
                                     <Text size="xs" c="dimmed" p="md">No commits yet.</Text>
-                                  ) : gitHistory.map((commit) => (
+                                  ) : visibleGitHistory.length === 0 ? (
+                                    <Text size="xs" c="dimmed" p="md">No commits by this committer.</Text>
+                                  ) : visibleGitHistory.map((commit) => (
                                     <UnstyledButton
                                       className="scm-history-row"
                                       data-selected={selectedCommitHash === commit.hash || undefined}
+                                      style={{ borderLeftColor: committerColor(commit.authorEmail) }}
                                       disabled={Boolean(gitAction)}
                                       key={commit.hash}
                                       onClick={() => void showCommitDiff(commit)}
@@ -4277,16 +5730,49 @@ export function App() {
                                           </span>
                                         )}
                                       </div>
-                                      <Group gap={7} mt={4} wrap="nowrap">
+                                      <Group gap={7} mt={4} wrap="nowrap" className="scm-history-identity">
                                         <Text size="10px" c="teal.4">{commit.shortHash}</Text>
-                                        <Text size="10px" c="dimmed" truncate>{commit.author}</Text>
-                                        <Text size="10px" c="dimmed">
-                                          {new Date(commit.authoredAt).toLocaleDateString()}
+                                        <Avatar
+                                          className="scm-committer-avatar"
+                                          size={22}
+                                          radius="xl"
+                                          src={commit.authorAvatarUrl}
+                                          data-image={commit.authorAvatarUrl ? true : undefined}
+                                          title={commit.authorLogin ? `@${commit.authorLogin}` : commit.authorEmail}
+                                          style={commit.authorAvatarUrl ? undefined : {
+                                            backgroundColor: committerColor(commit.authorEmail),
+                                          }}
+                                        >
+                                          {commit.author.trim()[0]?.toUpperCase() ?? '?'}
+                                        </Avatar>
+                                        <Text
+                                          className="scm-history-committer"
+                                          size="10px"
+                                          truncate
+                                          style={{ color: committerColor(commit.authorEmail) }}
+                                        >
+                                          {commit.author}
                                         </Text>
                                       </Group>
+                                      <div className="scm-history-timeline">
+                                        <span title={`Authored ${historyDateTime(commit.authoredAt)}`}>
+                                          <strong>Committed</strong> {historyDateTime(commit.committedAt)}
+                                        </span>
+                                        <span
+                                          className={commit.unpushed
+                                            ? 'scm-history-push-state scm-history-push-state--pending'
+                                            : 'scm-history-push-state'}
+                                        >
+                                          <strong>{commit.unpushed ? 'Not pushed' : 'Pushed'}</strong>
+                                          {!commit.unpushed && ` ${commit.pushedAt
+                                            ? historyDateTime(commit.pushedAt)
+                                            : '· time unavailable'}`}
+                                        </span>
+                                      </div>
                                     </UnstyledButton>
                                   ))}
                                 </div>
+                                </>
                               )}
                             </section>
                             )}
@@ -4331,22 +5817,60 @@ export function App() {
                                           {gitHistory.find((commit) => commit.hash === selectedCommitHash)?.author}
                                         </Text>
                                       </Group>
+                                      <Group gap={5} mt={8} wrap="wrap">
+                                        <Button
+                                          size="compact-xs"
+                                          variant="light"
+                                          color="violet"
+                                          disabled={Boolean(gitAction) || Boolean(branchAction)}
+                                          onClick={() => requestCheckout({
+                                            kind: 'commit',
+                                            ref: selectedCommitHash,
+                                            name: selectedCommitHash.slice(0, 7),
+                                          })}
+                                        >
+                                          Checkout commit
+                                        </Button>
+                                        <Button
+                                          size="compact-xs"
+                                          variant="subtle"
+                                          color="gray"
+                                          disabled={Boolean(gitAction) || Boolean(branchAction)}
+                                          onClick={() => openBranchManager(selectedCommitHash)}
+                                        >
+                                          New branch here
+                                        </Button>
+                                      </Group>
                                     </div>
                                     <Text className="scm-commit-files-count" size="xs" fw={650}>
                                       {selectedCommitFiles.length} changed {selectedCommitFiles.length === 1 ? 'file' : 'files'}
                                     </Text>
                                     <div className="scm-commit-files-list">
                                       {selectedCommitFiles.map((file) => (
-                                        <UnstyledButton
-                                          className="scm-commit-file-row"
-                                          data-selected={selectedCommitFile === file.path || undefined}
-                                          disabled={Boolean(gitAction)}
-                                          key={file.path}
-                                          onClick={() => void showCommitFileDiff(file)}
-                                        >
-                                          <Text component="span" size="xs" truncate>{file.path}</Text>
-                                          <span data-status={file.status}>{file.status}</span>
-                                        </UnstyledButton>
+                                        <div className="scm-commit-file-entry" key={file.path}>
+                                          <UnstyledButton
+                                            className="scm-commit-file-row"
+                                            data-selected={selectedCommitFile === file.path || undefined}
+                                            disabled={Boolean(gitAction)}
+                                            onClick={() => void showCommitFileDiff(file)}
+                                          >
+                                            <Text component="span" size="xs" truncate>{file.path}</Text>
+                                            <span data-status={file.status}>{file.status}</span>
+                                          </UnstyledButton>
+                                          <Tooltip label={`History for ${file.path}`}>
+                                            <ActionIcon
+                                              className="scm-commit-file-history"
+                                              size="sm"
+                                              variant="subtle"
+                                              color="gray"
+                                              disabled={Boolean(gitAction)}
+                                              aria-label={`Show history for ${file.path}`}
+                                              onClick={() => void openFileHistory(file.path)}
+                                            >
+                                              <IconGitCommit size={14} />
+                                            </ActionIcon>
+                                          </Tooltip>
+                                        </div>
                                       ))}
                                     </div>
                                   </>
@@ -4377,7 +5901,9 @@ export function App() {
                                 <Text size="xs" fw={650} truncate>
                                   {filesPanelTab === 'history'
                                     ? selectedCommitFile ?? 'Select a file'
-                                    : diffTitle ?? gitRepository.fullName}
+                                    : filesPanelTab === 'files'
+                                      ? selectedWorkingTreeFile ?? 'Select a file'
+                                      : diffTitle ?? gitRepository.fullName}
                                 </Text>
                                 {filesPanelTab === 'changes' && (
                                 <Group gap={5} wrap="nowrap">
@@ -4423,12 +5949,67 @@ export function App() {
                                   </Button>
                                 </Group>
                                 )}
-                                <Tooltip label="Hide diff pane">
+                                {filesPanelTab === 'files' && selectedWorkingTreePreviewKind && (
+                                  <Group gap={2} wrap="nowrap" className="working-tree-view-switcher">
+                                    {workingTreeCanShowCode && (
+                                      <Button
+                                        size="compact-xs"
+                                        variant={workingTreeView === 'code' ? 'filled' : 'subtle'}
+                                        color={workingTreeView === 'code' ? 'teal' : 'gray'}
+                                        leftSection={<IconCode size={13} />}
+                                        onClick={() => setWorkingTreeView('code')}
+                                      >
+                                        Code
+                                      </Button>
+                                    )}
+                                    <Button
+                                      size="compact-xs"
+                                      variant={workingTreeView === 'preview' ? 'filled' : 'subtle'}
+                                      color={workingTreeView === 'preview' ? 'teal' : 'gray'}
+                                      leftSection={<IconPhoto size={13} />}
+                                      onClick={() => setWorkingTreeView('preview')}
+                                    >
+                                      Preview
+                                    </Button>
+                                  </Group>
+                                )}
+                                {activeFileHistoryPath && (
+                                  <Tooltip label={`History for ${activeFileHistoryPath}`}>
+                                    <ActionIcon
+                                      size="sm"
+                                      variant="subtle"
+                                      color="gray"
+                                      aria-label={`Show history for ${activeFileHistoryPath}`}
+                                      onClick={() => void openFileHistory(activeFileHistoryPath)}
+                                    >
+                                      <IconGitCommit size={16} />
+                                    </ActionIcon>
+                                  </Tooltip>
+                                )}
+                                {filesPanelTab === 'files' && workingTreeView === 'code' &&
+                                  workingTreeContent !== null && (
+                                  <CopyButton value={workingTreeContent} timeout={1600}>
+                                    {({ copied, copy }) => (
+                                      <Tooltip label={copied ? 'Copied' : 'Copy current file'}>
+                                        <ActionIcon
+                                          size="sm"
+                                          variant="subtle"
+                                          color={copied ? 'teal' : 'gray'}
+                                          aria-label={copied ? 'File copied' : 'Copy current file'}
+                                          onClick={copy}
+                                        >
+                                          {copied ? <IconCheck size={15} /> : <IconCopy size={15} />}
+                                        </ActionIcon>
+                                      </Tooltip>
+                                    )}
+                                  </CopyButton>
+                                )}
+                                <Tooltip label={`Hide ${filesPanelTab === 'files' ? 'preview' : 'diff'} pane`}>
                                   <ActionIcon
                                     size="sm"
                                     variant="subtle"
                                     color="gray"
-                                    aria-label="Hide diff pane"
+                                    aria-label={`Hide ${filesPanelTab === 'files' ? 'preview' : 'diff'} pane`}
                                     onClick={() => setDiffVisible(false)}
                                   >
                                     <IconLayoutSidebarRightCollapse size={16} />
@@ -4436,7 +6017,83 @@ export function App() {
                                 </Tooltip>
                               </div>
 
-                              {diffText !== null ? (
+                              {filesPanelTab === 'files' ? (
+                                workingTreeContentLoading ? (
+                                  <div className="scm-diff-empty">
+                                    <Loader size="sm" />
+                                    <Text size="xs" c="dimmed">Reading current file…</Text>
+                                  </div>
+                                ) : workingTreeContentError && selectedWorkingTreeFile &&
+                                  workingTreeContent === null && workingTreePreview === null ? (
+                                  <div className="working-tree-preview-error">
+                                    <Alert color="red" icon={<IconAlertCircle size={16} />}>
+                                      {workingTreeContentError}
+                                    </Alert>
+                                  </div>
+                                ) : workingTreeView === 'preview' &&
+                                  (selectedWorkingTreePreviewKind === 'html' ||
+                                    selectedWorkingTreePreviewKind === 'svg') &&
+                                  workingTreeContent !== null ? (
+                                  <iframe
+                                    className="working-tree-document-preview"
+                                    title={`Preview of ${selectedWorkingTreeFile ?? 'file'}`}
+                                    sandbox=""
+                                    referrerPolicy="no-referrer"
+                                    srcDoc={sandboxedTextPreview(
+                                      selectedWorkingTreePreviewKind,
+                                      workingTreeContent,
+                                    )}
+                                  />
+                                ) : workingTreeView === 'preview' &&
+                                  selectedWorkingTreePreviewKind === 'pdf' && workingTreePreview ? (
+                                  <object
+                                    className="working-tree-pdf-preview"
+                                    data={workingTreePreview.dataUrl}
+                                    type={workingTreePreview.mimeType}
+                                    aria-label={`Preview of ${selectedWorkingTreeFile ?? 'PDF'}`}
+                                  >
+                                    <div className="scm-diff-empty">
+                                      <IconFileTypePdf size={30} stroke={1.4} />
+                                      <Text size="sm" fw={650}>PDF preview is unavailable</Text>
+                                    </div>
+                                  </object>
+                                ) : workingTreeView === 'preview' &&
+                                  selectedWorkingTreePreviewKind === 'image' && workingTreePreview ? (
+                                  <div className="working-tree-media-preview">
+                                    <img
+                                      src={workingTreePreview.dataUrl}
+                                      alt={`Preview of ${selectedWorkingTreeFile ?? 'image'}`}
+                                    />
+                                  </div>
+                                ) : workingTreeView === 'preview' &&
+                                  selectedWorkingTreePreviewKind === 'audio' && workingTreePreview ? (
+                                  <div className="working-tree-media-preview">
+                                    <audio controls src={workingTreePreview.dataUrl}>
+                                      Audio preview is unavailable.
+                                    </audio>
+                                  </div>
+                                ) : workingTreeView === 'preview' &&
+                                  selectedWorkingTreePreviewKind === 'video' && workingTreePreview ? (
+                                  <div className="working-tree-media-preview">
+                                    <video controls src={workingTreePreview.dataUrl}>
+                                      Video preview is unavailable.
+                                    </video>
+                                  </div>
+                                ) : workingTreeContent !== null ? (
+                                  <ReadOnlyMonaco
+                                    path={selectedWorkingTreeFile ?? 'untitled.txt'}
+                                    value={workingTreeContent}
+                                  />
+                                ) : (
+                                  <div className="scm-diff-empty">
+                                    <IconFileCode size={30} stroke={1.4} />
+                                    <Text size="sm" fw={650}>Select a current file</Text>
+                                    <Text size="xs" c="dimmed">
+                                      Its complete working-tree contents will open here.
+                                    </Text>
+                                  </div>
+                                )
+                              ) : diffText !== null ? (
                                 <div className="scm-diff-code" role="table" aria-label={diffTitle ?? 'File diff'}>
                                   {parseUnifiedDiff(diffText).map((line, index) => (
                                     <div className="scm-diff-line" data-kind={line.kind} role="row" key={index}>
@@ -5547,6 +7204,358 @@ export function App() {
       </Modal>
 
       <Modal
+        opened={Boolean(workingCopyRepository)}
+        onClose={() => {
+          if (workingCopyAction && workingCopyAction !== 'loading') return
+          setWorkingCopyRepository(null)
+          setWorkingCopyError(null)
+          void window.desktop?.repositories.monitor(monitoredPaths)
+        }}
+        title={workingCopyRepository
+          ? `Working copies · ${workingCopyRepository.fullName}`
+          : 'Working copies'}
+        size="xl"
+        centered
+        closeOnClickOutside={!workingCopyAction || workingCopyAction === 'loading'}
+        closeOnEscape={!workingCopyAction || workingCopyAction === 'loading'}
+      >
+        <Stack gap="md">
+          <Alert color="blue" variant="light" icon={<IconCopy size={17} />}>
+            Each folder has independent branches and changes. The preferred copy powers the main
+            repository card; a workspace can choose a different copy without changing that default.
+          </Alert>
+          {workingCopyError && (
+            <Alert color="red" icon={<IconAlertCircle size={17} />}>{workingCopyError}</Alert>
+          )}
+
+          <Paper className="working-copy-create" radius="md">
+            <Text size="sm" fw={700}>Add another working copy</Text>
+            <Group grow align="flex-start" mt="sm">
+              <TextInput
+                label="Label"
+                description="Optional friendly name"
+                placeholder="Release, Client A, Experiment…"
+                value={workingCopyLabelDraft}
+                maxLength={80}
+                disabled={Boolean(workingCopyAction)}
+                onChange={(event) => setWorkingCopyLabelDraft(event.currentTarget.value)}
+              />
+              <TextInput
+                label="Clone folder name"
+                description="Used inside the destination you choose"
+                value={workingCopyFolderDraft}
+                maxLength={180}
+                disabled={Boolean(workingCopyAction)}
+                onChange={(event) => setWorkingCopyFolderDraft(event.currentTarget.value)}
+              />
+            </Group>
+            <Group gap="xs" mt="md" wrap="wrap">
+              <Button
+                size="xs"
+                leftSection={<IconDownload size={14} />}
+                loading={workingCopyAction === 'clone'}
+                disabled={Boolean(workingCopyAction) || workingCopyRepository?.archived}
+                onClick={() => void cloneAnotherWorkingCopy()}
+              >
+                Clone elsewhere
+              </Button>
+              <Button
+                size="xs"
+                variant="light"
+                leftSection={<IconFolderSearch size={14} />}
+                loading={workingCopyAction === 'locate'}
+                disabled={Boolean(workingCopyAction)}
+                onClick={() => void locateAnotherWorkingCopy()}
+              >
+                Register existing folder
+              </Button>
+            </Group>
+          </Paper>
+
+          {workingCopies.some((copy) => copy.available) && (
+            <Paper className="working-copy-create" radius="md">
+              <Group gap="sm" wrap="nowrap">
+                <IconGitFork size={18} />
+                <div>
+                  <Text size="sm" fw={700}>Create Git worktree</Text>
+                  <Text size="xs" c="dimmed">A lightweight second checkout sharing Git objects.</Text>
+                </div>
+              </Group>
+              <Group grow align="flex-start" mt="sm">
+                <TextInput
+                  label="Branch"
+                  placeholder="feature/my-change"
+                  value={worktreeBranch}
+                  disabled={Boolean(workingCopyAction)}
+                  onChange={(event) => setWorktreeBranch(event.currentTarget.value)}
+                />
+                <Switch
+                  mt={27}
+                  checked={worktreeCreateBranch}
+                  disabled={Boolean(workingCopyAction)}
+                  label="Create a new branch"
+                  onChange={(event) => setWorktreeCreateBranch(event.currentTarget.checked)}
+                />
+              </Group>
+              <Button
+                size="xs"
+                mt="sm"
+                variant="light"
+                leftSection={<IconGitFork size={14} />}
+                loading={workingCopyAction === 'worktree'}
+                disabled={Boolean(workingCopyAction) || !worktreeBranch.trim()}
+                onClick={() => void createManagedWorktree()}
+              >
+                Create worktree
+              </Button>
+            </Paper>
+          )}
+
+          <Group justify="space-between">
+            <Text size="sm" fw={700}>
+              {workingCopies.length} registered {workingCopies.length === 1 ? 'copy' : 'copies'}
+            </Text>
+            {workingCopyAction === 'loading' && <Loader size="sm" />}
+          </Group>
+          {workingCopies.length === 0 ? (
+            <Paper className="working-copy-empty" radius="md">
+              <Text size="sm" c="dimmed">No local working copies are registered yet.</Text>
+            </Paper>
+          ) : (
+            <Stack gap="sm">
+              {workingCopies.map((copy) => {
+                const repositoryKey = workingCopyRepository
+                  ? repositoryOrganizationKey(workingCopyRepository)
+                  : ''
+                const selectedForWorkspace = selectedWorkspaceId &&
+                  workspaceWorkingCopySelections[repositoryKey] === copy.id
+                const copyStatus = gitStatuses[copy.path]
+                return (
+                  <Paper
+                    className="working-copy-card"
+                    data-missing={!copy.available || undefined}
+                    radius="md"
+                    key={copy.id}
+                  >
+                    <Group justify="space-between" align="flex-start" wrap="nowrap">
+                      <div className="working-copy-identity">
+                        <Group gap={7} wrap="wrap">
+                          <Badge size="xs" color={copy.type === 'worktree' ? 'violet' : 'gray'}>
+                            {copy.type}
+                          </Badge>
+                          {copy.preferred && <Badge size="xs" color="teal">Preferred</Badge>}
+                          {!copy.available && <Badge size="xs" color="red">Missing</Badge>}
+                          {selectedForWorkspace && <Badge size="xs" color="blue">Workspace copy</Badge>}
+                        </Group>
+                        <Text size="xs" c="dimmed" mt={7} title={copy.path}>{copy.path}</Text>
+                        {copy.available && copyStatus && !copyStatus.error && (
+                          <Group gap={8} mt={6} wrap="wrap">
+                            <Text size="xs"><IconGitBranch size={12} /> {copyStatus.branch ?? 'Detached HEAD'}</Text>
+                            {!copyStatus.clean && (
+                              <Text size="xs" c="orange.4">
+                                {copyStatus.staged + copyStatus.unstaged + copyStatus.untracked + copyStatus.conflicts} changes
+                              </Text>
+                            )}
+                            {copyStatus.ahead > 0 && <Text size="xs" c="teal.4">↑ {copyStatus.ahead}</Text>}
+                            {copyStatus.behind > 0 && <Text size="xs" c="yellow.4">↓ {copyStatus.behind}</Text>}
+                          </Group>
+                        )}
+                      </div>
+                      <Group gap={5} wrap="nowrap">
+                        {copy.available ? (
+                          <>
+                            <Tooltip label="Open folder">
+                              <ActionIcon
+                                variant="subtle"
+                                color="gray"
+                                onClick={() => void window.desktop?.repositories.openFolder(copy.path)}
+                              >
+                                <IconFolderOpen size={16} />
+                              </ActionIcon>
+                            </Tooltip>
+                            <Tooltip label="Open in VS Code">
+                              <ActionIcon
+                                variant="subtle"
+                                color="gray"
+                                onClick={() => void openRepositoryInVSCode(copy.path)}
+                              >
+                                <IconBrandVscode size={16} />
+                              </ActionIcon>
+                            </Tooltip>
+                          </>
+                        ) : (
+                          <Button
+                            size="compact-xs"
+                            variant="light"
+                            loading={workingCopyAction === `relocate:${copy.id}`}
+                            disabled={Boolean(workingCopyAction)}
+                            onClick={() => void relocateManagedWorkingCopy(copy)}
+                          >
+                            Locate moved folder
+                          </Button>
+                        )}
+                      </Group>
+                    </Group>
+                    <Group gap="xs" mt="sm" align="flex-end" wrap="wrap">
+                      <TextInput
+                        className="working-copy-label-input"
+                        label="Label"
+                        value={workingCopyLabels[copy.id] ?? copy.label}
+                        maxLength={80}
+                        disabled={Boolean(workingCopyAction)}
+                        onChange={(event) => setWorkingCopyLabels((current) => ({
+                          ...current,
+                          [copy.id]: event.currentTarget.value,
+                        }))}
+                      />
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        color="gray"
+                        loading={workingCopyAction === `label:${copy.id}`}
+                        disabled={Boolean(workingCopyAction) ||
+                          (workingCopyLabels[copy.id] ?? copy.label).trim() === copy.label}
+                        onClick={() => void saveWorkingCopyLabel(copy)}
+                      >
+                        Save label
+                      </Button>
+                      {!copy.preferred && (
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          color="gray"
+                          loading={workingCopyAction === `prefer:${copy.id}`}
+                          disabled={Boolean(workingCopyAction)}
+                          onClick={() => void preferWorkingCopy(copy)}
+                        >
+                          Make preferred
+                        </Button>
+                      )}
+                      {repositoryTab === 'workspace' && selectedWorkspaceId && (
+                        <Button
+                          size="xs"
+                          variant={selectedForWorkspace ? 'light' : 'subtle'}
+                          color={selectedForWorkspace ? 'blue' : 'gray'}
+                          loading={workingCopyAction === `workspace:${copy.id}`}
+                          disabled={Boolean(workingCopyAction) || !copy.available || selectedForWorkspace}
+                          onClick={() => void chooseWorkingCopyForWorkspace(copy)}
+                        >
+                          {selectedForWorkspace ? 'Used by workspace' : 'Use for workspace'}
+                        </Button>
+                      )}
+                      <Menu position="bottom-end" withinPortal>
+                        <Menu.Target>
+                          <Button size="xs" variant="subtle" color="gray">More</Button>
+                        </Menu.Target>
+                        <Menu.Dropdown>
+                          {copy.available && copyStatus?.upstream && (
+                            <Menu.Item
+                              leftSection={<IconRefresh size={15} />}
+                              onClick={() => void syncManagedWorkingCopy(copy)}
+                            >
+                              Sync this copy
+                            </Menu.Item>
+                          )}
+                          {copy.available && workingCopyRepository && (
+                            <Menu.Item
+                              leftSection={<IconGitCommit size={15} />}
+                              onClick={() => {
+                                setWorkingCopyRepository(null)
+                                void window.desktop?.repositories.monitor(monitoredPaths)
+                                void openGitPanel({ ...workingCopyRepository, localPath: copy.path })
+                              }}
+                            >
+                              Open files and history
+                            </Menu.Item>
+                          )}
+                          <Menu.Item
+                            leftSection={<IconUnlink size={15} />}
+                            onClick={() => void detachManagedWorkingCopy(copy)}
+                          >
+                            Detach from MyRepos
+                          </Menu.Item>
+                          <Menu.Divider />
+                          <Menu.Item
+                            color="red"
+                            leftSection={<IconTrash size={15} />}
+                            onClick={() => void trashManagedWorkingCopy(copy)}
+                          >
+                            Move folder to Trash
+                          </Menu.Item>
+                        </Menu.Dropdown>
+                      </Menu>
+                    </Group>
+                  </Paper>
+                )
+              })}
+            </Stack>
+          )}
+          <Group justify="flex-end">
+            <Button
+              variant="subtle"
+              color="gray"
+              disabled={Boolean(workingCopyAction) && workingCopyAction !== 'loading'}
+              onClick={() => {
+                setWorkingCopyRepository(null)
+                void window.desktop?.repositories.monitor(monitoredPaths)
+              }}
+            >
+              Close
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={Boolean(workspaceProvisionResult)}
+        onClose={() => setWorkspaceProvisionResult(null)}
+        title="Workspace checkout complete"
+        size="lg"
+        centered
+      >
+        <Stack gap="md">
+          <Alert
+            color={workspaceProvisionResult?.results.some((result) => result.status === 'error')
+              ? 'yellow'
+              : 'teal'}
+            icon={<IconFolderPlus size={17} />}
+          >
+            Checkout root: {workspaceProvisionResult?.rootPath}
+          </Alert>
+          <Paper className="workspace-provision-results" radius="md">
+            {workspaceProvisionResult?.results.map((result) => (
+              <Group justify="space-between" wrap="nowrap" key={result.repositoryKey}>
+                <div>
+                  <Text size="sm" fw={600}>{result.fullName}</Text>
+                  {result.message && <Text size="xs" c="red.4">{result.message}</Text>}
+                </div>
+                <Badge color={result.status === 'error'
+                  ? 'red'
+                  : result.status === 'cloned' ? 'teal' : 'blue'}>
+                  {result.status}
+                </Badge>
+              </Group>
+            ))}
+          </Paper>
+          <Group justify="space-between">
+            {workspaceProvisionResult?.workspaceId ? (
+              <Button
+                variant="light"
+                leftSection={<IconFileCode size={15} />}
+                onClick={() => {
+                  setWorkspaceProvisionResult(null)
+                  void generateWorkspaceFile()
+                }}
+              >
+                Generate VS Code workspace
+              </Button>
+            ) : <span />}
+            <Button onClick={() => setWorkspaceProvisionResult(null)}>Done</Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
         opened={configurationSetupOpen}
         onClose={() => {
           if (configurationSyncAction === 'setup') return
@@ -5822,15 +7831,29 @@ export function App() {
               allowDeselect={false}
               disabled={bulkGitRunning}
               data={[
+                ...(bulkPushNeededPaths.length > 0 ? [{
+                  value: 'push-needed',
+                  label: `Repositories from push indicator (${bulkPushNeededPaths.length})`,
+                }] : []),
                 {
                   value: 'visible',
-                  label: `Visible local repositories (${visibleLocalRepositories.length})`,
+                  label: `Preferred copies of visible repositories (${visibleLocalRepositories.length})`,
                   disabled: visibleLocalRepositories.length === 0,
                 },
                 {
                   value: 'selected',
-                  label: `Selected local repositories (${selectedLocalRepositories.length})`,
+                  label: `Preferred copies of selected repositories (${selectedLocalRepositories.length})`,
                   disabled: selectedLocalRepositories.length === 0,
+                },
+                {
+                  value: 'visible-copies',
+                  label: `All working copies of visible repositories (${repositoriesWithAllCopies(visibleRepositories).length})`,
+                  disabled: repositoriesWithAllCopies(visibleRepositories).length === 0,
+                },
+                {
+                  value: 'selected-copies',
+                  label: `All working copies of selected repositories (${repositoriesWithAllCopies(selectedRepositories).length})`,
+                  disabled: repositoriesWithAllCopies(selectedRepositories).length === 0,
                 },
               ]}
               onChange={(value) => {
@@ -5857,10 +7880,22 @@ export function App() {
             />
           </Group>
 
-          <Alert color="blue" variant="light" icon={<IconRefresh size={17} />}>
-            Repositories with conflicts, unsupported remotes, or blocking local changes may fail.
-            The queue will continue and report each result.
-          </Alert>
+          {bulkGitCompleted && bulkGitFailedKeys.size === 0 ? (
+            <Alert color="teal" variant="light" icon={<IconCheck size={17} />}>
+              All {bulkGitResults.length} {bulkGitResults.length === 1 ? 'repository' : 'repositories'}
+              {' '}{bulkGitOperationLabel[bulkGitOperation].toLowerCase()}ed successfully.
+            </Alert>
+          ) : bulkGitCompleted ? (
+            <Alert color="red" variant="light" icon={<IconAlertCircle size={17} />}>
+              {bulkGitFailedKeys.size} {bulkGitFailedKeys.size === 1 ? 'repository failed' : 'repositories failed'}.
+              Review the error details below or retry only the failures.
+            </Alert>
+          ) : (
+            <Alert color="blue" variant="light" icon={<IconRefresh size={17} />}>
+              Repositories with conflicts, unsupported remotes, or blocking local changes may fail.
+              The queue will continue and report each result.
+            </Alert>
+          )}
 
           {bulkGitResults.length > 0 && (
             <Paper className="bulk-git-results" radius="md">
@@ -5909,7 +7944,7 @@ export function App() {
             <Text size="xs" c="dimmed">
               {bulkGitRepositories.length} local {bulkGitRepositories.length === 1
                 ? 'repository'
-                : 'repositories'} will be processed
+                : 'repositories'} {bulkGitCompleted ? 'processed' : 'will be processed'}
             </Text>
             <Group gap="xs" wrap="nowrap">
               <Button
@@ -5924,12 +7959,27 @@ export function App() {
                 Close
               </Button>
               <Button
-                leftSection={<IconRefresh size={16} />}
+                leftSection={bulkGitCompleted && bulkGitFailedKeys.size === 0
+                  ? <IconCheck size={16} />
+                  : <IconRefresh size={16} />}
                 loading={bulkGitRunning}
                 disabled={bulkGitRepositories.length === 0}
-                onClick={() => void runBulkGitOperation()}
+                onClick={() => {
+                  if (bulkGitCompleted && bulkGitFailedKeys.size === 0) {
+                    setBulkGitOpen(false)
+                    setBulkGitResults([])
+                  } else if (bulkGitCompleted) {
+                    void runBulkGitOperation(bulkGitRetryRepositories, bulkGitOperation)
+                  } else {
+                    void runBulkGitOperation()
+                  }
+                }}
               >
-                {bulkGitOperationLabel[bulkGitOperation]} repositories
+                {bulkGitCompleted && bulkGitFailedKeys.size === 0
+                  ? 'Done'
+                  : bulkGitCompleted
+                    ? `Retry ${bulkGitFailedKeys.size} failed`
+                    : `${bulkGitOperationLabel[bulkGitOperation]} repositories`}
               </Button>
             </Group>
           </Group>
@@ -6550,6 +8600,15 @@ export function App() {
                           </Group>
                         </div>
                         <Group gap={5} wrap="nowrap">
+                          <Button
+                            size="compact-xs"
+                            variant="subtle"
+                            color="gray"
+                            disabled={Boolean(gitAction)}
+                            onClick={() => void openFileHistory(file.path)}
+                          >
+                            History
+                          </Button>
                           {(file.unstaged || file.untracked) && (
                             <Button
                               size="compact-xs"
@@ -6666,6 +8725,622 @@ export function App() {
             ) : null}
           </Stack>
         )}
+      </Modal>
+
+      <Modal
+        opened={Boolean(fileHistoryFile)}
+        onClose={() => {
+          if (fileHistoryAction) return
+          setFileHistoryFile(null)
+          setFileHistoryError(null)
+          setFileHistoryNotice(null)
+          setFileHistoryText(null)
+        }}
+        title={`File history · ${fileHistoryFile ?? ''}`}
+        size="95vw"
+        centered
+        closeOnClickOutside={!fileHistoryAction}
+        closeOnEscape={!fileHistoryAction}
+      >
+        <div className="file-history-layout">
+          <section className="file-history-revisions">
+            <div className="file-history-section-header">
+              <div>
+                <Text size="sm" fw={700}>Revisions</Text>
+                <Text size="10px" c="dimmed">Rename-aware · newest first</Text>
+              </div>
+              <Badge size="xs" variant="light" color="gray">{fileHistoryRevisions.length}</Badge>
+            </div>
+            <div className="file-history-revision-list">
+              {fileHistoryLoading ? (
+                <Group justify="center" p="xl"><Loader size="sm" /></Group>
+              ) : fileHistoryRevisions.length === 0 ? (
+                <Text size="sm" c="dimmed" p="xl" ta="center">
+                  No committed history exists for this file yet.
+                </Text>
+              ) : fileHistoryRevisions.map((revision) => (
+                <UnstyledButton
+                  className="file-history-revision"
+                  data-selected={fileHistoryRevisionHash === revision.hash || undefined}
+                  data-compare={fileHistoryCompareHash === revision.hash || undefined}
+                  style={{ borderLeftColor: committerColor(revision.authorEmail) }}
+                  disabled={Boolean(fileHistoryAction)}
+                  key={`${revision.hash}:${revision.path}`}
+                  onClick={() => void showFileRevision(revision, 'diff')}
+                >
+                  <div className="file-history-revision-title">
+                    <Text size="xs" fw={650} lineClamp={2}>{revision.subject}</Text>
+                    <Badge
+                      size="xs"
+                      variant="light"
+                      color={revision.status === 'A'
+                        ? 'teal'
+                        : revision.status === 'D'
+                          ? 'red'
+                          : revision.status === 'R'
+                            ? 'violet'
+                            : 'blue'}
+                    >
+                      {revision.status}
+                    </Badge>
+                  </div>
+                  <Group gap={7} mt={4} wrap="nowrap">
+                    <Text size="10px" c="teal.4">{revision.shortHash}</Text>
+                    <Avatar
+                      className="scm-committer-avatar"
+                      size={22}
+                      radius="xl"
+                      src={revision.authorAvatarUrl}
+                      data-image={revision.authorAvatarUrl ? true : undefined}
+                      title={revision.authorLogin ? `@${revision.authorLogin}` : revision.authorEmail}
+                      style={revision.authorAvatarUrl ? undefined : {
+                        backgroundColor: committerColor(revision.authorEmail),
+                      }}
+                    >
+                      {revision.author.trim()[0]?.toUpperCase() ?? '?'}
+                    </Avatar>
+                    <Text size="10px" truncate style={{ color: committerColor(revision.authorEmail) }}>
+                      {revision.author}
+                    </Text>
+                  </Group>
+                  <div className="scm-history-timeline">
+                    <span><strong>Committed</strong> {historyDateTime(revision.committedAt)}</span>
+                    <span className={revision.unpushed ? 'scm-history-push-state--pending' : undefined}>
+                      <strong>{revision.unpushed ? 'Not pushed' : 'Pushed'}</strong>
+                      {!revision.unpushed && ` ${revision.pushedAt
+                        ? historyDateTime(revision.pushedAt)
+                        : '· time unavailable'}`}
+                    </span>
+                  </div>
+                  {revision.previousPath && (
+                    <Text size="10px" c="violet.3" mt={4} truncate>
+                      {revision.previousPath} → {revision.path}
+                    </Text>
+                  )}
+                  {fileHistoryCompareHash === revision.hash && (
+                    <Text size="10px" c="yellow.4" mt={4}>Comparison base</Text>
+                  )}
+                </UnstyledButton>
+              ))}
+            </div>
+          </section>
+
+          <section className="file-history-viewer">
+            <div className="file-history-toolbar">
+              <div className="file-history-toolbar-title">
+                <Text size="sm" fw={700} truncate>
+                  {selectedFileRevision
+                    ? `${selectedFileRevision.shortHash} · ${selectedFileRevision.path}`
+                    : fileHistoryFile}
+                </Text>
+                {selectedFileRevision && (
+                  <Text size="10px" c="dimmed">
+                    {historyDateTime(selectedFileRevision.committedAt)} · {selectedFileRevision.author}
+                  </Text>
+                )}
+              </div>
+              {selectedFileRevision && (
+                <Group gap={5} wrap="wrap">
+                  <Button
+                    size="compact-xs"
+                    variant={fileHistoryView === 'diff' ? 'light' : 'subtle'}
+                    disabled={Boolean(fileHistoryAction)}
+                    onClick={() => void showFileRevision(selectedFileRevision, 'diff')}
+                  >
+                    Commit diff
+                  </Button>
+                  <Button
+                    size="compact-xs"
+                    variant={fileHistoryView === 'content' ? 'light' : 'subtle'}
+                    disabled={Boolean(fileHistoryAction) || selectedFileRevision.status === 'D'}
+                    onClick={() => void showFileRevision(selectedFileRevision, 'content')}
+                  >
+                    Full file
+                  </Button>
+                  {fileHistoryView === 'content' && fileHistoryText !== null && (
+                    <CopyButton value={fileHistoryText} timeout={1600}>
+                      {({ copied, copy }) => (
+                        <Button
+                          size="compact-xs"
+                          variant="subtle"
+                          color={copied ? 'teal' : 'gray'}
+                          leftSection={copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
+                          disabled={Boolean(fileHistoryAction)}
+                          onClick={copy}
+                        >
+                          {copied ? 'Copied' : 'Copy file'}
+                        </Button>
+                      )}
+                    </CopyButton>
+                  )}
+                  {fileHistoryCompareHash !== selectedFileRevision.hash && (
+                    <Button
+                      size="compact-xs"
+                      variant="subtle"
+                      color="gray"
+                      disabled={Boolean(fileHistoryAction) || selectedFileRevision.status === 'D'}
+                      onClick={() => setFileHistoryCompareHash(selectedFileRevision.hash)}
+                    >
+                      Set compare base
+                    </Button>
+                  )}
+                  {compareFileRevision && compareFileRevision.hash !== selectedFileRevision.hash && (
+                    <Button
+                      size="compact-xs"
+                      variant={fileHistoryView === 'compare' ? 'light' : 'subtle'}
+                      color="yellow"
+                      loading={fileHistoryAction === 'compare'}
+                      disabled={Boolean(fileHistoryAction) || selectedFileRevision.status === 'D' ||
+                        compareFileRevision.status === 'D'}
+                      onClick={() => void compareFileRevisions()}
+                    >
+                      Compare with {compareFileRevision.shortHash}
+                    </Button>
+                  )}
+                  {compareFileRevision && (
+                    <Tooltip label="Clear comparison base">
+                      <ActionIcon
+                        size="sm"
+                        variant="subtle"
+                        color="gray"
+                        disabled={Boolean(fileHistoryAction)}
+                        onClick={() => setFileHistoryCompareHash(null)}
+                      >
+                        <IconX size={14} />
+                      </ActionIcon>
+                    </Tooltip>
+                  )}
+                  <Menu withinPortal position="bottom-end">
+                    <Menu.Target>
+                      <Button size="compact-xs" variant="subtle" color="gray" disabled={Boolean(fileHistoryAction)}>
+                        Actions
+                      </Button>
+                    </Menu.Target>
+                    <Menu.Dropdown>
+                      <Menu.Item onClick={() => requestCheckout({
+                        kind: 'commit',
+                        ref: selectedFileRevision.hash,
+                        name: selectedFileRevision.shortHash,
+                      })}>
+                        Checkout commit…
+                      </Menu.Item>
+                      <Menu.Item onClick={() => {
+                        const hash = selectedFileRevision.hash
+                        setFileHistoryFile(null)
+                        openBranchManager(hash)
+                      }}>
+                        Create branch from commit…
+                      </Menu.Item>
+                      <Menu.Divider />
+                      <Menu.Item
+                        color="orange"
+                        disabled={selectedFileRevision.status === 'D'}
+                        onClick={() => void restoreFileRevision()}
+                      >
+                        Restore this file version…
+                      </Menu.Item>
+                    </Menu.Dropdown>
+                  </Menu>
+                </Group>
+              )}
+            </div>
+
+            {fileHistoryError && (
+              <Alert className="file-history-error" color="red" icon={<IconAlertCircle size={17} />}>
+                {fileHistoryError}
+              </Alert>
+            )}
+            {fileHistoryNotice && (
+              <Alert className="file-history-error" color="teal" icon={<IconCheck size={17} />}>
+                {fileHistoryNotice}
+              </Alert>
+            )}
+            {fileHistoryAction && (
+              <Progress size="xs" value={100} animated color="teal" />
+            )}
+            <div className="file-history-code">
+              {fileHistoryText === null ? (
+                <div className="scm-diff-empty">
+                  <IconGitCommit size={30} stroke={1.4} />
+                  <Text size="sm" fw={650}>Select a file revision</Text>
+                  <Text size="xs" c="dimmed">Its commit diff or complete contents will appear here.</Text>
+                </div>
+              ) : fileHistoryView === 'content' ? (
+                <ReadOnlyMonaco
+                  path={selectedFileRevision?.path ?? fileHistoryFile ?? 'historical-file.txt'}
+                  value={fileHistoryText}
+                />
+              ) : (
+                <div className="scm-diff-code" role="table" aria-label="Historical file diff">
+                  {parseUnifiedDiff(fileHistoryText).map((line, index) => (
+                    <div className="scm-diff-line" data-kind={line.kind} role="row" key={index}>
+                      <span className="scm-line-number">{line.oldLine ?? ''}</span>
+                      <span className="scm-line-number">{line.newLine ?? ''}</span>
+                      <span className="scm-line-marker">
+                        {line.kind === 'add' ? '+' : line.kind === 'delete' ? '−' : ''}
+                      </span>
+                      <code>{line.text || ' '}</code>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      </Modal>
+
+      <Modal
+        opened={branchManagerOpen}
+        onClose={() => {
+          if (branchAction) return
+          setBranchManagerOpen(false)
+          setBranchError(null)
+          setBranchNotice(null)
+        }}
+        title={`Branches · ${gitRepository?.fullName ?? ''}`}
+        size="lg"
+        centered
+        closeOnClickOutside={!branchAction}
+        closeOnEscape={!branchAction}
+      >
+        <Stack gap="md">
+          <Paper className="branch-current" radius="md">
+            <Group justify="space-between" align="center" wrap="wrap">
+              <div>
+                <Text size="10px" c="dimmed" tt="uppercase" fw={750}>Current checkout</Text>
+                <Group gap={7} mt={3} wrap="wrap">
+                  <IconGitBranch size={16} />
+                  <Text size="sm" fw={700}>
+                    {branchState?.currentBranch ?? `Detached at ${branchState?.currentCommit.slice(0, 7) ?? 'commit'}`}
+                  </Text>
+                  {branchState?.currentBranch && branchState.branches.find((branch) => branch.current)?.upstream && (
+                    <Badge size="xs" variant="light" color="teal">
+                      {branchState.branches.find((branch) => branch.current)?.upstream}
+                    </Badge>
+                  )}
+                </Group>
+              </div>
+              <Group gap="xs" wrap="wrap">
+                {Boolean(branchState?.stashCount) && (
+                  <Button
+                    size="xs"
+                    variant="subtle"
+                    color="gray"
+                    leftSection={<IconRestore size={14} />}
+                    loading={branchAction === 'stash-pop'}
+                    disabled={Boolean(branchAction)}
+                    onClick={() => void restoreLatestStash()}
+                  >
+                    Restore latest stash ({branchState?.stashCount})
+                  </Button>
+                )}
+                {branchState?.currentBranch && (
+                  <Button
+                    size="xs"
+                    variant="light"
+                    leftSection={<IconUpload size={14} />}
+                    loading={branchAction === 'publish'}
+                    disabled={Boolean(branchAction)}
+                    onClick={() => void publishCurrentBranch()}
+                  >
+                    {branchState.branches.find((branch) => branch.current)?.upstream
+                      ? 'Push branch'
+                      : 'Publish branch'}
+                  </Button>
+                )}
+              </Group>
+            </Group>
+          </Paper>
+
+          {branchError && <Alert color="red" icon={<IconAlertCircle size={17} />}>{branchError}</Alert>}
+          {branchNotice && <Alert color="teal" icon={<IconCheck size={17} />}>{branchNotice}</Alert>}
+
+          <Group gap="xs" wrap="nowrap">
+            <TextInput
+              className="branch-search"
+              aria-label="Search branches"
+              placeholder="Search local and remote branches"
+              leftSection={<IconSearch size={15} />}
+              value={branchSearch}
+              disabled={Boolean(branchAction)}
+              onChange={(event) => setBranchSearch(event.currentTarget.value)}
+            />
+            <Button
+              size="xs"
+              variant="subtle"
+              color="gray"
+              leftSection={<IconRefresh size={14} />}
+              loading={branchAction === 'fetch'}
+              disabled={Boolean(branchAction)}
+              onClick={() => void loadBranches(true)}
+            >
+              Fetch
+            </Button>
+            <Button
+              size="xs"
+              leftSection={<IconPlus size={14} />}
+              disabled={Boolean(branchAction)}
+              onClick={() => {
+                setBranchCreateVisible((visible) => !visible)
+                setBranchCreateStart('HEAD')
+              }}
+            >
+              New branch
+            </Button>
+          </Group>
+
+          {branchCreateVisible && (
+            <Paper className="branch-create" radius="md">
+              <Text size="sm" fw={700}>Create branch</Text>
+              <Group grow align="flex-start" mt="sm">
+                <TextInput
+                  label="Branch name"
+                  placeholder="feature/my-change"
+                  value={branchCreateName}
+                  maxLength={240}
+                  disabled={Boolean(branchAction)}
+                  onChange={(event) => setBranchCreateName(event.currentTarget.value)}
+                />
+                <Select
+                  label="Start from"
+                  searchable
+                  allowDeselect={false}
+                  value={branchCreateStart}
+                  data={branchStartOptions}
+                  disabled={Boolean(branchAction)}
+                  onChange={(value) => setBranchCreateStart(value ?? 'HEAD')}
+                />
+              </Group>
+              <Group justify="space-between" mt="sm">
+                <Switch
+                  size="sm"
+                  checked={branchCreateCheckout}
+                  disabled={Boolean(branchAction)}
+                  label="Checkout after creating"
+                  onChange={(event) => setBranchCreateCheckout(event.currentTarget.checked)}
+                />
+                <Button
+                  size="xs"
+                  loading={branchAction === 'create'}
+                  disabled={Boolean(branchAction) || !branchCreateName.trim()}
+                  onClick={() => void createBranch()}
+                >
+                  Create branch
+                </Button>
+              </Group>
+            </Paper>
+          )}
+
+          <div className="branch-list">
+            {branchAction === 'loading' && !branchState ? (
+              <Group justify="center" p="xl"><Loader size="sm" /></Group>
+            ) : filteredBranches.length === 0 ? (
+              <Text size="sm" c="dimmed" p="lg" ta="center">No matching branches.</Text>
+            ) : (['local', 'remote'] as const).map((kind) => {
+              const items = filteredBranches.filter((branch) => branch.kind === kind)
+              if (items.length === 0) return null
+              return (
+                <div key={kind} className="branch-section">
+                  <Text className="branch-section-label" size="10px" fw={750} c="dimmed">
+                    {kind === 'local' ? 'Local branches' : 'Remote branches'} · {items.length}
+                  </Text>
+                  {items.map((branch) => {
+                    const occupiedElsewhere = Boolean(branch.checkedOutPath &&
+                      branch.checkedOutPath !== gitRepository?.localPath && !branch.current)
+                    return (
+                      <div className="branch-row" key={branch.ref} data-current={branch.current || undefined}>
+                        <div className="branch-row-identity">
+                          <Group gap={7} wrap="wrap">
+                            <Text size="sm" fw={branch.current ? 750 : 600}>
+                              {branch.kind === 'remote' ? `${branch.remote}/${branch.name}` : branch.name}
+                            </Text>
+                            {branch.current && <Badge size="xs" color="teal">Current</Badge>}
+                            {occupiedElsewhere && <Badge size="xs" color="violet">Another worktree</Badge>}
+                            {branch.upstream && <Badge size="xs" variant="outline" color="gray">{branch.upstream}</Badge>}
+                          </Group>
+                          <Group gap={9} mt={3} wrap="wrap">
+                            <Text size="10px" c="teal.4">{branch.commitHash.slice(0, 7)}</Text>
+                            {branch.committedAt && (
+                              <Text size="10px" c="dimmed">{historyDateTime(branch.committedAt)}</Text>
+                            )}
+                            {branch.ahead > 0 && <Text size="10px" c="pink.4">↑ {branch.ahead}</Text>}
+                            {branch.behind > 0 && <Text size="10px" c="yellow.4">↓ {branch.behind}</Text>}
+                            {occupiedElsewhere && (
+                              <Text size="10px" c="dimmed" title={branch.checkedOutPath ?? undefined}>
+                                {branch.checkedOutPath}
+                              </Text>
+                            )}
+                          </Group>
+                        </div>
+                        <Group gap={5} wrap="nowrap">
+                          {!branch.current && (
+                            <Button
+                              size="compact-xs"
+                              variant="light"
+                              disabled={Boolean(branchAction) || occupiedElsewhere}
+                              loading={branchAction === `checkout:${branch.ref}`}
+                              onClick={() => requestCheckout({
+                                kind: branch.kind,
+                                ref: branch.ref,
+                                name: branch.name,
+                              })}
+                            >
+                              Checkout
+                            </Button>
+                          )}
+                          <Menu withinPortal position="bottom-end">
+                            <Menu.Target>
+                              <Button size="compact-xs" variant="subtle" color="gray" disabled={Boolean(branchAction)}>
+                                More
+                              </Button>
+                            </Menu.Target>
+                            <Menu.Dropdown>
+                              {branch.kind === 'local' ? (
+                                <>
+                                  <Menu.Item onClick={() => {
+                                    setBranchRename(branch)
+                                    setBranchRenameName(branch.name)
+                                    setBranchError(null)
+                                  }}>
+                                    Rename branch
+                                  </Menu.Item>
+                                  <Menu.Divider />
+                                  <Menu.Item
+                                    color="red"
+                                    disabled={branch.current || occupiedElsewhere}
+                                    onClick={() => void deleteLocalBranch(branch, false)}
+                                  >
+                                    Delete if merged
+                                  </Menu.Item>
+                                  <Menu.Item
+                                    color="red"
+                                    disabled={branch.current || occupiedElsewhere}
+                                    onClick={() => void deleteLocalBranch(branch, true)}
+                                  >
+                                    Force delete…
+                                  </Menu.Item>
+                                </>
+                              ) : (
+                                <Menu.Item color="red" onClick={() => void deleteRemoteBranch(branch)}>
+                                  Delete from {branch.remote}…
+                                </Menu.Item>
+                              )}
+                            </Menu.Dropdown>
+                          </Menu>
+                        </Group>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })}
+          </div>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={Boolean(checkoutTarget)}
+        onClose={() => {
+          if (branchAction?.startsWith('checkout:')) return
+          setCheckoutTarget(null)
+          setBranchError(null)
+        }}
+        title={`Checkout ${checkoutTarget?.name ?? ''}`}
+        size="md"
+        centered
+        closeOnClickOutside={!branchAction?.startsWith('checkout:')}
+        closeOnEscape={!branchAction?.startsWith('checkout:')}
+      >
+        <Stack gap="md">
+          {gitDetails && !gitDetails.status.clean && (
+            <Alert color="orange" icon={<IconAlertCircle size={17} />}>
+              This working copy has uncommitted changes. Choose explicitly where they should remain.
+            </Alert>
+          )}
+          {checkoutTarget?.kind === 'commit' && (
+            <Alert color="violet" variant="light" icon={<IconGitCommit size={17} />}>
+              Checking out a commit creates a detached HEAD. Create a branch afterward to keep new commits.
+            </Alert>
+          )}
+          {branchError && <Alert color="red" icon={<IconAlertCircle size={17} />}>{branchError}</Alert>}
+          <Select
+            label="Local changes"
+            value={checkoutStrategy}
+            allowDeselect={false}
+            disabled={Boolean(branchAction)}
+            data={[
+              {
+                value: 'carry',
+                label: 'Carry changes to the new checkout',
+              },
+              {
+                value: 'stash',
+                label: 'Stash changes, then switch cleanly',
+              },
+              {
+                value: 'require-clean',
+                label: 'Require a clean working tree',
+              },
+            ]}
+            onChange={(value) => setCheckoutStrategy(
+              (value as RepositoryCheckoutStrategy | null) ?? 'require-clean',
+            )}
+          />
+          <Group justify="flex-end">
+            <Button
+              variant="subtle"
+              color="gray"
+              disabled={Boolean(branchAction)}
+              onClick={() => setCheckoutTarget(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              color={checkoutTarget?.kind === 'commit' ? 'violet' : 'teal'}
+              loading={Boolean(branchAction?.startsWith('checkout:'))}
+              disabled={!checkoutTarget || Boolean(branchAction)}
+              onClick={() => checkoutTarget && void executeCheckout(checkoutTarget, checkoutStrategy)}
+            >
+              Checkout
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={Boolean(branchRename)}
+        onClose={() => {
+          if (branchAction?.startsWith('rename:')) return
+          setBranchRename(null)
+          setBranchError(null)
+        }}
+        title={`Rename ${branchRename?.name ?? 'branch'}`}
+        size="sm"
+        centered
+      >
+        <Stack gap="md">
+          {branchError && <Alert color="red" icon={<IconAlertCircle size={17} />}>{branchError}</Alert>}
+          <TextInput
+            label="New branch name"
+            value={branchRenameName}
+            maxLength={240}
+            disabled={Boolean(branchAction)}
+            onChange={(event) => setBranchRenameName(event.currentTarget.value)}
+          />
+          <Text size="xs" c="dimmed">
+            Renaming a published branch does not delete its old remote branch automatically.
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="subtle" color="gray" onClick={() => setBranchRename(null)}>Cancel</Button>
+            <Button
+              loading={Boolean(branchAction?.startsWith('rename:'))}
+              disabled={!branchRenameName.trim() || branchRenameName.trim() === branchRename?.name}
+              onClick={() => void renameBranch()}
+            >
+              Rename
+            </Button>
+          </Group>
+        </Stack>
       </Modal>
 
       <Modal

@@ -14,6 +14,15 @@ import { githubClientId } from './github-auth'
 import { getAppSettings } from './settings-store'
 import { monitorRepositories, readRepositoryStatus, refreshRepositoryStatus } from './repository-monitor'
 import { getDatabase } from './database'
+import {
+  canonicalWorkingCopyPath,
+  listWorkingCopies,
+  markWorkingCopyOpened,
+  markWorkingCopySynced,
+  registerWorkingCopy,
+  replaceWorkingCopyIdentity,
+  workingCopyPathIsRegistered,
+} from './working-copy-store'
 import type {
   CloneResult,
   GitHubRepository,
@@ -25,9 +34,13 @@ const GITHUB_API_VERSION = '2022-11-28'
 const repositoryNamePattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 
 interface CloneRecord {
+  id: string
   accountId: number
   fullName: string
   path: string
+  label: string
+  preferred: boolean
+  type: 'clone' | 'worktree' | 'local'
   clonedAt: string
   lastSyncedAt?: string | null
 }
@@ -64,60 +77,18 @@ interface GitHubApiErrorResponse {
 }
 
 export const readCloneRecords = async (): Promise<CloneRecord[]> => {
-  const rows = getDatabase().prepare(`
-    SELECT account_id, full_name, local_path, cloned_at, last_synced_at
-    FROM repositories
-    WHERE provider = 'github'
-    ORDER BY cloned_at
-  `).all() as unknown as Array<{
-    account_id: number
-    full_name: string
-    local_path: string
-    cloned_at: string
-    last_synced_at: string | null
-  }>
-  return rows.map((row) => ({
-    accountId: row.account_id,
-    fullName: row.full_name,
-    path: row.local_path,
-    clonedAt: row.cloned_at,
-    lastSyncedAt: row.last_synced_at,
+  const copies = await listWorkingCopies()
+  return copies.map((copy) => ({
+    id: copy.id,
+    accountId: copy.accountId,
+    fullName: copy.fullName,
+    path: copy.path,
+    label: copy.label,
+    preferred: copy.preferred,
+    type: copy.type,
+    clonedAt: copy.createdAt,
+    lastSyncedAt: copy.lastSyncedAt,
   }))
-}
-
-const writeCloneRecords = async (records: CloneRecord[]): Promise<void> => {
-  const db = getDatabase()
-  const existing = db.prepare(`
-    SELECT id, account_id, full_name FROM repositories WHERE provider = 'github'
-  `).all() as unknown as Array<{ id: string; account_id: number; full_name: string }>
-  const incomingKeys = new Set(records.map((record) => `${record.accountId}:${record.fullName}`))
-  const upsert = db.prepare(`
-    INSERT INTO repositories (
-      id, provider, account_id, full_name, local_path, cloned_at, last_synced_at
-    ) VALUES (?, 'github', ?, ?, ?, ?, ?)
-    ON CONFLICT(provider, account_id, full_name) DO UPDATE SET
-      local_path = excluded.local_path,
-      cloned_at = excluded.cloned_at,
-      last_synced_at = excluded.last_synced_at
-  `)
-  const remove = db.prepare('DELETE FROM repositories WHERE id = ?')
-
-  db.exec('BEGIN IMMEDIATE')
-  try {
-    for (const record of records) {
-      upsert.run(
-        randomUUID(), record.accountId, record.fullName, record.path,
-        record.clonedAt, record.lastSyncedAt ?? null,
-      )
-    }
-    for (const row of existing) {
-      if (!incomingKeys.has(`${row.account_id}:${row.full_name}`)) remove.run(row.id)
-    }
-    db.exec('COMMIT')
-  } catch (error) {
-    db.exec('ROLLBACK')
-    throw error
-  }
 }
 
 const isGitRepository = async (path: string): Promise<boolean> => {
@@ -136,8 +107,7 @@ export const verifiedClonePath = async (path: unknown): Promise<string> => {
   }
 
   const resolvedPath = resolve(path)
-  const records = await readCloneRecords()
-  const knownClone = records.some((record) => resolve(record.path) === resolvedPath)
+  const knownClone = await workingCopyPathIsRegistered(resolvedPath)
   if (!knownClone || !(await isGitRepository(resolvedPath))) {
     throw new Error('The cloned repository folder is no longer available.')
   }
@@ -162,80 +132,81 @@ const hasMatchingGitHubOrigin = async (path: string, fullName: string): Promise<
   }
 }
 
-export const recordClone = async (accountId: number, fullName: string, path: string): Promise<void> => {
-  const records = await readCloneRecords()
-  const existing = records.find(
-    (record) => record.accountId === accountId && record.fullName === fullName,
-  )
-  const remaining = records.filter(
-    (record) => !(record.accountId === accountId && record.fullName === fullName),
-  )
-  remaining.push({
-    accountId,
-    fullName,
-    path,
-    clonedAt: existing?.clonedAt ?? new Date().toISOString(),
-    lastSyncedAt: existing?.lastSyncedAt ?? null,
-  })
-  await writeCloneRecords(remaining)
-}
+export const recordClone = async (accountId: number, fullName: string, path: string) =>
+  await registerWorkingCopy(accountId, fullName, path)
 
-const replaceCloneIdentity = (
+const replaceCloneIdentity = async (
   path: string,
   accountId: number,
   fullName: string,
-): void => {
+): Promise<void> => {
   const db = getDatabase()
   const source = db.prepare(`
-    SELECT account_id, full_name FROM repositories WHERE local_path = ? LIMIT 1
-  `).get(path) as unknown as { account_id: number; full_name: string } | undefined
+    SELECT account_id, full_name FROM working_copies WHERE local_path = ? LIMIT 1
+  `).get(await canonicalWorkingCopyPath(path)) as unknown as {
+    account_id: number
+    full_name: string
+  } | undefined
   if (!source) throw new Error('The repository is not registered as a local clone.')
 
   db.exec('BEGIN IMMEDIATE')
   try {
-    db.prepare(`
-      UPDATE repositories SET account_id = ?, full_name = ? WHERE local_path = ?
-    `).run(accountId, fullName, path)
-    db.prepare(`
-      UPDATE organization_repositories
-      SET account_id = ?, full_name = ?
+    const sourceOrganization = db.prepare(`
+      SELECT id, color FROM organization_repositories
       WHERE provider = 'github' AND account_id = ? AND full_name = ? COLLATE NOCASE
-    `).run(accountId, fullName, source.account_id, source.full_name)
+    `).get(source.account_id, source.full_name) as { id: string; color: string | null } | undefined
+    const targetOrganization = db.prepare(`
+      SELECT id, color FROM organization_repositories
+      WHERE provider = 'github' AND account_id = ? AND full_name = ? COLLATE NOCASE
+    `).get(accountId, fullName) as { id: string; color: string | null } | undefined
+    if (sourceOrganization && targetOrganization && sourceOrganization.id !== targetOrganization.id) {
+      db.prepare(`
+        INSERT OR IGNORE INTO repository_workspaces (
+          repository_id, workspace_id, position, repository_position
+        ) SELECT ?, workspace_id, position, repository_position
+          FROM repository_workspaces WHERE repository_id = ?
+      `).run(targetOrganization.id, sourceOrganization.id)
+      db.prepare(`
+        INSERT OR IGNORE INTO repository_groups (repository_id, group_id, position)
+        SELECT ?, group_id, position FROM repository_groups WHERE repository_id = ?
+      `).run(targetOrganization.id, sourceOrganization.id)
+      db.prepare(`
+        INSERT OR IGNORE INTO repository_tags (repository_id, tag_id)
+        SELECT ?, tag_id FROM repository_tags WHERE repository_id = ?
+      `).run(targetOrganization.id, sourceOrganization.id)
+      if (!targetOrganization.color && sourceOrganization.color) {
+        db.prepare('UPDATE organization_repositories SET color = ? WHERE id = ?')
+          .run(sourceOrganization.color, targetOrganization.id)
+      }
+      db.prepare('DELETE FROM organization_repositories WHERE id = ?').run(sourceOrganization.id)
+    } else if (sourceOrganization && !targetOrganization) {
+      db.prepare(`
+        UPDATE organization_repositories SET account_id = ?, full_name = ? WHERE id = ?
+      `).run(accountId, fullName, sourceOrganization.id)
+    }
     db.exec('COMMIT')
   } catch (error) {
     db.exec('ROLLBACK')
     throw error
   }
+  await replaceWorkingCopyIdentity(path, accountId, fullName)
 }
 
 export const markRepositorySynced = async (path: string): Promise<string> => {
-  const records = await readCloneRecords()
-  const record = records.find((item) => resolve(item.path) === resolve(path))
-  if (!record) throw new Error('The repository is not registered as a local clone.')
-  const syncedAt = new Date().toISOString()
-  record.lastSyncedAt = syncedAt
-  await writeCloneRecords(records)
-  return syncedAt
+  return await markWorkingCopySynced(path)
 }
 
 const clonePathsForAccount = async (
   accountId: number,
-): Promise<Map<string, { path: string; lastSyncedAt: string | null }>> => {
-  const records = await readCloneRecords()
-  const paths = new Map<string, { path: string; lastSyncedAt: string | null }>()
-
-  await Promise.all(
-    records
-      .filter((record) => record.accountId === accountId)
-      .map(async (record) => {
-        if (await isGitRepository(record.path)) {
-          paths.set(record.fullName, {
-            path: record.path,
-            lastSyncedAt: record.lastSyncedAt ?? null,
-          })
-        }
-      }),
-  )
+): Promise<Map<string, Awaited<ReturnType<typeof listWorkingCopies>>>> => {
+  const copies = await listWorkingCopies(accountId)
+  const paths = new Map<string, typeof copies>()
+  for (const copy of copies) {
+    const key = copy.fullName.toLowerCase()
+    const current = paths.get(key) ?? []
+    current.push(copy)
+    paths.set(key, current)
+  }
   return paths
 }
 
@@ -352,6 +323,8 @@ const fetchRepositories = async (
         localPath: null,
         lastSyncedAt: null,
         metadataLoaded: true,
+        workingCopies: [],
+        preferredWorkingCopyId: null,
       })),
     )
 
@@ -374,13 +347,19 @@ const listRepositories = async (accountId: number): Promise<GitHubRepository[]> 
   }
 
   const clonePaths = await clonePathsForAccount(accountId)
-  return repositories.map((repository) => ({
-    ...repository,
-    accountId,
-    accountLogin: auth.accountLogin,
-    localPath: clonePaths.get(repository.fullName)?.path ?? null,
-    lastSyncedAt: clonePaths.get(repository.fullName)?.lastSyncedAt ?? null,
-  }))
+  return repositories.map((repository) => {
+    const workingCopies = clonePaths.get(repository.fullName.toLowerCase()) ?? []
+    const preferred = workingCopies.find((copy) => copy.preferred) ?? workingCopies[0]
+    return {
+      ...repository,
+      accountId,
+      accountLogin: auth.accountLogin,
+      localPath: preferred?.path ?? null,
+      lastSyncedAt: preferred?.lastSyncedAt ?? null,
+      workingCopies,
+      preferredWorkingCopyId: preferred?.id ?? null,
+    }
+  })
 }
 
 const listRepositoriesForSelection = async (
@@ -415,12 +394,16 @@ const listClonedRepositoriesForSelection = async (
   const selectedRecords = records.filter(
     (record) => accountId === null || record.accountId === accountId,
   )
-  const availableRecords = (await Promise.all(
-    selectedRecords.map(async (record) => await isGitRepository(record.path) ? record : null),
-  )).filter((record): record is CloneRecord => record !== null)
+  const grouped = new Map<string, CloneRecord[]>()
+  for (const record of selectedRecords) {
+    const key = `${record.accountId}:${record.fullName.toLowerCase()}`
+    grouped.set(key, [...(grouped.get(key) ?? []), record])
+  }
 
-  return availableRecords
-    .map((record) => {
+  return (await Promise.all([...grouped.values()].map(async (records) => {
+      const record = records.find((item) => item.preferred) ?? records[0]
+      const workingCopies = await listWorkingCopies(record.accountId, record.fullName)
+      const preferred = workingCopies.find((copy) => copy.preferred) ?? workingCopies[0]
       const [owner, name] = record.fullName.split('/', 2)
       return {
         id: 0,
@@ -437,11 +420,13 @@ const listClonedRepositoriesForSelection = async (
         defaultBranch: '',
         updatedAt: record.clonedAt,
         profileUrl: `https://github.com/${record.fullName}`,
-        localPath: record.path,
-        lastSyncedAt: record.lastSyncedAt ?? null,
+        localPath: preferred?.path ?? null,
+        lastSyncedAt: preferred?.lastSyncedAt ?? null,
         metadataLoaded: false,
+        workingCopies,
+        preferredWorkingCopyId: preferred?.id ?? null,
       }
-    })
+    })))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
 }
 
@@ -562,7 +547,9 @@ const addLocalRepository = async (
     ? originFullName
     : `${account.login}/${localName}`
 
-  await recordClone(account.id, fullName, path)
+  const workingCopy = await registerWorkingCopy(account.id, fullName, path, {
+    type: originFullName ? 'clone' : 'local',
+  })
   return {
     id: 0,
     accountId: account.id,
@@ -581,6 +568,8 @@ const addLocalRepository = async (
     localPath: path,
     lastSyncedAt: null,
     metadataLoaded: false,
+    workingCopies: [workingCopy],
+    preferredWorkingCopyId: workingCopy.id,
   }
 }
 
@@ -607,6 +596,8 @@ const repositoryFromResponse = (
   localPath,
   lastSyncedAt: null,
   metadataLoaded: true,
+  workingCopies: [],
+  preferredWorkingCopyId: null,
 })
 
 const runPublishGit = async (
@@ -759,14 +750,17 @@ export const publishRepository = async (value: unknown): Promise<PublishReposito
     throw new Error(`GitHub repository ${response.full_name} exists, but the push failed: ${error instanceof Error ? error.message : 'Git failed.'}`)
   }
 
-  replaceCloneIdentity(repositoryPath, input.accountId, response.full_name)
+  await replaceCloneIdentity(repositoryPath, input.accountId, response.full_name)
   const syncedAt = await markRepositorySynced(repositoryPath)
   await refreshRepositoryStatus(repositoryPath)
   const status = await readRepositoryStatus(repositoryPath)
+  const workingCopies = await listWorkingCopies(input.accountId, response.full_name)
   return {
     repository: {
       ...repositoryFromResponse(response, input.accountId, auth.accountLogin, repositoryPath),
       lastSyncedAt: syncedAt,
+      workingCopies,
+      preferredWorkingCopyId: workingCopies.find((copy) => copy.preferred)?.id ?? null,
     },
     status,
   }
@@ -863,10 +857,11 @@ export const runGitClone = async (
   })
 }
 
-const cloneRepository = async (
+export const cloneRepository = async (
   event: Electron.IpcMainInvokeEvent,
   accountId: number,
   fullName: string,
+  cloneOptions: { folderName?: string; label?: string } = {},
 ): Promise<CloneResult | null> => {
   if (!repositoryNamePattern.test(fullName)) throw new Error('Invalid GitHub repository name.')
 
@@ -883,7 +878,10 @@ const cloneRepository = async (
   if (selection.canceled || !selection.filePaths[0]) return null
 
   const parent = resolve(selection.filePaths[0])
-  const repositoryName = basename(fullName)
+  const requestedFolderName = cloneOptions.folderName?.trim() || basename(fullName)
+  if (!/^[^/\\]{1,180}$/.test(requestedFolderName) || requestedFolderName === '.' ||
+    requestedFolderName === '..') throw new Error('Enter a valid destination folder name.')
+  const repositoryName = requestedFolderName
   const destination = resolve(parent, repositoryName)
   if (dirname(destination) !== parent) throw new Error('Invalid clone destination.')
   if (await pathExists(destination)) {
@@ -891,8 +889,11 @@ const cloneRepository = async (
       await isGitRepository(destination) &&
       await hasMatchingGitHubOrigin(destination, fullName)
     ) {
-      await recordClone(accountId, fullName, destination)
-      return { path: destination }
+      const workingCopy = await registerWorkingCopy(accountId, fullName, destination, {
+        label: cloneOptions.label,
+        type: 'clone',
+      })
+      return { path: destination, workingCopy }
     }
     throw new Error(`A folder named “${repositoryName}” already exists in that location.`)
   }
@@ -902,21 +903,24 @@ const cloneRepository = async (
 
   try {
     await runGitClone(`https://github.com/${fullName}.git`, temporary, auth.accountLogin, auth.token)
-    await recordClone(accountId, fullName, destination)
     await rename(temporary, destination)
+    const workingCopy = await registerWorkingCopy(accountId, fullName, destination, {
+      label: cloneOptions.label,
+      type: 'clone',
+    })
+    return { path: destination, workingCopy }
   } catch (error) {
     await rm(temporary, { recursive: true, force: true })
     throw error
   }
-
-  return { path: destination }
 }
 
-const locateRepository = async (
+export const locateRepository = async (
   event: Electron.IpcMainInvokeEvent,
   accountId: number,
   fullName: string,
-): Promise<CloneResult | null> => {
+  label?: string,
+) => {
   if (!repositoryNamePattern.test(fullName)) throw new Error('Invalid GitHub repository name.')
 
   const ownerWindow = BrowserWindow.fromWebContents(event.sender)
@@ -940,8 +944,8 @@ const locateRepository = async (
     throw new Error(`The selected folder is not a clone of ${fullName}.`)
   }
 
-  await recordClone(accountId, fullName, path)
-  return { path }
+  const workingCopy = await registerWorkingCopy(accountId, fullName, path, { label, type: 'clone' })
+  return { path, workingCopy }
 }
 
 export const registerRepositoryHandlers = (): void => {
@@ -967,10 +971,12 @@ export const registerRepositoryHandlers = (): void => {
     const resolvedPath = await verifiedClonePath(path)
     const result = await shell.openPath(resolvedPath)
     if (result) throw new Error(result)
+    await markWorkingCopyOpened(resolvedPath)
   })
   ipcMain.handle('repositories:open-vscode', async (_event, path: unknown) => {
     const resolvedPath = await verifiedClonePath(path)
     await launchVSCodeInNewWindow(resolvedPath)
+    await markWorkingCopyOpened(resolvedPath)
   })
   ipcMain.handle('repositories:monitor', async (_event, paths: unknown) => {
     if (!Array.isArray(paths) || paths.length > 100 || paths.some((path) => typeof path !== 'string')) {

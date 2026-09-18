@@ -33,10 +33,43 @@ export interface GitHubRepository {
   localPath: string | null
   lastSyncedAt: string | null
   metadataLoaded: boolean
+  workingCopies: RepositoryWorkingCopy[]
+  preferredWorkingCopyId: string | null
 }
 
 export interface CloneResult {
   path: string
+  workingCopy?: RepositoryWorkingCopy
+}
+
+export type RepositoryWorkingCopyType = 'clone' | 'worktree' | 'local'
+
+export interface RepositoryWorkingCopy {
+  id: string
+  provider: 'github'
+  accountId: number
+  fullName: string
+  path: string
+  label: string
+  type: RepositoryWorkingCopyType
+  preferred: boolean
+  available: boolean
+  createdAt: string
+  lastSyncedAt: string | null
+  lastOpenedAt: string | null
+  lastSeenAt: string | null
+}
+
+export interface WorkspaceProvisionResult {
+  workspaceId: string
+  rootPath: string
+  results: Array<{
+    repositoryKey: string
+    fullName: string
+    status: 'cloned' | 'registered' | 'skipped' | 'error'
+    workingCopy: RepositoryWorkingCopy | null
+    message: string | null
+  }>
 }
 
 export interface PublishRepositoryInput {
@@ -128,14 +161,69 @@ export interface RepositoryCommit {
   hash: string
   shortHash: string
   author: string
+  authorEmail: string
+  authorLogin: string | null
+  authorAvatarUrl: string | null
+  authorProfileUrl: string | null
   authoredAt: string
+  committedAt: string
   subject: string
   unpushed: boolean
+  pushedAt: string | null
 }
 
 export interface RepositoryCommitFile {
   path: string
   status: string
+}
+
+export interface RepositoryWorkingTreeFile {
+  path: string
+  tracked: boolean
+  ignored: boolean
+}
+
+export interface RepositoryFilePreview {
+  mimeType: string
+  dataUrl: string
+  size: number
+}
+
+export interface RepositoryFileRevision extends RepositoryCommit {
+  path: string
+  previousPath: string | null
+  status: string
+}
+
+export type RepositoryBranchKind = 'local' | 'remote'
+export type RepositoryCheckoutStrategy = 'require-clean' | 'carry' | 'stash'
+
+export interface RepositoryBranch {
+  name: string
+  ref: string
+  kind: RepositoryBranchKind
+  remote: string | null
+  current: boolean
+  upstream: string | null
+  ahead: number
+  behind: number
+  commitHash: string
+  committedAt: string | null
+  checkedOutPath: string | null
+}
+
+export interface RepositoryBranchState {
+  currentBranch: string | null
+  currentCommit: string
+  detached: boolean
+  stashCount: number
+  branches: RepositoryBranch[]
+}
+
+export interface RepositoryCheckoutTarget {
+  kind: RepositoryBranchKind | 'commit'
+  ref: string
+  name: string
 }
 
 export type ProjectInsightFileCategory =
@@ -299,6 +387,20 @@ export interface DesktopApi {
     gitCommitDiff: (path: string, commitHash: string) => Promise<string>
     gitCommitFiles: (path: string, commitHash: string) => Promise<RepositoryCommitFile[]>
     gitCommitFileDiff: (path: string, commitHash: string, file: string) => Promise<string>
+    gitWorkingTree: (path: string, includeIgnored: boolean) => Promise<RepositoryWorkingTreeFile[]>
+    gitWorkingFileContent: (path: string, file: string) => Promise<string>
+    gitWorkingFilePreview: (path: string, file: string) => Promise<RepositoryFilePreview>
+    gitFileHistory: (path: string, file: string) => Promise<RepositoryFileRevision[]>
+    gitFileRevisionDiff: (path: string, commitHash: string, file: string) => Promise<string>
+    gitFileContent: (path: string, commitHash: string, file: string) => Promise<string>
+    gitCompareFileRevisions: (
+      path: string,
+      fromCommit: string,
+      fromFile: string,
+      toCommit: string,
+      toFile: string,
+    ) => Promise<string>
+    gitRestoreFile: (path: string, commitHash: string, file: string) => Promise<RepositoryGitDetails>
     scanInsights: (path: string) => Promise<ProjectInsightsResult>
     gitStage: (path: string, files: string[]) => Promise<RepositoryGitDetails>
     gitUnstage: (path: string, files: string[]) => Promise<RepositoryGitDetails>
@@ -306,6 +408,54 @@ export interface DesktopApi {
     gitFetch: (path: string) => Promise<RepositoryGitDetails>
     gitPull: (path: string) => Promise<RepositoryGitDetails>
     gitPush: (path: string) => Promise<RepositoryGitDetails>
+    gitBranches: (path: string) => Promise<RepositoryBranchState>
+    gitCheckout: (
+      path: string,
+      target: RepositoryCheckoutTarget,
+      strategy: RepositoryCheckoutStrategy,
+    ) => Promise<RepositoryBranchState>
+    gitCreateBranch: (
+      path: string,
+      name: string,
+      startPoint: string,
+      checkout: boolean,
+    ) => Promise<RepositoryBranchState>
+    gitRenameBranch: (path: string, oldName: string, newName: string) => Promise<RepositoryBranchState>
+    gitDeleteBranch: (path: string, name: string, force: boolean) => Promise<RepositoryBranchState>
+    gitDeleteRemoteBranch: (path: string, remote: string, name: string) => Promise<RepositoryBranchState>
+    gitPopStash: (path: string) => Promise<RepositoryBranchState>
+  }
+  workingCopies: {
+    list: (accountId: number, fullName: string) => Promise<RepositoryWorkingCopy[]>
+    clone: (
+      accountId: number,
+      fullName: string,
+      options?: { folderName?: string; label?: string },
+    ) => Promise<CloneResult | null>
+    locate: (
+      accountId: number,
+      fullName: string,
+      label?: string,
+    ) => Promise<RepositoryWorkingCopy | null>
+    updateLabel: (id: string, label: string) => Promise<RepositoryWorkingCopy>
+    setPreferred: (id: string) => Promise<RepositoryWorkingCopy[]>
+    relocate: (id: string) => Promise<RepositoryWorkingCopy | null>
+    detach: (id: string) => Promise<void>
+    trash: (id: string) => Promise<void>
+    createWorktree: (
+      sourceId: string,
+      branch: string,
+      createBranch: boolean,
+      label?: string,
+    ) => Promise<RepositoryWorkingCopy | null>
+    setForWorkspace: (workspaceId: string, workingCopyId: string) => Promise<void>
+    workspaceSelections: (workspaceId: string) => Promise<Record<string, string>>
+    provisionWorkspace: (
+      workspaceId: string,
+      repositoryKeys: string[],
+    ) => Promise<WorkspaceProvisionResult | null>
+    cloneBatch: (repositoryKeys: string[]) => Promise<WorkspaceProvisionResult | null>
+    generateCodeWorkspace: (workspaceId: string) => Promise<WorkspaceLaunchTarget>
   }
   organization: {
     list: () => Promise<OrganizationCatalog>

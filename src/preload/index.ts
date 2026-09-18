@@ -73,6 +73,28 @@ const desktopApi: DesktopApi = {
     gitCommitFiles: (path, commitHash) => ipcRenderer.invoke('repositories:git-commit-files', path, commitHash),
     gitCommitFileDiff: (path, commitHash, file) =>
       ipcRenderer.invoke('repositories:git-commit-file-diff', path, commitHash, file),
+    gitWorkingTree: (path, includeIgnored) =>
+      ipcRenderer.invoke('repositories:git-working-tree', path, includeIgnored),
+    gitWorkingFileContent: (path, file) =>
+      ipcRenderer.invoke('repositories:git-working-file-content', path, file),
+    gitWorkingFilePreview: (path, file) =>
+      ipcRenderer.invoke('repositories:git-working-file-preview', path, file),
+    gitFileHistory: (path, file) => ipcRenderer.invoke('repositories:git-file-history', path, file),
+    gitFileRevisionDiff: (path, commitHash, file) =>
+      ipcRenderer.invoke('repositories:git-file-revision-diff', path, commitHash, file),
+    gitFileContent: (path, commitHash, file) =>
+      ipcRenderer.invoke('repositories:git-file-content', path, commitHash, file),
+    gitCompareFileRevisions: (path, fromCommit, fromFile, toCommit, toFile) =>
+      ipcRenderer.invoke(
+        'repositories:git-compare-file-revisions',
+        path,
+        fromCommit,
+        fromFile,
+        toCommit,
+        toFile,
+      ),
+    gitRestoreFile: (path, commitHash, file) =>
+      ipcRenderer.invoke('repositories:git-restore-file', path, commitHash, file),
     scanInsights: (path) => ipcRenderer.invoke('repositories:scan-insights', path),
     gitStage: (path, files) => ipcRenderer.invoke('repositories:git-stage', path, files),
     gitUnstage: (path, files) => ipcRenderer.invoke('repositories:git-unstage', path, files),
@@ -80,6 +102,42 @@ const desktopApi: DesktopApi = {
     gitFetch: (path) => ipcRenderer.invoke('repositories:git-fetch', path),
     gitPull: (path) => ipcRenderer.invoke('repositories:git-pull', path),
     gitPush: (path) => ipcRenderer.invoke('repositories:git-push', path),
+    gitBranches: (path) => ipcRenderer.invoke('repositories:git-branches', path),
+    gitCheckout: (path, target, strategy) =>
+      ipcRenderer.invoke('repositories:git-checkout', path, target, strategy),
+    gitCreateBranch: (path, name, startPoint, checkout) =>
+      ipcRenderer.invoke('repositories:git-create-branch', path, name, startPoint, checkout),
+    gitRenameBranch: (path, oldName, newName) =>
+      ipcRenderer.invoke('repositories:git-rename-branch', path, oldName, newName),
+    gitDeleteBranch: (path, name, force) =>
+      ipcRenderer.invoke('repositories:git-delete-branch', path, name, force),
+    gitDeleteRemoteBranch: (path, remote, name) =>
+      ipcRenderer.invoke('repositories:git-delete-remote-branch', path, remote, name),
+    gitPopStash: (path) => ipcRenderer.invoke('repositories:git-pop-stash', path),
+  },
+  workingCopies: {
+    list: (accountId, fullName) => ipcRenderer.invoke('working-copies:list', accountId, fullName),
+    clone: (accountId, fullName, options) =>
+      ipcRenderer.invoke('working-copies:clone', accountId, fullName, options),
+    locate: (accountId, fullName, label) =>
+      ipcRenderer.invoke('working-copies:locate', accountId, fullName, label),
+    updateLabel: (id, label) => ipcRenderer.invoke('working-copies:update-label', id, label),
+    setPreferred: (id) => ipcRenderer.invoke('working-copies:set-preferred', id),
+    relocate: (id) => ipcRenderer.invoke('working-copies:relocate', id),
+    detach: (id) => ipcRenderer.invoke('working-copies:detach', id),
+    trash: (id) => ipcRenderer.invoke('working-copies:trash', id),
+    createWorktree: (sourceId, branch, createBranch, label) =>
+      ipcRenderer.invoke('working-copies:create-worktree', sourceId, branch, createBranch, label),
+    setForWorkspace: (workspaceId, workingCopyId) =>
+      ipcRenderer.invoke('working-copies:set-for-workspace', workspaceId, workingCopyId),
+    workspaceSelections: (workspaceId) =>
+      ipcRenderer.invoke('working-copies:workspace-selections', workspaceId),
+    provisionWorkspace: (workspaceId, repositoryKeys) =>
+      ipcRenderer.invoke('working-copies:provision-workspace', workspaceId, repositoryKeys),
+    cloneBatch: (repositoryKeys) =>
+      ipcRenderer.invoke('working-copies:clone-batch', repositoryKeys),
+    generateCodeWorkspace: (workspaceId) =>
+      ipcRenderer.invoke('working-copies:generate-code-workspace', workspaceId),
   },
   organization: {
     list: () => ipcRenderer.invoke('organization:list'),

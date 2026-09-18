@@ -64,7 +64,15 @@ MyRepos stores accounts, repository registrations, and settings in `myrepos.sqli
 
 Repositories can be organized manually into Workspaces (repositories worked on together), Groups (browsing collections), and Tags (descriptive labels). These many-to-many assignments are stored transactionally in SQLite and managed from each repository's Organize dialog.
 
-Settings can connect a portable configuration repository in three ways: create and publish a managed GitHub repository, clone an existing GitHub repository, or use an existing local Git repository. MyRepos stores the portable data in `.myrepos/config.json` and can commit/push changes automatically or pull, push, and sync manually. The file contains organization metadata, repository colors, assignments, and workspace ordering; credentials, local paths, and machine-specific settings are deliberately excluded.
+Each repository can have any number of registered working copies. MyRepos tracks a preferred copy, friendly labels, full clones, local registrations, and Git worktrees independently. Missing copies can be relocated or detached, while folder deletion is a separate recoverable Trash action. Workspace checkouts can clone all or selected repositories into another root, remember a workspace-specific copy for each repository, and generate a multi-root `.code-workspace` file.
+
+Each working copy also has a complete branch manager for local and remote discovery, worktree-aware checkout, dirty-tree carry or stash choices, branch creation from any branch or selected commit, detached commit checkout, publishing, renaming, and guarded local or remote deletion.
+
+File history follows a path across renames and exposes every committed revision with exact commit time, recorded push time, per-commit diffs, complete historical contents, two-revision comparison, and one-click restoration into the working tree. It is available from both the Changes file list and every file in a selected commit.
+
+The Files tab provides a searchable hierarchical view of the current working tree, including tracked and untracked files, optional ignored files, aggregated folder status, live refresh, VS Code-style file and folder icons, read-only Monaco code views, sandboxed HTML/SVG previews, PDF/image/audio/video previews, copying, and direct access to each file's history.
+
+Settings can connect a portable configuration repository in three ways: create and publish a managed GitHub repository, clone an existing GitHub repository, or use an existing local Git repository. MyRepos stores the portable data in `.myrepos/config.json` and can commit/push changes automatically or pull, push, and sync manually. The file contains organization metadata, repository colors, assignments, workspace ordering, and working-copy label preferences; credentials, absolute local paths, and machine-specific availability are deliberately excluded.
 
 On the first SQLite-backed launch, legacy `accounts.json`, `clones.json`, and `settings.json` data is imported in one transaction. Successfully imported files are retained alongside the database with a `.migrated` suffix for recovery.
 

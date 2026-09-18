@@ -65,7 +65,10 @@ export const readRepositoryStatus = async (repositoryPath: string): Promise<Repo
       let conflicts = 0
 
       for (const line of output.split('\n')) {
-        if (line.startsWith('# branch.head ')) branch = line.slice(14).trim()
+        if (line.startsWith('# branch.head ')) {
+          const head = line.slice(14).trim()
+          branch = head === '(detached)' ? null : head
+        }
         else if (line.startsWith('# branch.upstream ')) upstream = line.slice(18).trim()
         else if (line.startsWith('# branch.ab ')) {
           const match = line.match(/\+(\d+)\s+-(\d+)/)

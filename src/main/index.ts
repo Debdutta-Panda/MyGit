@@ -7,6 +7,7 @@ import { registerRepositoryActionHandlers } from './repository-actions'
 import { closeDatabase, initializeDatabase } from './database'
 import { registerOrganizationHandlers } from './organization-store'
 import { registerConfigurationSyncHandlers } from './configuration-sync'
+import { registerWorkingCopyHandlers } from './working-copies'
 import { registerProjectInsightHandlers } from './project-insights'
 import { registerUpdateHandlers, startAutomaticUpdateChecks } from './app-updater'
 
@@ -96,6 +97,7 @@ app.whenReady().then(async () => {
   registerUpdateHandlers()
   registerOrganizationHandlers()
   registerConfigurationSyncHandlers()
+  registerWorkingCopyHandlers()
   registerWindowHandlers()
   createWindow()
   startAutomaticUpdateChecks()
