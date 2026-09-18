@@ -76,6 +76,8 @@ SQL files add a local, non-executing schema preview with table-list, field-detai
 
 The repository Analytics tab summarizes Git change activity over the last 30 days, 90 days, year, or full history. It groups additions and deletions by commit, day, week, or month and ranks high-churn files, folders, and contributors, with file rankings linking directly into file history.
 
+The Files view also exposes Content and Analytics detail modes. Selecting a file scopes the charts and contributor activity to that path; selecting a folder aggregates every descendant file while keeping expansion on the folder chevron.
+
 Settings can connect a portable configuration repository in three ways: create and publish a managed GitHub repository, clone an existing GitHub repository, or use an existing local Git repository. MyRepos stores the portable data in `.myrepos/config.json` and can commit/push changes automatically or pull, push, and sync manually. The file contains organization metadata, repository colors, assignments, workspace ordering, and working-copy label preferences; credentials, absolute local paths, and machine-specific availability are deliberately excluded.
 
 On the first SQLite-backed launch, legacy `accounts.json`, `clones.json`, and `settings.json` data is imported in one transaction. Successfully imported files are retained alongside the database with a `.migrated` suffix for recovery.

@@ -164,7 +164,7 @@ const validatedFile = (file: unknown): string => {
 }
 
 const validatedAnalyticsRange = (range: unknown): RepositoryAnalyticsRange => {
-  if (range === '30d' || range === '90d' || range === '1y' || range === 'all') return range
+  if (range === '7d' || range === '30d' || range === '90d' || range === '1y' || range === 'all') return range
   throw new Error('Invalid analytics time range.')
 }
 
@@ -759,7 +759,9 @@ export const registerRepositoryActionHandlers = (): void => {
       const repositoryPath = await verifiedClonePath(path)
       const range = validatedAnalyticsRange(requestedRange)
       const maxCommits = 3_000
-      const since = range === '30d'
+      const since = range === '7d'
+        ? '7 days ago'
+        : range === '30d'
         ? '30 days ago'
         : range === '90d' ? '90 days ago' : range === '1y' ? '1 year ago' : null
       const args = [

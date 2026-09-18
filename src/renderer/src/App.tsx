@@ -87,6 +87,8 @@ import {
   IconCheck,
   IconChevronDown,
   IconChevronRight,
+  IconChevronsDown,
+  IconChevronsUp,
   IconCommand,
   IconCode,
   IconCopy,
@@ -187,6 +189,7 @@ type BulkGitOperation = 'sync' | 'fetch' | 'pull' | 'push'
 type BulkGitTarget = 'visible' | 'selected' | 'visible-copies' | 'selected-copies' | 'push-needed'
 type FileHistoryView = 'diff' | 'content' | 'compare'
 type WorkingTreeView = 'code' | 'preview' | 'both'
+type WorkingTreeDetailTab = 'content' | 'analytics'
 type WorkingTreePreviewKind = 'html' | 'svg' | 'markdown' | 'sql' | 'pdf' | 'image' | 'audio' | 'video'
 
 const workingTreePreviewKind = (path: string): WorkingTreePreviewKind | null => {
@@ -307,6 +310,9 @@ const buildWorkingTree = (files: RepositoryWorkingTreeFile[]): WorkingTreeNode[]
       }))
   return finalize(root.values())
 }
+
+const workingTreeFolderPaths = (nodes: WorkingTreeNode[]): string[] => nodes.flatMap((node) =>
+  node.type === 'folder' ? [node.path, ...workingTreeFolderPaths(node.children)] : [])
 
 const filterWorkingTree = (nodes: WorkingTreeNode[], query: string): WorkingTreeNode[] => {
   const normalized = query.trim().toLowerCase()
@@ -991,17 +997,21 @@ export function App() {
   const [workingTreeSearch, setWorkingTreeSearch] = useState('')
   const [workingTreeIncludeIgnored, setWorkingTreeIncludeIgnored] = useState(false)
   const [workingTreeExpandedFolders, setWorkingTreeExpandedFolders] = useState<string[]>([])
+  const workingTreeExpansionIntent = useRef<'default' | 'all' | 'none' | 'custom'>('default')
+  const workingTreeExpansionRepository = useRef<string | null>(null)
   const [workingTreeLoading, setWorkingTreeLoading] = useState(false)
   const [workingTreeRefreshVersion, setWorkingTreeRefreshVersion] = useState(0)
   const [workingTreeError, setWorkingTreeError] = useState<string | null>(null)
   const [selectedWorkingTreeFile, setSelectedWorkingTreeFile] = useState<string | null>(null)
+  const [selectedWorkingTreeFolder, setSelectedWorkingTreeFolder] = useState<string | null>(null)
+  const [workingTreeDetailTab, setWorkingTreeDetailTab] = useState<WorkingTreeDetailTab>('content')
   const [workingTreeContent, setWorkingTreeContent] = useState<string | null>(null)
   const [workingTreeContentLoading, setWorkingTreeContentLoading] = useState(false)
   const [workingTreeContentError, setWorkingTreeContentError] = useState<string | null>(null)
   const [workingTreeView, setWorkingTreeView] = useState<WorkingTreeView>('code')
   const [workingTreePreview, setWorkingTreePreview] = useState<RepositoryFilePreview | null>(null)
   const [changeAnalytics, setChangeAnalytics] = useState<RepositoryChangeAnalyticsData | null>(null)
-  const [changeAnalyticsRange, setChangeAnalyticsRange] = useState<RepositoryAnalyticsRange>('90d')
+  const [changeAnalyticsRange, setChangeAnalyticsRange] = useState<RepositoryAnalyticsRange>('7d')
   const [changeAnalyticsLoading, setChangeAnalyticsLoading] = useState(false)
   const [changeAnalyticsError, setChangeAnalyticsError] = useState<string | null>(null)
   const [changeAnalyticsRefreshVersion, setChangeAnalyticsRefreshVersion] = useState(0)
@@ -1483,6 +1493,7 @@ export function App() {
     : filesPanelTab === 'files'
       ? selectedWorkingTreeFile
       : selectedDiffPath
+  const selectedWorkingTreePath = selectedWorkingTreeFile ?? selectedWorkingTreeFolder
   const selectedWorkingTreePreviewKind = selectedWorkingTreeFile
     ? workingTreePreviewKind(selectedWorkingTreeFile)
     : null
@@ -1490,6 +1501,16 @@ export function App() {
     selectedWorkingTreePreviewKind === 'html' || selectedWorkingTreePreviewKind === 'svg' ||
     selectedWorkingTreePreviewKind === 'markdown' || selectedWorkingTreePreviewKind === 'sql'
   const workingTree = useMemo(() => buildWorkingTree(workingTreeFiles), [workingTreeFiles])
+  const allWorkingTreeFolderPaths = useMemo(
+    () => workingTreeFolderPaths(workingTree),
+    [workingTree],
+  )
+  const workingTreeExpandedFolderSet = useMemo(
+    () => new Set(workingTreeExpandedFolders),
+    [workingTreeExpandedFolders],
+  )
+  const workingTreeFullyExpanded = allWorkingTreeFolderPaths.length > 0 &&
+    allWorkingTreeFolderPaths.every((path) => workingTreeExpandedFolderSet.has(path))
   const visibleWorkingTree = useMemo(
     () => filterWorkingTree(workingTree, workingTreeSearch),
     [workingTree, workingTreeSearch],
@@ -1585,12 +1606,26 @@ export function App() {
     ).then((files) => {
       if (cancelled) return
       setWorkingTreeFiles(files)
-      setWorkingTreeExpandedFolders((current) => current.length > 0
-        ? current
-        : [...new Set(files.flatMap((file) => {
-            const slash = file.path.indexOf('/')
-            return slash > 0 ? [file.path.slice(0, slash)] : []
-          }))])
+      const repositoryChanged = workingTreeExpansionRepository.current !== gitRepository.localPath
+      if (repositoryChanged) {
+        workingTreeExpansionRepository.current = gitRepository.localPath
+        workingTreeExpansionIntent.current = 'default'
+      }
+      const nextTree = buildWorkingTree(files)
+      const folderPaths = workingTreeFolderPaths(nextTree)
+      const validFolders = new Set(folderPaths)
+      if (workingTreeExpansionIntent.current === 'all') {
+        setWorkingTreeExpandedFolders(folderPaths)
+      } else if (workingTreeExpansionIntent.current === 'none') {
+        setWorkingTreeExpandedFolders([])
+      } else if (workingTreeExpansionIntent.current === 'default') {
+        setWorkingTreeExpandedFolders(nextTree
+          .filter((node) => node.type === 'folder')
+          .map((node) => node.path))
+      } else {
+        setWorkingTreeExpandedFolders((current) => current.filter((folder) =>
+          validFolders.has(folder)))
+      }
       if (selectedWorkingTreeFile && !files.some((file) => file.path === selectedWorkingTreeFile)) {
         setSelectedWorkingTreeFile(null)
         setWorkingTreeContent(null)
@@ -1608,8 +1643,11 @@ export function App() {
     }
   }, [filesPanelTab, gitRepository?.localPath, workingTreeIncludeIgnored, workingTreeRefreshVersion])
 
+  const changeAnalyticsVisible = filesPanelTab === 'analytics' || filesPanelTab === 'files' &&
+    workingTreeDetailTab === 'analytics' && Boolean(selectedWorkingTreeFile || selectedWorkingTreeFolder)
+
   useEffect(() => {
-    if (!window.desktop || filesPanelTab !== 'analytics' || !gitRepository?.localPath) return
+    if (!window.desktop || !changeAnalyticsVisible || !gitRepository?.localPath) return
     let cancelled = false
     setChangeAnalyticsLoading(true)
     setChangeAnalyticsError(null)
@@ -1629,7 +1667,7 @@ export function App() {
   }, [
     changeAnalyticsRange,
     changeAnalyticsRefreshVersion,
-    filesPanelTab,
+    changeAnalyticsVisible,
     gitRepository?.localPath,
   ])
 
@@ -2158,14 +2196,17 @@ export function App() {
     setWorkingTreeSearch('')
     setWorkingTreeIncludeIgnored(false)
     setWorkingTreeExpandedFolders([])
+    workingTreeExpansionIntent.current = 'default'
     setWorkingTreeError(null)
     setSelectedWorkingTreeFile(null)
+    setSelectedWorkingTreeFolder(null)
+    setWorkingTreeDetailTab('content')
     setWorkingTreeContent(null)
     setWorkingTreePreview(null)
     setWorkingTreeView('code')
     setWorkingTreeContentError(null)
     setChangeAnalytics(null)
-    setChangeAnalyticsRange('90d')
+    setChangeAnalyticsRange('7d')
     setChangeAnalyticsError(null)
     setGitHistory([])
     setHistoryCommitterFilter(allCommittersFilter)
@@ -2660,7 +2701,9 @@ export function App() {
   const showWorkingTreeFile = async (file: RepositoryWorkingTreeFile): Promise<void> => {
     if (!window.desktop || !gitRepository?.localPath) return
     const previewKind = workingTreePreviewKind(file.path)
+    setDiffVisible(true)
     setSelectedWorkingTreeFile(file.path)
+    setSelectedWorkingTreeFolder(null)
     setWorkingTreeContent(null)
     setWorkingTreePreview(null)
     setWorkingTreeView(previewKind ? 'preview' : 'code')
@@ -3589,28 +3632,42 @@ export function App() {
       <div className="working-tree-node" key={`${node.type}:${node.path}`}>
         <div
           className="working-tree-row"
-          data-selected={selectedWorkingTreeFile === node.path || undefined}
+          data-selected={(selectedWorkingTreeFile === node.path ||
+            selectedWorkingTreeFolder === node.path) || undefined}
           data-ignored={node.ignored || undefined}
           style={{ paddingLeft: 7 + depth * 15 }}
         >
+          {node.type === 'folder' ? (
+            <UnstyledButton
+              className="working-tree-chevron"
+              aria-label={`${expanded ? 'Collapse' : 'Expand'} ${node.path}`}
+              onClick={() => {
+                workingTreeExpansionIntent.current = 'custom'
+                setWorkingTreeExpandedFolders((current) => current.includes(node.path)
+                  ? current.filter((path) => path !== node.path)
+                  : [...current, node.path])
+              }}
+            >
+              {expanded ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />}
+            </UnstyledButton>
+          ) : <span className="working-tree-chevron" />}
           <UnstyledButton
             className="working-tree-select"
             disabled={node.type === 'file' && !file}
             onClick={() => {
               if (node.type === 'folder') {
-                setWorkingTreeExpandedFolders((current) => current.includes(node.path)
-                  ? current.filter((path) => path !== node.path)
-                  : [...current, node.path])
+                setDiffVisible(true)
+                setSelectedWorkingTreeFolder(node.path)
+                setSelectedWorkingTreeFile(null)
+                setWorkingTreeContent(null)
+                setWorkingTreePreview(null)
+                setWorkingTreeContentError(null)
+                setWorkingTreeDetailTab('analytics')
               } else if (file) {
                 void showWorkingTreeFile(file)
               }
             }}
           >
-            <span className="working-tree-chevron">
-              {node.type === 'folder'
-                ? expanded ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />
-                : null}
-            </span>
             <span className="working-tree-type-icon" aria-hidden="true">
               {node.type === 'folder'
                 ? <FolderIcon folderName={node.name} width={19} height={19} />
@@ -5665,6 +5722,42 @@ export function App() {
                                           setWorkingTreeIncludeIgnored(event.currentTarget.checked)}
                                       />
                                       <Group gap={5} wrap="nowrap">
+                                        <Tooltip label={workingTreeSearch.trim()
+                                          ? 'Search results are expanded automatically'
+                                          : 'Expand all folders'}>
+                                          <ActionIcon
+                                            size="sm"
+                                            variant="subtle"
+                                            color="gray"
+                                            disabled={Boolean(workingTreeSearch.trim()) ||
+                                              allWorkingTreeFolderPaths.length === 0 || workingTreeFullyExpanded}
+                                            aria-label="Expand all folders"
+                                            onClick={() => {
+                                              workingTreeExpansionIntent.current = 'all'
+                                              setWorkingTreeExpandedFolders(allWorkingTreeFolderPaths)
+                                            }}
+                                          >
+                                            <IconChevronsDown size={14} />
+                                          </ActionIcon>
+                                        </Tooltip>
+                                        <Tooltip label={workingTreeSearch.trim()
+                                          ? 'Clear the search to collapse folders'
+                                          : 'Collapse all folders'}>
+                                          <ActionIcon
+                                            size="sm"
+                                            variant="subtle"
+                                            color="gray"
+                                            disabled={Boolean(workingTreeSearch.trim()) ||
+                                              workingTreeExpandedFolders.length === 0}
+                                            aria-label="Collapse all folders"
+                                            onClick={() => {
+                                              workingTreeExpansionIntent.current = 'none'
+                                              setWorkingTreeExpandedFolders([])
+                                            }}
+                                          >
+                                            <IconChevronsUp size={14} />
+                                          </ActionIcon>
+                                        </Tooltip>
                                         <Text size="10px" c="dimmed">
                                           {workingTreeFiles.length} files
                                         </Text>
@@ -5986,9 +6079,32 @@ export function App() {
                                   {filesPanelTab === 'history'
                                     ? selectedCommitFile ?? 'Select a file'
                                     : filesPanelTab === 'files'
-                                      ? selectedWorkingTreeFile ?? 'Select a file'
+                                      ? selectedWorkingTreePath ?? 'Select a file or folder'
                                       : diffTitle ?? gitRepository.fullName}
                                 </Text>
+                                {filesPanelTab === 'files' && selectedWorkingTreePath && (
+                                  <Group gap={2} wrap="nowrap" className="working-tree-detail-tabs">
+                                    <Button
+                                      size="compact-xs"
+                                      variant={workingTreeDetailTab === 'content' ? 'filled' : 'subtle'}
+                                      color={workingTreeDetailTab === 'content' ? 'teal' : 'gray'}
+                                      leftSection={<IconFileCode size={13} />}
+                                      disabled={!selectedWorkingTreeFile}
+                                      onClick={() => setWorkingTreeDetailTab('content')}
+                                    >
+                                      Content
+                                    </Button>
+                                    <Button
+                                      size="compact-xs"
+                                      variant={workingTreeDetailTab === 'analytics' ? 'filled' : 'subtle'}
+                                      color={workingTreeDetailTab === 'analytics' ? 'teal' : 'gray'}
+                                      leftSection={<IconChartBar size={13} />}
+                                      onClick={() => setWorkingTreeDetailTab('analytics')}
+                                    >
+                                      Analytics
+                                    </Button>
+                                  </Group>
+                                )}
                                 {filesPanelTab === 'changes' && (
                                 <Group gap={5} wrap="nowrap">
                                   <Badge
@@ -6033,7 +6149,8 @@ export function App() {
                                   </Button>
                                 </Group>
                                 )}
-                                {filesPanelTab === 'files' && selectedWorkingTreePreviewKind && (
+                                {filesPanelTab === 'files' && workingTreeDetailTab === 'content' &&
+                                  selectedWorkingTreePreviewKind && (
                                   <Group gap={2} wrap="nowrap" className="working-tree-view-switcher">
                                     {workingTreeCanShowCode && (
                                       <Button
@@ -6081,7 +6198,8 @@ export function App() {
                                     </ActionIcon>
                                   </Tooltip>
                                 )}
-                                {filesPanelTab === 'files' && workingTreeView !== 'preview' &&
+                                {filesPanelTab === 'files' && workingTreeDetailTab === 'content' &&
+                                  workingTreeView !== 'preview' &&
                                   workingTreeContent !== null && (
                                   <CopyButton value={workingTreeContent} timeout={1600}>
                                     {({ copied, copy }) => (
@@ -6113,7 +6231,24 @@ export function App() {
                               </div>
 
                               {filesPanelTab === 'files' ? (
-                                workingTreeContentLoading ? (
+                                workingTreeDetailTab === 'analytics' && selectedWorkingTreePath ? (
+                                  <RepositoryChangeAnalytics
+                                    data={changeAnalytics}
+                                    loading={changeAnalyticsLoading}
+                                    error={changeAnalyticsError}
+                                    range={changeAnalyticsRange}
+                                    scope={{
+                                      path: selectedWorkingTreePath,
+                                      kind: selectedWorkingTreeFolder ? 'folder' : 'file',
+                                    }}
+                                    onRangeChange={(range) => {
+                                      setChangeAnalytics(null)
+                                      setChangeAnalyticsRange(range)
+                                    }}
+                                    onRefresh={() => setChangeAnalyticsRefreshVersion((version) => version + 1)}
+                                    onOpenFile={(path) => void openFileHistory(path)}
+                                  />
+                                ) : workingTreeContentLoading ? (
                                   <div className="scm-diff-empty">
                                     <Loader size="sm" />
                                     <Text size="xs" c="dimmed">Reading current file…</Text>

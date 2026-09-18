@@ -189,7 +189,7 @@ export interface RepositoryFilePreview {
   size: number
 }
 
-export type RepositoryAnalyticsRange = '30d' | '90d' | '1y' | 'all'
+export type RepositoryAnalyticsRange = '7d' | '30d' | '90d' | '1y' | 'all'
 
 export interface RepositoryChangeFileStat {
   path: string
