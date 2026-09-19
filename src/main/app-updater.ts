@@ -85,7 +85,9 @@ const installUpdate = (): void => {
   if (updateState.phase !== 'downloaded') {
     throw new Error('The update has not finished downloading.')
   }
-  autoUpdater.quitAndInstall(false, true)
+  // Updates use NSIS silent mode: close MyRepos, replace the installed files without showing the
+  // installer wizard, then launch the updated application again.
+  autoUpdater.quitAndInstall(true, true)
 }
 
 const configureUpdater = (): void => {
