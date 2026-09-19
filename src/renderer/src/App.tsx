@@ -969,6 +969,8 @@ export function App() {
   const [publishError, setPublishError] = useState<string | null>(null)
   const contentScrollRef = useRef<HTMLDivElement>(null)
   const repositoryResultsScrollRef = useRef<HTMLDivElement>(null)
+  const gitPanelRequestRef = useRef(0)
+  const historySelectionRequestRef = useRef(0)
   const workingTreeRefreshTimerRef = useRef<number | null>(null)
   const automaticInsightScanPathsRef = useRef(new Set<string>())
   const [connectOpen, setConnectOpen] = useState(false)
@@ -2250,6 +2252,10 @@ export function App() {
 
   const openGitPanel = async (repository: GitHubRepository): Promise<void> => {
     if (!window.desktop || !repository.localPath) return
+    const repositoryPath = repository.localPath
+    const requestId = ++gitPanelRequestRef.current
+    historySelectionRequestRef.current += 1
+    setGitAction(null)
     setRepositoryLayout('list')
     setGitRepository(repository)
     setGitDetails(null)
@@ -2292,23 +2298,25 @@ export function App() {
 
     try {
       const [details, history] = await Promise.all([
-        window.desktop.repositories.gitDetails(repository.localPath),
-        window.desktop.repositories.gitHistory(repository.localPath).catch(() => []),
+        window.desktop.repositories.gitDetails(repositoryPath),
+        window.desktop.repositories.gitHistory(repositoryPath).catch(() => []),
       ])
+      if (requestId !== gitPanelRequestRef.current) return
       applyGitDetails(details)
       setGitHistory(history)
       const firstFile = details.files[0]
       if (firstFile) {
         const staged = firstFile.staged && !firstFile.unstaged
-        const diff = await window.desktop.repositories.gitDiff(repository.localPath, firstFile.path, staged)
+        const diff = await window.desktop.repositories.gitDiff(repositoryPath, firstFile.path, staged)
+        if (requestId !== gitPanelRequestRef.current) return
         setSelectedDiffPath(firstFile.path)
         setDiffTitle(firstFile.path)
         setDiffText(diff || 'No textual diff is available for this file.')
       }
     } catch (error) {
-      setGitError(errorMessage(error))
+      if (requestId === gitPanelRequestRef.current) setGitError(errorMessage(error))
     } finally {
-      setGitPanelLoading(false)
+      if (requestId === gitPanelRequestRef.current) setGitPanelLoading(false)
     }
   }
 
@@ -2349,6 +2357,8 @@ export function App() {
     ])
     applyGitDetails(details)
     setGitHistory(history)
+    historySelectionRequestRef.current += 1
+    setGitAction(null)
     setSelectedCommitHash(null)
     setSelectedCommitFiles([])
     setSelectedCommitFile(null)
@@ -2806,56 +2816,71 @@ export function App() {
 
   const showCommitDiff = async (commit: RepositoryCommit): Promise<void> => {
     if (!window.desktop || !gitRepository?.localPath) return
+    const repositoryPath = gitRepository.localPath
+    const requestId = ++historySelectionRequestRef.current
     setGitAction(`history:${commit.hash}`)
     setGitError(null)
     setSelectedDiffPath(null)
     setSelectedCommitHash(commit.hash)
     setSelectedCommitFiles([])
     setSelectedCommitFile(null)
+    setDiffTitle(`${commit.shortHash} · ${commit.subject}`)
+    setDiffText(null)
     try {
       const files = await window.desktop.repositories.gitCommitFiles(
-        gitRepository.localPath,
+        repositoryPath,
         commit.hash,
       )
+      if (requestId !== historySelectionRequestRef.current) return
       setSelectedCommitFiles(files)
-      setDiffTitle(`${commit.shortHash} · ${commit.subject}`)
       const firstFile = files[0]
       if (firstFile) {
         const diff = await window.desktop.repositories.gitCommitFileDiff(
-          gitRepository.localPath,
+          repositoryPath,
           commit.hash,
           firstFile.path,
         )
+        if (requestId !== historySelectionRequestRef.current) return
         setSelectedCommitFile(firstFile.path)
         setDiffText(diff || 'This file has no textual diff.')
       } else {
         setDiffText('This commit has no textual diff.')
       }
     } catch (error) {
-      setGitError(errorMessage(error))
+      if (requestId === historySelectionRequestRef.current) setGitError(errorMessage(error))
     } finally {
-      setGitAction(null)
+      if (requestId === historySelectionRequestRef.current) setGitAction(null)
     }
   }
 
   const showCommitFileDiff = async (file: RepositoryCommitFile): Promise<void> => {
     if (!window.desktop || !gitRepository?.localPath || !selectedCommitHash) return
+    const repositoryPath = gitRepository.localPath
+    const commitHash = selectedCommitHash
+    const requestId = ++historySelectionRequestRef.current
     setGitAction(`history-file:${file.path}`)
     setGitError(null)
     setSelectedCommitFile(file.path)
     try {
       const diff = await window.desktop.repositories.gitCommitFileDiff(
-        gitRepository.localPath,
-        selectedCommitHash,
+        repositoryPath,
+        commitHash,
         file.path,
       )
+      if (requestId !== historySelectionRequestRef.current) return
       setDiffText(diff || 'This file has no textual diff.')
     } catch (error) {
-      setGitError(errorMessage(error))
+      if (requestId === historySelectionRequestRef.current) setGitError(errorMessage(error))
     } finally {
-      setGitAction(null)
+      if (requestId === historySelectionRequestRef.current) setGitAction(null)
     }
   }
+
+  useEffect(() => {
+    if (filesPanelTab !== 'history' || selectedCommitHash || gitAction) return
+    const firstCommit = visibleGitHistory[0]
+    if (firstCommit) void showCommitDiff(firstCommit)
+  }, [filesPanelTab, gitRepository?.localPath, visibleGitHistory, selectedCommitHash, gitAction])
 
   const showFileRevision = async (
     revision: RepositoryFileRevision,
@@ -6037,6 +6062,8 @@ export function App() {
                                       </Group>
                                     )}
                                     onChange={(value) => {
+                                      historySelectionRequestRef.current += 1
+                                      setGitAction(null)
                                       setHistoryCommitterFilter(value ?? allCommittersFilter)
                                       setSelectedCommitHash(null)
                                       setSelectedCommitFiles([])
