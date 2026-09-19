@@ -22,6 +22,7 @@ import {
   IconCheck,
   IconEdit,
   IconFingerprint,
+  IconLayoutDashboard,
   IconKey,
   IconLock,
   IconPlugConnected,
@@ -39,6 +40,7 @@ import type {
   SshVaultStatus,
 } from '../../shared/desktop-api'
 import './ssh-connections.css'
+import { SshServerWorkspace } from './SshServerWorkspace'
 
 interface ConnectionDraft {
   id: string | null
@@ -101,6 +103,7 @@ export function SshConnectionsPage({
     result: SshConnectionTestResult
   } | null>(null)
   const [removeTarget, setRemoveTarget] = useState<SshConnection | null>(null)
+  const [workspaceConnection, setWorkspaceConnection] = useState<SshConnection | null>(null)
 
   const updateDraft = <Key extends keyof ConnectionDraft>(
     key: Key,
@@ -201,7 +204,7 @@ export function SshConnectionsPage({
           ...current,
           [connection.id]: {
             color: 'teal',
-            message: `Connected in ${result.latencyMs ?? 0} ms � ${result.fingerprint}`,
+            message: `Connected in ${result.latencyMs ?? 0} ms - ${result.fingerprint}`,
           },
         }))
         setConnections(await window.desktop.ssh.list())
@@ -230,6 +233,16 @@ export function SshConnectionsPage({
   const choosePrivateKey = async (): Promise<void> => {
     const path = await window.desktop?.ssh.choosePrivateKey()
     if (path) setDraft((current) => ({ ...current, privateKeyPath: path }))
+  }
+
+  if (workspaceConnection) {
+    return (
+      <SshServerWorkspace
+        connection={workspaceConnection}
+        onBack={() => setWorkspaceConnection(null)}
+        onOpenTerminal={() => onOpenTerminal(workspaceConnection)}
+      />
+    )
   }
 
   return (
@@ -278,14 +291,14 @@ export function SshConnectionsPage({
           </div>
         </Group>
         <Badge variant="light" color={vault?.available ? 'teal' : 'red'}>
-          {vault?.label ?? 'Checking&'}
+          {vault?.label ?? 'Checking...'}
         </Badge>
       </Paper>
 
       {loading ? (
         <Paper className="empty-state ssh-empty" radius="lg">
           <Loader size="sm" />
-          <Text size="sm" c="dimmed">Loading SSH connections&</Text>
+          <Text size="sm" c="dimmed">Loading SSH connections...</Text>
         </Paper>
       ) : connections.length === 0 ? (
         <Paper className="empty-state ssh-empty" radius="lg">
@@ -318,6 +331,19 @@ export function SshConnectionsPage({
                     </div>
                   </Group>
                   <Group gap={4} wrap="nowrap">
+                    <Tooltip label={connection.hostFingerprint
+                      ? 'Open server control center'
+                      : 'Test and verify this host before opening its control center'}>
+                      <ActionIcon
+                        variant="subtle"
+                        color="teal"
+                        disabled={!connection.hostFingerprint}
+                        aria-label={`Manage ${connection.name}`}
+                        onClick={() => setWorkspaceConnection(connection)}
+                      >
+                        <IconLayoutDashboard size={17} />
+                      </ActionIcon>
+                    </Tooltip>
                     <Tooltip label={connection.hostFingerprint
                       ? 'Open SSH terminal'
                       : 'Test and verify this host before opening a terminal'}>
@@ -442,7 +468,7 @@ export function SshConnectionsPage({
             <PasswordInput
               label="Password"
               required={!draft.hasPassword}
-              placeholder={draft.hasPassword ? 'Stored securely � leave blank to keep' : 'SSH password'}
+              placeholder={draft.hasPassword ? 'Stored securely - leave blank to keep' : 'SSH password'}
               value={draft.password}
               onChange={(event) => updateDraft('password', event.currentTarget.value)}
             />
@@ -468,7 +494,7 @@ export function SshConnectionsPage({
               <PasswordInput
                 label="Key passphrase"
                 description="Optional for unencrypted private keys"
-                placeholder={draft.hasPassphrase ? 'Stored securely � leave blank to keep' : 'Optional passphrase'}
+                placeholder={draft.hasPassphrase ? 'Stored securely - leave blank to keep' : 'Optional passphrase'}
                 value={draft.passphrase}
                 onChange={(event) => updateDraft('passphrase', event.currentTarget.value)}
               />

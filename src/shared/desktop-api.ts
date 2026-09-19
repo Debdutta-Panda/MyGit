@@ -201,6 +201,41 @@ export interface SshVaultStatus {
   label: string
 }
 
+export interface SshServerOverview {
+  connectionId: string
+  hostname: string
+  operatingSystem: string
+  kernel: string
+  architecture: string
+  uptime: string
+  loadAverage: string
+  homeDirectory: string
+  shell: string
+  cpuCount: number | null
+  totalMemoryBytes: number | null
+  freeMemoryBytes: number | null
+  diskTotalBytes: number | null
+  diskUsedBytes: number | null
+  diskAvailableBytes: number | null
+  fetchedAt: string
+}
+
+export interface SshRemoteEntry {
+  name: string
+  path: string
+  type: 'directory' | 'file' | 'link' | 'other'
+  size: number
+  modifiedAt: string | null
+  permissions: string
+}
+
+export interface SshDirectoryListing {
+  connectionId: string
+  path: string
+  parentPath: string | null
+  entries: SshRemoteEntry[]
+}
+
 export interface RepositoryGitStatus {
   path: string
   branch: string | null
@@ -477,6 +512,8 @@ export interface DesktopApi {
     test: (id: string, trustHostKey?: boolean) => Promise<SshConnectionTestResult>
     choosePrivateKey: () => Promise<string | null>
     vaultStatus: () => Promise<SshVaultStatus>
+    serverOverview: (id: string) => Promise<SshServerOverview>
+    listDirectory: (id: string, path?: string | null) => Promise<SshDirectoryListing>
   }
   github: {
     start: () => Promise<GitHubDeviceAuthorization>

@@ -226,7 +226,7 @@ const createTerminal = async (
   const info: TerminalSessionInfo = {
     id,
     title: sshConnection
-      ? `SSH � ${sshConnection.username}@${sshConnection.host}`
+      ? `SSH - ${sshConnection.username}@${sshConnection.host}`
       : profile!.name,
     cwd,
     profileId: sshConnection ? `ssh:${sshConnection.id}` : profile!.id,

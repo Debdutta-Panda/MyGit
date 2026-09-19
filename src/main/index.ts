@@ -13,6 +13,7 @@ import { registerProjectInsightHandlers } from './project-insights'
 import { registerUpdateHandlers, startAutomaticUpdateChecks } from './app-updater'
 import { closeAllTerminals, registerTerminalHandlers } from './terminal-service'
 import { registerSshConnectionHandlers } from './ssh-connections'
+import { registerSshWorkspaceHandlers } from './ssh-workspace'
 
 // Squirrel invokes the application briefly while installing, updating, and uninstalling. Its
 // startup helper creates/removes shortcuts and exits before normal application initialization.
@@ -108,6 +109,7 @@ app.whenReady().then(async () => {
   registerUpdateHandlers()
   registerTerminalHandlers()
   registerSshConnectionHandlers()
+  registerSshWorkspaceHandlers()
   registerOrganizationHandlers()
   registerConfigurationSyncHandlers()
   registerWorkingCopyHandlers()

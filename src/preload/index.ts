@@ -72,6 +72,8 @@ const desktopApi: DesktopApi = {
     test: (id, trustHostKey = false) => ipcRenderer.invoke('ssh:test', id, trustHostKey),
     choosePrivateKey: () => ipcRenderer.invoke('ssh:choose-private-key'),
     vaultStatus: () => ipcRenderer.invoke('ssh:vault-status'),
+    serverOverview: (id) => ipcRenderer.invoke('ssh:server-overview', id),
+    listDirectory: (id, path = null) => ipcRenderer.invoke('ssh:list-directory', id, path),
   },
   github: {
     start: () => ipcRenderer.invoke('github:start'),
