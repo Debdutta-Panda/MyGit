@@ -448,11 +448,17 @@ textarea { font: inherit; }
 
 .repository-summary-action {
   cursor: pointer;
-  transition: filter 120ms ease, transform 120ms ease;
+  transition: filter 120ms ease, box-shadow 120ms ease;
 }
 
-.repository-summary-action:hover:not(:disabled) { filter: brightness(1.14); }
-.repository-summary-action:active:not(:disabled) { transform: translateY(1px); }
+.repository-summary-action:hover:not(:disabled) {
+  filter: brightness(1.16);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .28);
+}
+.repository-summary-action:active:not(:disabled) {
+  filter: brightness(.9);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, .34);
+}
 .repository-summary-action:disabled { cursor: progress; opacity: .7; }
 
 .repository-filter-chip { max-width: 190px; }

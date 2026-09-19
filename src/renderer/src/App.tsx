@@ -190,7 +190,7 @@ type InsightsMode = 'off' | 'manual' | 'automatic' | 'hybrid'
 type InsightsMetric = 'all' | 'lines' | 'code' | 'comments'
 type TechnologyCategory = ProjectInsightsResult['technologies'][number]['category']
 type BulkGitOperation = 'sync' | 'fetch' | 'pull' | 'push'
-type BulkGitTarget = 'visible' | 'selected' | 'visible-copies' | 'selected-copies' | 'push-needed'
+type BulkGitTarget = 'visible' | 'selected' | 'visible-copies' | 'selected-copies' | 'indicator'
 type FileHistoryView = 'diff' | 'content' | 'compare'
 type WorkingTreeView = 'code' | 'preview' | 'both'
 type WorkingTreeDetailTab = 'content' | 'analytics'
@@ -914,7 +914,7 @@ export function App() {
   const [bulkGitOperation, setBulkGitOperation] = useState<BulkGitOperation>('sync')
   const [bulkGitRunning, setBulkGitRunning] = useState(false)
   const [bulkGitResults, setBulkGitResults] = useState<BulkGitResult[]>([])
-  const [bulkPushNeededPaths, setBulkPushNeededPaths] = useState<string[]>([])
+  const [bulkIndicatorPaths, setBulkIndicatorPaths] = useState<string[]>([])
   const [accounts, setAccounts] = useState<GitHubAccount[]>([])
   const [accountsLoading, setAccountsLoading] = useState(true)
   const [accountsError, setAccountsError] = useState<string | null>(null)
@@ -1453,6 +1453,8 @@ export function App() {
   const listedPushNeededRepositories = pagedRepositories.filter((repository) =>
     Boolean(repository.localPath && (gitStatuses[repository.localPath]?.ahead ?? 0) > 0))
   const listedPullNeededCount = listedRepositoryStatuses.filter((status) => status.behind > 0).length
+  const listedPullNeededRepositories = pagedRepositories.filter((repository) =>
+    Boolean(repository.localPath && (gitStatuses[repository.localPath]?.behind ?? 0) > 0))
   const listedHasStatus = listedConflictCount > 0 || listedChangeCount > 0 ||
     listedPushNeededCount > 0 || listedPullNeededCount > 0
   const selectedRepositories = repositories.filter((repository) =>
@@ -1470,9 +1472,9 @@ export function App() {
         lastSyncedAt: copy.lastSyncedAt,
         preferredWorkingCopyId: copy.id,
       })))
-  const bulkGitRepositories = bulkGitTarget === 'push-needed'
+  const bulkGitRepositories = bulkGitTarget === 'indicator'
     ? repositories.filter((repository) =>
-        Boolean(repository.localPath && bulkPushNeededPaths.includes(repository.localPath)))
+        Boolean(repository.localPath && bulkIndicatorPaths.includes(repository.localPath)))
     : bulkGitTarget === 'selected'
       ? selectedLocalRepositories
       : bulkGitTarget === 'visible-copies'
@@ -2614,7 +2616,7 @@ export function App() {
   }
 
   const openBulkGit = (target: BulkGitTarget): void => {
-    setBulkPushNeededPaths([])
+    setBulkIndicatorPaths([])
     setBulkGitTarget(target)
     setBulkGitOperation('sync')
     setBulkGitResults([])
@@ -2683,13 +2685,25 @@ export function App() {
   const pushListedRepositories = (): void => {
     if (listedPushNeededRepositories.length === 0 || bulkGitRunning) return
     const targets = [...listedPushNeededRepositories]
-    setBulkPushNeededPaths(targets.flatMap((repository) =>
+    setBulkIndicatorPaths(targets.flatMap((repository) =>
       repository.localPath ? [repository.localPath] : []))
-    setBulkGitTarget('push-needed')
+    setBulkGitTarget('indicator')
     setBulkGitOperation('push')
     setBulkGitResults([])
     setBulkGitOpen(true)
     void runBulkGitOperation(targets, 'push')
+  }
+
+  const pullListedRepositories = (): void => {
+    if (listedPullNeededRepositories.length === 0 || bulkGitRunning) return
+    const targets = [...listedPullNeededRepositories]
+    setBulkIndicatorPaths(targets.flatMap((repository) =>
+      repository.localPath ? [repository.localPath] : []))
+    setBulkGitTarget('indicator')
+    setBulkGitOperation('pull')
+    setBulkGitResults([])
+    setBulkGitOpen(true)
+    void runBulkGitOperation(targets, 'pull')
   }
 
   const commitFromCard = async (): Promise<void> => {
@@ -4520,8 +4534,18 @@ export function App() {
                       </Tooltip>
                     )}
                     {listedPullNeededCount > 0 && (
-                      <Tooltip label={`${listedPullNeededCount} ${listedPullNeededCount === 1 ? 'repository needs' : 'repositories need'} pull`}>
-                        <Badge variant="filled" color="yellow" size="sm">
+                      <Tooltip label={`Pull ${listedPullNeededCount} ${listedPullNeededCount === 1 ? 'repository' : 'repositories'} shown on this page`}>
+                        <Badge
+                          component="button"
+                          type="button"
+                          className="repository-summary-action"
+                          variant="filled"
+                          color="yellow"
+                          size="sm"
+                          aria-label={`Pull ${listedPullNeededCount} ${listedPullNeededCount === 1 ? 'repository' : 'repositories'}`}
+                          disabled={bulkGitRunning}
+                          onClick={pullListedRepositories}
+                        >
                           ↓ {listedPullNeededCount} pull
                         </Badge>
                       </Tooltip>
@@ -8231,9 +8255,9 @@ export function App() {
               allowDeselect={false}
               disabled={bulkGitRunning}
               data={[
-                ...(bulkPushNeededPaths.length > 0 ? [{
-                  value: 'push-needed',
-                  label: `Repositories from push indicator (${bulkPushNeededPaths.length})`,
+                ...(bulkIndicatorPaths.length > 0 ? [{
+                  value: 'indicator',
+                  label: `Repositories from status indicator (${bulkIndicatorPaths.length})`,
                 }] : []),
                 {
                   value: 'visible',

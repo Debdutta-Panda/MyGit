@@ -36,18 +36,17 @@ npm.cmd run package:linux
 To publish manually, create a release at `https://github.com/Debdutta-Panda/MyGit/releases/new`, use tag
 `v0.1.0` for package version `0.1.0`, and upload every generated file from `release/`.
 
-To publish directly from the terminal, provide a GitHub token with repository Contents write access:
+To build and publish through the authenticated GitHub CLI:
 
 ```powershell
-$env:GH_TOKEN = 'YOUR_GITHUB_TOKEN'
-npm.cmd run publish:github
-Remove-Item Env:GH_TOKEN
+npm run deploy
 ```
 
-`publish:github` also detects the current operating system and uploads that machine's packages directly
-to the matching GitHub Release. Run it once on each operating system whose downloads you want to offer.
-Before each release, update the version in `package.json`. Keep the release tag in the form
-`v<package-version>`. Never commit a GitHub token or place it in `.env`.
+`deploy` detects the current operating system, reads authentication from `gh auth`, increments the patch
+version automatically, creates the matching `v<package-version>` GitHub Release, and uploads all package
+and update-metadata files. If the current release is incomplete, it reuses that version and repairs the
+release instead of skipping to another version. Run it once on each operating system whose downloads you
+want to offer. Never commit a GitHub token or place one in `.env`.
 
 ### GitHub sign-in setup
 

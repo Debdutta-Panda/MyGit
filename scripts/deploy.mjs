@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 function fail(message) {
@@ -55,19 +55,67 @@ function findGitHubCli() {
   fail('GitHub CLI was not found. Install `gh`, reopen the terminal, and run `gh auth login`.')
 }
 
+function parseStableVersion(value) {
+  const match = String(value ?? '').trim().match(/^v?(\d+)\.(\d+)\.(\d+)$/)
+  return match ? match.slice(1).map(Number) : null
+}
+
+function compareVersions(left, right) {
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index]
+  }
+  return 0
+}
+
+function versionText(version) {
+  return version.join('.')
+}
+
+function nextPatch(version) {
+  return [version[0], version[1], version[2] + 1]
+}
+
+function platformReleaseIsComplete(version, assets) {
+  const names = assets.map((asset) => asset.name)
+  const escapedVersion = version.replace(/\./g, '\\.')
+
+  if (process.platform === 'win32') {
+    return names.includes('latest.yml') &&
+      names.some((name) => new RegExp(`^MyRepos-Setup-${escapedVersion}-.+\\.exe$`).test(name))
+  }
+  if (process.platform === 'darwin') {
+    return names.includes('latest-mac.yml') &&
+      names.some((name) => new RegExp(`^MyRepos-${escapedVersion}-mac-.+\\.(?:dmg|zip)$`).test(name))
+  }
+  return names.includes('latest-linux.yml') &&
+    names.some((name) => new RegExp(`^MyRepos-${escapedVersion}-linux-.+\\.(?:AppImage|deb)$`).test(name))
+}
+
+function saveVersion(projectRoot, packageJson, version) {
+  packageJson.version = version
+  const packageLockPath = resolve(projectRoot, 'package-lock.json')
+  const packageLock = JSON.parse(readFileSync(packageLockPath, 'utf8'))
+  packageLock.version = version
+  if (packageLock.packages?.['']) packageLock.packages[''].version = version
+
+  writeFileSync(resolve(projectRoot, 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`)
+  writeFileSync(packageLockPath, `${JSON.stringify(packageLock, null, 2)}\n`)
+}
+
 if (!process.env.npm_execpath) {
   fail('Run deployment through `npm run deploy`.')
 }
 
 const projectRoot = process.cwd()
 const packageJson = JSON.parse(readFileSync(resolve(projectRoot, 'package.json'), 'utf8'))
-const version = packageJson.version
+const configuredVersion = packageJson.version
 const repositoryUrl =
   typeof packageJson.repository === 'string' ? packageJson.repository : packageJson.repository?.url
 const repositoryMatch = repositoryUrl?.match(/github\.com[/:]([^/]+)\/([^/.]+)(?:\.git)?$/i)
 
-if (!version) {
-  fail('No version is defined in package.json.')
+const parsedConfiguredVersion = parseStableVersion(configuredVersion)
+if (!parsedConfiguredVersion) {
+  fail('package.json version must use stable semantic versioning, for example 1.2.3.')
 }
 
 if (!repositoryMatch) {
@@ -75,13 +123,50 @@ if (!repositoryMatch) {
 }
 
 const repository = `${repositoryMatch[1]}/${repositoryMatch[2]}`
-const tag = `v${version}`
 const gh = findGitHubCli()
 const authStatus = capture(gh, ['auth', 'status'])
 
 if (authStatus.status !== 0) {
   fail('GitHub CLI is not authenticated. Run `gh auth login` first.')
 }
+
+const latestReleaseResult = capture(gh, [
+  'release',
+  'view',
+  '--repo',
+  repository,
+  '--json',
+  'tagName,assets'
+])
+let versionParts = parsedConfiguredVersion
+
+if (latestReleaseResult.status === 0) {
+  try {
+    const latestRelease = JSON.parse(latestReleaseResult.stdout)
+    const remoteVersion = parseStableVersion(latestRelease.tagName)
+    if (remoteVersion) {
+      if (compareVersions(remoteVersion, versionParts) > 0) versionParts = remoteVersion
+      if (
+        compareVersions(remoteVersion, versionParts) === 0 &&
+        platformReleaseIsComplete(versionText(remoteVersion), latestRelease.assets ?? [])
+      ) {
+        versionParts = nextPatch(versionParts)
+      }
+    }
+  } catch {
+    fail('GitHub returned invalid release information.')
+  }
+}
+
+const version = versionText(versionParts)
+if (version !== configuredVersion) {
+  saveVersion(projectRoot, packageJson, version)
+  console.log(`Version ${configuredVersion} → ${version}`)
+} else {
+  console.log(`Using version ${version} to complete or repair its release.`)
+}
+
+const tag = `v${version}`
 
 console.log('Building MyRepos...')
 run(process.execPath, [process.env.npm_execpath, 'run', 'build'])
