@@ -5076,6 +5076,7 @@ export function App() {
                             />
                           )}
                           <Text className="repository-title" fw={680}>{repository.fullName}</Text>
+                          <span className="repository-chip-break" aria-hidden="true" />
                           {repository.metadataLoaded && (
                             <>
                               <Badge

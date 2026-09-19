@@ -1494,27 +1494,45 @@ textarea { font: inherit; }
 
 .repository-workspace--split .repository-pane-layout--line .repository-heading {
   min-width: 0;
-  flex-wrap: nowrap !important;
-  overflow: hidden;
+  column-gap: 5px !important;
+  row-gap: 2px !important;
+  flex-wrap: wrap !important;
 }
 
 .repository-workspace--split .repository-pane-layout--line .repository-title {
   min-width: 0;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.repository-chip-break { display: none; }
+
+.repository-workspace--split .repository-pane-layout--line .repository-chip-break {
+  display: block;
+  flex: 0 0 100%;
+  width: 100%;
+  height: 0;
+}
+
+.repository-workspace--split .repository-pane-layout--line .repository-heading > .mantine-Badge-root {
+  height: 16px;
+  padding-inline: 5px;
+  font-size: 8px;
+  line-height: 14px;
+}
+
 .repository-workspace--split .repository-pane-layout--line .repository-language-icon {
-  width: 30px;
-  height: 30px;
-  flex-basis: 30px;
+  width: 27px;
+  height: 27px;
+  flex-basis: 27px;
   margin-right: 0;
 }
 
 .repository-workspace--split .repository-pane-layout--line .repository-language-logo {
-  width: 25px;
-  height: 25px;
+  width: 23px;
+  height: 23px;
 }
 
 .repository-workspace--split .repository-pane-layout--line .repository-description,
