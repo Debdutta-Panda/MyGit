@@ -212,12 +212,33 @@ export interface SshServerOverview {
   homeDirectory: string
   shell: string
   cpuCount: number | null
+  cpuUsagePercent: number | null
   totalMemoryBytes: number | null
   freeMemoryBytes: number | null
+  swapTotalBytes: number | null
+  swapUsedBytes: number | null
   diskTotalBytes: number | null
   diskUsedBytes: number | null
   diskAvailableBytes: number | null
+  processCount: number | null
+  serverTime: string
+  timezone: string
+  privateAddresses: string[]
+  publicAddress: string | null
+  networkReceivedBytes: number | null
+  networkSentBytes: number | null
+  rebootRequired: boolean | null
+  partitions: SshDiskPartition[]
   fetchedAt: string
+}
+
+export interface SshDiskPartition {
+  filesystem: string
+  mountPoint: string
+  totalBytes: number
+  usedBytes: number
+  availableBytes: number
+  usagePercent: number
 }
 
 export interface SshRemoteEntry {
@@ -234,6 +255,29 @@ export interface SshDirectoryListing {
   path: string
   parentPath: string | null
   entries: SshRemoteEntry[]
+}
+
+export interface SshRemoteFileContent {
+  connectionId: string
+  path: string
+  name: string
+  size: number
+  modifiedAt: string
+  etag: string
+  permissions: string
+  mimeType: string
+  presentation: 'text' | 'image' | 'pdf' | 'binary'
+  content: string | null
+  dataUrl: string | null
+  writable: boolean
+}
+
+export interface SshRemoteFileWriteInput {
+  connectionId: string
+  path: string
+  content: string
+  expectedModifiedAt: string
+  expectedEtag: string
 }
 
 export interface RepositoryGitStatus {
@@ -514,6 +558,8 @@ export interface DesktopApi {
     vaultStatus: () => Promise<SshVaultStatus>
     serverOverview: (id: string) => Promise<SshServerOverview>
     listDirectory: (id: string, path?: string | null) => Promise<SshDirectoryListing>
+    readFile: (id: string, path: string) => Promise<SshRemoteFileContent>
+    writeFile: (input: SshRemoteFileWriteInput) => Promise<SshRemoteFileContent>
   }
   github: {
     start: () => Promise<GitHubDeviceAuthorization>

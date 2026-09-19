@@ -125,8 +125,29 @@
 
 .ssh-metric-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
+}
+
+.ssh-health-strip {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid rgba(32, 201, 151, 0.42);
+  background: rgba(13, 91, 68, 0.18);
+}
+
+.ssh-health-strip[data-level='warning'] {
+  border-color: rgba(250, 176, 5, 0.55);
+  background: rgba(125, 83, 0, 0.2);
+}
+
+.ssh-health-strip[data-level='critical'] {
+  border-color: rgba(250, 82, 82, 0.62);
+  background: rgba(116, 35, 48, 0.24);
 }
 
 .ssh-metric-card {
@@ -141,6 +162,40 @@
 
 .ssh-metric-card > div:last-child { min-width: 0; flex: 1; }
 .ssh-metric-progress .mantine-Progress-root { background: #202b36; }
+
+.ssh-chart-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ssh-chart-card {
+  min-width: 0;
+  padding: 12px 14px 8px;
+  overflow: hidden;
+  border: 1px solid #303d4b;
+  background: #111820;
+}
+
+.ssh-mini-chart {
+  width: 100%;
+  height: 48px;
+  margin-top: 8px;
+  overflow: visible;
+}
+
+.ssh-mini-chart path {
+  fill: none;
+  stroke: #283543;
+  stroke-width: 0.7;
+}
+
+.ssh-mini-chart polyline {
+  fill: none;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
 
 .ssh-overview-details {
   margin-top: 12px;
@@ -165,6 +220,30 @@
 
 .ssh-detail-card dt { color: #8290a2; }
 .ssh-detail-card dd { margin: 0; overflow-wrap: anywhere; color: #d8e1eb; }
+
+.ssh-dashboard-section {
+  margin-top: 12px;
+  padding: 15px 16px;
+  border: 1px solid #303d4b;
+  border-radius: 10px;
+  background: #111820;
+}
+
+.ssh-partition-list { display: grid; gap: 3px; }
+
+.ssh-partition-row {
+  min-width: 0;
+  min-height: 45px;
+  padding: 7px 8px;
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) minmax(140px, auto) minmax(120px, 1fr) 42px;
+  align-items: center;
+  gap: 14px;
+  border-radius: 6px;
+}
+
+.ssh-partition-row:hover { background: #17222c; }
+.ssh-partition-row > div:first-child { min-width: 0; }
 
 .ssh-files-panel {
   overflow: hidden;
@@ -209,6 +288,240 @@
 .ssh-file-row svg { color: #56dcb0; }
 .ssh-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #e0e7ee; }
 
+.remote-explorer {
+  height: max(560px, calc(100vh - 205px));
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #303d4b;
+  border-radius: 9px;
+  background: #0d1319;
+}
+
+.remote-explorer-toolbar {
+  min-height: 44px;
+  padding: 6px 8px;
+  display: grid;
+  grid-template-columns: auto minmax(220px, 1fr) minmax(150px, 260px) auto;
+  align-items: center;
+  gap: 7px;
+  border-bottom: 1px solid #2d3946;
+  background: #121a22;
+}
+
+.remote-explorer-toolbar .mantine-TextInput-input {
+  border-color: #303c49;
+  background: #0d141b;
+}
+
+.remote-explorer-error,
+.remote-file-error {
+  padding: 7px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid rgba(250, 82, 82, 0.4);
+  color: #ffc9c9;
+  background: rgba(116, 35, 48, 0.27);
+}
+
+.remote-explorer-body {
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+}
+
+.remote-tree-pane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #2d3946;
+  background: #0f161d;
+}
+
+.remote-pane-title {
+  min-height: 35px;
+  padding: 7px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #95a3b3;
+  font-size: 10.5px;
+  font-weight: 750;
+  letter-spacing: 0.065em;
+}
+
+.remote-tree-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.ssh-tree-row {
+  width: 100%;
+  height: 25px;
+  padding-block: 2px;
+  padding-right: 7px;
+  display: grid;
+  grid-template-columns: 14px 17px minmax(0, 1fr);
+  align-items: center;
+  gap: 3px;
+  border: 0;
+  background: transparent;
+  color: #b3bfcc;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: default;
+}
+
+.ssh-tree-row:hover { background: #18232d; color: #e2e8ef; }
+.ssh-tree-row[data-selected] { background: #1c2a35; color: #eff4f8; }
+.ssh-tree-row > svg { color: #65dcb5; }
+.ssh-tree-row > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-tree-chevron { width: 14px; height: 14px; display: grid; place-items: center; color: #8795a5; }
+
+.remote-content-pane,
+.remote-file-workspace,
+.remote-directory-view {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.remote-file-tabs {
+  min-height: 35px;
+  display: flex;
+  overflow-x: auto;
+  border-bottom: 1px solid #2d3946;
+  background: #10171e;
+}
+
+.remote-file-tabs button {
+  max-width: 210px;
+  min-width: 90px;
+  padding: 7px 8px 6px;
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-right: 1px solid #293440;
+  border-top: 2px solid transparent;
+  background: #111920;
+  color: #8f9dad;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.remote-file-tabs button[data-active] {
+  border-top-color: #20c997;
+  background: #0e141a;
+  color: #dce4ec;
+}
+
+.remote-file-tabs button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-file-tabs button > svg:last-child { opacity: 0; }
+.remote-file-tabs button:hover > svg:last-child,
+.remote-file-tabs button[data-active] > svg:last-child { opacity: 1; }
+
+.remote-file-workspace { flex: 1; }
+
+.remote-file-actions {
+  min-height: 39px;
+  padding: 5px 9px 5px 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid #27323d;
+  background: #0e151b;
+}
+
+.remote-editor-area { min-height: 0; flex: 1; display: flex; background: #0e141a; }
+.remote-editor-area .working-tree-monaco { height: 100%; }
+
+.remote-image-preview,
+.remote-unsupported,
+.remote-loading {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 7px;
+  padding: 22px;
+  color: #7e8c9c;
+  overflow: auto;
+}
+
+.remote-image-preview img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
+.remote-document-preview { width: 100%; min-height: 0; flex: 1; border: 0; background: #0e141a; }
+
+.remote-file-status {
+  min-height: 24px;
+  padding: 3px 9px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 14px;
+  border-top: 1px solid #26313c;
+  color: #718092;
+  font-size: 10.5px;
+}
+
+.remote-dirty { color: #ffd43b; }
+
+.remote-directory-view { flex: 1; overflow: hidden; }
+
+.remote-directory-heading {
+  min-height: 55px;
+  padding: 9px 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #26313c;
+}
+
+.remote-directory-list { min-height: 0; flex: 1; overflow: auto; }
+
+.remote-directory-list > button {
+  width: 100%;
+  min-height: 35px;
+  padding: 6px 12px;
+  display: grid;
+  grid-template-columns: 20px minmax(180px, 1fr) 65px 86px 155px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-bottom: 1px solid #202a34;
+  background: transparent;
+  color: #8e9bab;
+  text-align: left;
+  font: inherit;
+  font-size: 11.5px;
+}
+
+.remote-directory-list > button:hover { background: #17222c; color: #dce4ec; }
+.remote-directory-list > button > svg { color: #5bdcb2; }
+.remote-directory-list > button > span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #d2dbe4; }
+.remote-opening { padding: 10px 13px; display: flex; align-items: center; gap: 8px; color: #8e9bab; }
+
+@media (max-width: 980px) {
+  .remote-explorer-body { grid-template-columns: 205px minmax(0, 1fr); }
+  .remote-explorer-toolbar { grid-template-columns: auto minmax(170px, 1fr) auto; }
+  .remote-explorer-toolbar > .mantine-TextInput-root:nth-of-type(2) { display: none; }
+}
+
 @media (max-width: 840px) {
   .ssh-content { padding-inline: 18px; }
   .ssh-grid,
@@ -216,8 +529,19 @@
   .ssh-vault-card { align-items: flex-start; }
   .ssh-workspace { padding-inline: 16px; }
   .ssh-metric-grid,
+  .ssh-chart-grid,
   .ssh-overview-details { grid-template-columns: 1fr; }
+  .ssh-dashboard-updated { display: none; }
+  .ssh-health-strip { align-items: flex-start; flex-direction: column; }
+  .ssh-partition-row { grid-template-columns: minmax(110px, 1fr) 50px; }
+  .ssh-partition-row > :nth-child(2),
+  .ssh-partition-row > :nth-child(3) { display: none; }
   .ssh-file-row { grid-template-columns: 20px minmax(140px, 1fr) 80px 16px; }
   .ssh-file-row span:nth-of-type(2),
   .ssh-file-row span:nth-of-type(4) { display: none; }
+  .remote-explorer { height: max(520px, calc(100vh - 190px)); }
+  .remote-explorer-body { grid-template-columns: 165px minmax(0, 1fr); }
+  .remote-directory-list > button { grid-template-columns: 20px minmax(120px, 1fr) 75px; }
+  .remote-directory-list > button > span:nth-of-type(2),
+  .remote-directory-list > button > span:nth-of-type(4) { display: none; }
 }

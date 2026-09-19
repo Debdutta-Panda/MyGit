@@ -127,13 +127,27 @@ const languageForFile = (path: string): string => {
 interface ReadOnlyMonacoProps {
   path: string
   value: string
+  readOnly?: boolean
+  onChange?: (value: string) => void
+  onSave?: () => void
 }
 
-export function ReadOnlyMonaco({ path, value }: ReadOnlyMonacoProps) {
+export function ReadOnlyMonaco({
+  path,
+  value,
+  readOnly = true,
+  onChange,
+  onSave,
+}: ReadOnlyMonacoProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const modelRef = useRef<monaco.editor.ITextModel | null>(null)
   const viewerIdRef = useRef<number | null>(null)
+  const applyingValueRef = useRef(false)
+  const onChangeRef = useRef(onChange)
+  const onSaveRef = useRef(onSave)
+  onChangeRef.current = onChange
+  onSaveRef.current = onSave
   if (viewerIdRef.current === null) viewerIdRef.current = ++viewerSequence
 
   useEffect(() => {
@@ -141,8 +155,8 @@ export function ReadOnlyMonaco({ path, value }: ReadOnlyMonacoProps) {
     configureMonaco()
     const editor = monaco.editor.create(containerRef.current, {
       theme: 'myrepos-dark',
-      readOnly: true,
-      domReadOnly: true,
+      readOnly,
+      domReadOnly: readOnly,
       automaticLayout: true,
       fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
       fontSize: 12.5,
@@ -168,10 +182,15 @@ export function ReadOnlyMonaco({ path, value }: ReadOnlyMonacoProps) {
       wordWrap: 'off',
       contextmenu: true,
       links: true,
-      readOnlyMessage: { value: 'Current file preview is read-only.' },
+      readOnlyMessage: { value: 'This file is read-only.' },
     })
+    const changeListener = editor.onDidChangeModelContent(() => {
+      if (!applyingValueRef.current) onChangeRef.current?.(editor.getValue())
+    })
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => onSaveRef.current?.())
     editorRef.current = editor
     return () => {
+      changeListener.dispose()
       modelRef.current?.dispose()
       modelRef.current = null
       editor.dispose()
@@ -180,9 +199,14 @@ export function ReadOnlyMonaco({ path, value }: ReadOnlyMonacoProps) {
   }, [])
 
   useEffect(() => {
+    editorRef.current?.updateOptions({ readOnly, domReadOnly: readOnly })
+  }, [readOnly])
+
+  useEffect(() => {
     const editor = editorRef.current
     if (!editor) return
     modelRef.current?.dispose()
+    applyingValueRef.current = true
     const model = monaco.editor.createModel(
       value,
       languageForFile(path),
@@ -195,11 +219,16 @@ export function ReadOnlyMonaco({ path, value }: ReadOnlyMonacoProps) {
     modelRef.current = model
     editor.setModel(model)
     editor.setScrollPosition({ scrollTop: 0, scrollLeft: 0 })
+    applyingValueRef.current = false
   }, [path])
 
   useEffect(() => {
     const model = modelRef.current
-    if (model && model.getValue() !== value) model.setValue(value)
+    if (model && model.getValue() !== value) {
+      applyingValueRef.current = true
+      model.setValue(value)
+      applyingValueRef.current = false
+    }
   }, [value])
 
   return <div className="working-tree-monaco" ref={containerRef} />

@@ -74,6 +74,8 @@ const desktopApi: DesktopApi = {
     vaultStatus: () => ipcRenderer.invoke('ssh:vault-status'),
     serverOverview: (id) => ipcRenderer.invoke('ssh:server-overview', id),
     listDirectory: (id, path = null) => ipcRenderer.invoke('ssh:list-directory', id, path),
+    readFile: (id, path) => ipcRenderer.invoke('ssh:read-file', id, path),
+    writeFile: (input) => ipcRenderer.invoke('ssh:write-file', input),
   },
   github: {
     start: () => ipcRenderer.invoke('github:start'),
