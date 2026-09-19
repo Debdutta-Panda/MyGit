@@ -257,6 +257,66 @@ const validatePortableConfiguration = (value: unknown): PortableConfiguration =>
   return config as PortableConfiguration
 }
 
+const mergePortableConfigurations = (
+  local: PortableConfiguration,
+  remote: PortableConfiguration,
+): PortableConfiguration => {
+  const mergeItems = (localItems: PortableItem[], remoteItems: PortableItem[]): PortableItem[] =>
+    [...new Map([...localItems, ...remoteItems].map((item) => [item.id, item])).values()]
+      .sort((left, right) => left.name.localeCompare(right.name))
+  const repositoryKey = (repository: Pick<PortableRepository, 'provider' | 'accountId' | 'fullName'>): string =>
+    `${repository.provider}:${repository.accountId}:${repository.fullName.toLowerCase()}`
+  const repositories = new Map(local.repositories.map((repository) => [
+    repositoryKey(repository),
+    repository,
+  ]))
+  for (const remoteRepository of remote.repositories) {
+    const key = repositoryKey(remoteRepository)
+    const localRepository = repositories.get(key)
+    repositories.set(key, localRepository ? {
+      ...localRepository,
+      ...remoteRepository,
+      workspaceIds: [...new Set([...remoteRepository.workspaceIds, ...localRepository.workspaceIds])],
+      workspacePositions: {
+        ...localRepository.workspacePositions,
+        ...remoteRepository.workspacePositions,
+      },
+      groupIds: [...new Set([...remoteRepository.groupIds, ...localRepository.groupIds])],
+      tagIds: [...new Set([...remoteRepository.tagIds, ...localRepository.tagIds])],
+    } : remoteRepository)
+  }
+  const preferenceKey = (preference: NonNullable<PortableConfiguration['workingCopyPreferences']>[number]): string =>
+    `${preference.accountId}:${preference.fullName.toLowerCase()}`
+  const preferences = new Map((local.workingCopyPreferences ?? []).map((preference) => [
+    preferenceKey(preference),
+    preference,
+  ]))
+  for (const remotePreference of remote.workingCopyPreferences ?? []) {
+    const key = preferenceKey(remotePreference)
+    const localPreference = preferences.get(key)
+    preferences.set(key, localPreference ? {
+      ...localPreference,
+      ...remotePreference,
+      workspaceLabels: {
+        ...localPreference.workspaceLabels,
+        ...remotePreference.workspaceLabels,
+      },
+    } : remotePreference)
+  }
+
+  return {
+    format: 'myrepos-configuration',
+    version: 1,
+    workspaces: mergeItems(local.workspaces, remote.workspaces),
+    groups: mergeItems(local.groups, remote.groups),
+    tags: mergeItems(local.tags, remote.tags),
+    repositories: [...repositories.values()]
+      .sort((left, right) => left.fullName.localeCompare(right.fullName)),
+    workingCopyPreferences: [...preferences.values()]
+      .sort((left, right) => left.fullName.localeCompare(right.fullName)),
+  }
+}
+
 const importConfiguration = (config: PortableConfiguration): void => {
   const db = getDatabase()
   const tables: Array<[OrganizationKind, 'workspaces' | 'groups' | 'tags', PortableItem[]]> = [
@@ -393,6 +453,20 @@ const readConfiguration = async (repositoryPath: string): Promise<PortableConfig
   }
 }
 
+const readConfigurationRevision = async (
+  repositoryPath: string,
+  revision: string,
+): Promise<PortableConfiguration | null> => {
+  try {
+    const contents = await runGit(repositoryPath, ['show', `${revision}:${CONFIGURATION_PATH}`])
+    return validatePortableConfiguration(JSON.parse(contents) as unknown)
+  } catch (error) {
+    const message = error instanceof Error ? error.message.toLowerCase() : ''
+    if (message.includes('does not exist') || message.includes('exists on disk, but not in')) return null
+    throw error
+  }
+}
+
 const authenticatedEnvironment = async (accountId: number): Promise<NodeJS.ProcessEnv> => {
   const auth = await refreshedCredentials(accountId)
   return {
@@ -414,6 +488,68 @@ const commitConfiguration = async (path: string): Promise<void> => {
   ])
 }
 
+const mergeRemoteConfiguration = async (
+  repositoryPath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<void> => {
+  await runGit(repositoryPath, ['-c', 'credential.helper=', 'fetch', 'origin'], { env })
+  const upstream = await runGit(repositoryPath, [
+    'rev-parse',
+    '--abbrev-ref',
+    '--symbolic-full-name',
+    '@{upstream}',
+  ])
+  const remoteConfiguration = await readConfigurationRevision(repositoryPath, upstream)
+  const localConfiguration = exportConfiguration()
+  const reconciledConfiguration = remoteConfiguration
+    ? mergePortableConfigurations(localConfiguration, remoteConfiguration)
+    : localConfiguration
+
+  try {
+    await runGit(repositoryPath, ['merge', '--no-edit', upstream])
+  } catch (mergeError) {
+    const conflicts = (await runGit(
+      repositoryPath,
+      ['diff', '--name-only', '--diff-filter=U'],
+      { successCodes: [0, 1] },
+    )).split(/\r?\n/).filter(Boolean)
+    const onlyConfigurationConflict = conflicts.length === 1 &&
+      conflicts[0].replaceAll('\\', '/') === CONFIGURATION_PATH
+
+    if (!onlyConfigurationConflict || !remoteConfiguration) {
+      try {
+        await runGit(repositoryPath, ['merge', '--abort'])
+      } catch {
+        // A merge may fail before Git creates merge state.
+      }
+      const details = conflicts.length > 0
+        ? `Conflicting files: ${conflicts.join(', ')}`
+        : mergeError instanceof Error ? mergeError.message : 'Git could not merge the repositories.'
+      throw new Error(`Configuration sync needs manual conflict resolution. ${details}`)
+    }
+
+    // The database already contains this machine's configuration. Importing the remote snapshot
+    // adds remote-only records and applies remote values for the same stable IDs, after which the
+    // exported file becomes a valid deterministic snapshot containing both sides.
+    importConfiguration(reconciledConfiguration)
+    await writeConfiguration(repositoryPath)
+    await runGit(repositoryPath, ['add', '--', CONFIGURATION_PATH])
+    await runGit(repositoryPath, [
+      '-c', 'user.name=MyRepos',
+      '-c', 'user.email=myrepos@users.noreply.github.com',
+      'commit', '--no-edit',
+    ])
+  }
+
+  const mergedConfiguration = await readConfiguration(repositoryPath)
+  const finalConfiguration = mergedConfiguration
+    ? mergePortableConfigurations(reconciledConfiguration, mergedConfiguration)
+    : reconciledConfiguration
+  importConfiguration(finalConfiguration)
+  await writeConfiguration(repositoryPath)
+  await commitConfiguration(repositoryPath)
+}
+
 const runConnectedSync = async (action: ConfigurationSyncAction): Promise<ConfigurationSyncState> => {
   if (syncInProgress) throw new Error('Configuration sync is already running.')
   const row = syncRow()
@@ -428,13 +564,11 @@ const runConnectedSync = async (action: ConfigurationSyncAction): Promise<Config
     const remote = await hasOrigin(row.local_path)
     const env = remote ? await authenticatedEnvironment(row.account_id) : undefined
     if ((action === 'pull' || action === 'sync') && remote) {
-      // Snapshot local database changes before reading remote state. A divergent remote then makes
-      // the fast-forward-only pull fail instead of silently replacing local configuration.
+      // Snapshot local database changes, then merge the remote branch. Configuration-only conflicts
+      // are reconciled structurally; unrelated repository conflicts remain a manual operation.
       await writeConfiguration(row.local_path)
       await commitConfiguration(row.local_path)
-      await runGit(row.local_path, ['-c', 'credential.helper=', 'pull', '--ff-only'], { env })
-      const pulled = await readConfiguration(row.local_path)
-      if (pulled) importConfiguration(pulled)
+      await mergeRemoteConfiguration(row.local_path, env!)
     } else if (action === 'pull') {
       throw new Error('This configuration repository has no origin remote.')
     }
