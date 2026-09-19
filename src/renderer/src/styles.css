@@ -1452,6 +1452,88 @@ textarea { font: inherit; }
   background: #131920;
 }
 
+.repository-pane-layout-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid #34404d;
+  border-radius: 7px;
+  background: #0d1319;
+}
+
+.repository-pane-layout-toggle .mantine-ActionIcon-root {
+  border: 1px solid transparent;
+}
+
+.repository-pane-layout-toggle .mantine-ActionIcon-root[aria-pressed='true'] {
+  border-color: #38d9a9;
+  background: #123b35;
+  color: #9fffe1;
+}
+
+.repository-workspace--split .repository-pane-layout--line {
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.repository-workspace--split .repository-pane-layout--line .repository-card,
+.repository-workspace--split .repository-pane-layout--line .repository-card--grid {
+  min-height: 52px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.repository-workspace--split .repository-pane-layout--line .repository-details {
+  min-width: 0;
+  flex: 1;
+}
+
+.repository-workspace--split .repository-pane-layout--line .repository-heading {
+  min-width: 0;
+  flex-wrap: nowrap !important;
+  overflow: hidden;
+}
+
+.repository-workspace--split .repository-pane-layout--line .repository-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repository-workspace--split .repository-pane-layout--line .repository-language-icon {
+  width: 30px;
+  height: 30px;
+  flex-basis: 30px;
+  margin-right: 0;
+}
+
+.repository-workspace--split .repository-pane-layout--line .repository-language-logo {
+  width: 25px;
+  height: 25px;
+}
+
+.repository-workspace--split .repository-pane-layout--line .repository-description,
+.repository-workspace--split .repository-pane-layout--line .repository-meta,
+.repository-workspace--split .repository-pane-layout--line .git-status-row,
+.repository-workspace--split .repository-pane-layout--line .repository-actions {
+  display: none;
+}
+
+.repository-workspace--split .repository-pane-layout--line .repository-selection-checkbox {
+  top: 50%;
+  left: 12px;
+  transform: translateY(-50%);
+}
+
+.repository-workspace--split .repository-pane-layout--line .repository-card[data-selecting] {
+  padding-left: 42px;
+}
+
 .repository-files-panel {
   min-width: 280px;
   flex: 1 1 72%;

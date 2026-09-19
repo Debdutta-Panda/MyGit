@@ -184,6 +184,7 @@ type AuthorizationState = 'idle' | 'starting' | 'waiting'
 type ActiveView = 'accounts' | 'repositories' | 'workspaces' | 'groups' | 'tags' | 'settings'
 type RepositoryTab = 'local' | 'github' | 'workspace'
 type RepositoryLayout = 'list' | 'grid'
+type RepositoryPaneLayout = 'line' | 'card'
 type FilesPanelTab = 'changes' | 'files' | 'history' | 'analytics'
 type InsightsTab = 'overview' | 'files' | 'technologies' | 'projects'
 type InsightsMode = 'off' | 'manual' | 'automatic' | 'hybrid'
@@ -938,6 +939,9 @@ export function App() {
   const [draggedRepositoryKey, setDraggedRepositoryKey] = useState<string | null>(null)
   const [repositoryDropTarget, setRepositoryDropTarget] = useState<string | null>(null)
   const [repositoryLayout, setRepositoryLayout] = useState<RepositoryLayout>('list')
+  const [repositoryPaneLayout, setRepositoryPaneLayout] = useState<RepositoryPaneLayout>(() =>
+    localStorage.getItem('myrepos:repository-pane-layout') === 'line' ? 'line' : 'card',
+  )
   const [repositoryPage, setRepositoryPage] = useState(1)
   const [cloningRepository, setCloningRepository] = useState<string | null>(null)
   const [cloneResult, setCloneResult] = useState<{ fullName: string; path: string } | null>(null)
@@ -4784,17 +4788,51 @@ export function App() {
               {gitRepository && (
                 <div className="workspace-pane-local-header">
                   <Text size="xs" fw={650}>Repositories</Text>
-                  <Tooltip label="Hide repositories pane">
-                    <ActionIcon
-                      size="sm"
-                      variant="subtle"
-                      color="gray"
-                      aria-label="Hide repositories pane"
-                      onClick={() => setRepositoryPaneVisible(false)}
-                    >
-                      <IconLayoutSidebarLeftCollapse size={16} />
-                    </ActionIcon>
-                  </Tooltip>
+                  <Group gap={3} wrap="nowrap">
+                    <div className="repository-pane-layout-toggle" role="group" aria-label="Repository pane view">
+                      <Tooltip label="Compact lines">
+                        <ActionIcon
+                          size="sm"
+                          variant={repositoryPaneLayout === 'line' ? 'light' : 'subtle'}
+                          color={repositoryPaneLayout === 'line' ? 'teal' : 'gray'}
+                          aria-label="Show compact repository lines"
+                          aria-pressed={repositoryPaneLayout === 'line'}
+                          onClick={() => {
+                            setRepositoryPaneLayout('line')
+                            localStorage.setItem('myrepos:repository-pane-layout', 'line')
+                          }}
+                        >
+                          <IconLayoutList size={15} />
+                        </ActionIcon>
+                      </Tooltip>
+                      <Tooltip label="Detailed cards">
+                        <ActionIcon
+                          size="sm"
+                          variant={repositoryPaneLayout === 'card' ? 'light' : 'subtle'}
+                          color={repositoryPaneLayout === 'card' ? 'teal' : 'gray'}
+                          aria-label="Show detailed repository cards"
+                          aria-pressed={repositoryPaneLayout === 'card'}
+                          onClick={() => {
+                            setRepositoryPaneLayout('card')
+                            localStorage.setItem('myrepos:repository-pane-layout', 'card')
+                          }}
+                        >
+                          <IconLayoutGrid size={15} />
+                        </ActionIcon>
+                      </Tooltip>
+                    </div>
+                    <Tooltip label="Hide repositories pane">
+                      <ActionIcon
+                        size="sm"
+                        variant="subtle"
+                        color="gray"
+                        aria-label="Hide repositories pane"
+                        onClick={() => setRepositoryPaneVisible(false)}
+                      >
+                        <IconLayoutSidebarLeftCollapse size={16} />
+                      </ActionIcon>
+                    </Tooltip>
+                  </Group>
                 </div>
               )}
               <div className="repository-results-scroll" ref={repositoryResultsScrollRef}>
@@ -4922,7 +4960,9 @@ export function App() {
                   )}
                 </Paper>
               ) : (
-                <div className={`repository-collection repository-collection--${repositoryLayout}`}>
+                <div className={`repository-collection repository-collection--${repositoryLayout}${
+                  gitRepository ? ` repository-pane-layout--${repositoryPaneLayout}` : ''
+                }`}>
                   {pagedRepositories.map((repository) => {
                     const repositoryKey = repositoryOrganizationKey(repository)
                     const repositoryColor = repositoryColors[repositoryKey]
@@ -5017,7 +5057,7 @@ export function App() {
                         />
                       )}
                       <div className="repository-details">
-                        <Group gap={8} wrap="wrap">
+                        <Group className="repository-heading" gap={8} wrap="wrap">
                           <span
                             className="repository-language-icon"
                             style={{ color: repositoryLanguageColor(repository.language) }}
@@ -5035,7 +5075,7 @@ export function App() {
                               title="Repository color"
                             />
                           )}
-                          <Text fw={680}>{repository.fullName}</Text>
+                          <Text className="repository-title" fw={680}>{repository.fullName}</Text>
                           {repository.metadataLoaded && (
                             <>
                               <Badge
@@ -5116,7 +5156,7 @@ export function App() {
                             </Badge>
                           )}
                         </Group>
-                        <Text size="sm" c="dimmed" mt={5} lineClamp={2}>
+                        <Text className="repository-description" size="sm" c="dimmed" mt={5} lineClamp={2}>
                           {repository.metadataLoaded
                             ? repository.description || 'No description provided.'
                             : repository.localPath}
