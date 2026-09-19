@@ -1,0 +1,83 @@
+.ssh-content {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  padding: 30px 32px 52px;
+}
+
+.ssh-vault-card {
+  margin-top: 24px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border: 1px solid #2b3541;
+  background: rgba(18, 25, 33, 0.82);
+}
+
+.ssh-grid {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 14px;
+}
+
+.ssh-card {
+  position: relative;
+  min-width: 0;
+  padding: 17px 18px 16px 20px;
+  overflow: hidden;
+  border: 1px solid #344252;
+  background: #121922;
+}
+
+.ssh-card-accent {
+  position: absolute;
+  inset: 10px auto 10px 0;
+  width: 3px;
+  border-radius: 0 4px 4px 0;
+  background: #20c997;
+}
+
+.ssh-card-main,
+.ssh-card-identity { min-width: 0; }
+
+.ssh-card-identity { max-width: 420px; }
+
+.ssh-card-meta {
+  min-width: 0;
+  margin-top: 13px;
+  display: grid;
+  gap: 4px;
+}
+
+.ssh-empty { margin-top: 24px; }
+
+.ssh-form-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.ssh-fingerprint {
+  padding: 13px 15px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+  border: 1px solid #344252;
+  background: #0d131a;
+}
+
+.ssh-fingerprint code {
+  overflow-wrap: anywhere;
+  color: #8ce6c8;
+  font-size: 12px;
+}
+
+@media (max-width: 840px) {
+  .ssh-content { padding-inline: 18px; }
+  .ssh-grid,
+  .ssh-form-grid { grid-template-columns: 1fr; }
+  .ssh-vault-card { align-items: flex-start; }
+}

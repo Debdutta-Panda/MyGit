@@ -218,6 +218,27 @@ const createSchema = (db: DatabaseSync): void => {
       PRIMARY KEY(repository_id, tag_id)
     );
 
+    CREATE TABLE IF NOT EXISTS ssh_connections (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL COLLATE NOCASE,
+      host TEXT NOT NULL,
+      port INTEGER NOT NULL DEFAULT 22 CHECK (port BETWEEN 1 AND 65535),
+      username TEXT NOT NULL,
+      authentication_type TEXT NOT NULL
+        CHECK (authentication_type IN ('password', 'private-key', 'agent')),
+      private_key_path TEXT,
+      agent_socket TEXT,
+      encrypted_password TEXT,
+      encrypted_passphrase TEXT,
+      host_fingerprint TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_connected_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS ssh_connections_name_idx
+      ON ssh_connections(name);
+
     CREATE INDEX IF NOT EXISTS repository_workspaces_workspace_idx
       ON repository_workspaces(workspace_id, position);
     CREATE INDEX IF NOT EXISTS repository_groups_group_idx
@@ -283,6 +304,8 @@ const createSchema = (db: DatabaseSync): void => {
       VALUES (8, datetime('now'));
     INSERT OR IGNORE INTO schema_migrations (version, applied_at)
       VALUES (9, datetime('now'));
+    INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+      VALUES (10, datetime('now'));
   `)
 
   db.exec(`

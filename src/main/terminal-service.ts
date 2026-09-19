@@ -1,21 +1,37 @@
-import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  utilityProcess,
+  type IpcMainInvokeEvent,
+  type UtilityProcess,
+} from 'electron'
 import { access, stat } from 'node:fs/promises'
 import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import { homedir, platform } from 'node:os'
-import * as pty from 'node-pty'
 import type {
   TerminalCreateInput,
   TerminalProfile,
   TerminalSessionInfo,
 } from '../shared/desktop-api'
+import { getSshRuntimeConnection } from './ssh-connections'
+
+interface HostMessage {
+  type: 'ready' | 'data' | 'exit' | 'error'
+  chunk?: string
+  exitCode?: number
+  message?: string
+}
 
 interface ManagedTerminal {
   info: TerminalSessionInfo
   ownerId: number
-  process: pty.IPty
+  host: UtilityProcess
   buffer: string
   pendingOutput: string
   flushTimer: ReturnType<typeof setTimeout> | null
+  forceKillTimer: ReturnType<typeof setTimeout> | null
+  disposed: boolean
 }
 
 const sessions = new Map<string, ManagedTerminal>()
@@ -30,8 +46,12 @@ const executableOnPath = async (name: string): Promise<string | null> => {
   const pathEntries = (process.env.PATH ?? '').split(delimiter).filter(Boolean)
   for (const directory of pathEntries) {
     for (const extension of extensions) {
-      const candidate = join(directory, name.endsWith(extension.toLowerCase()) ||
-        name.endsWith(extension.toUpperCase()) ? name : `${name}${extension.toLowerCase()}`)
+      const candidate = join(
+        directory,
+        name.endsWith(extension.toLowerCase()) || name.endsWith(extension.toUpperCase())
+          ? name
+          : `${name}${extension.toLowerCase()}`,
+      )
       try {
         await access(candidate)
         return candidate
@@ -82,9 +102,8 @@ const terminalProfiles = async (): Promise<TerminalProfile[]> => {
 
   const configuredShell = process.env.SHELL || (platform() === 'darwin' ? '/bin/zsh' : '/bin/bash')
   const candidates = [configuredShell, '/bin/zsh', '/bin/bash', '/bin/sh']
-  const unique = [...new Set(candidates)]
   const profiles: TerminalProfile[] = []
-  for (const executable of unique) {
+  for (const executable of [...new Set(candidates)]) {
     try {
       await access(executable)
       profiles.push({
@@ -113,27 +132,64 @@ const normalizeCwd = async (requested: string | null | undefined): Promise<strin
   return homedir()
 }
 
+const ownerContents = (session: ManagedTerminal): Electron.WebContents | undefined =>
+  BrowserWindow.getAllWindows()
+    .map((window) => window.webContents)
+    .find((contents) => contents.id === session.ownerId && !contents.isDestroyed())
+
 const ownedSession = (event: IpcMainInvokeEvent, id: string): ManagedTerminal => {
   const session = sessions.get(id)
-  if (!session || session.ownerId !== event.sender.id) throw new Error('Terminal session is unavailable.')
+  if (!session || session.ownerId !== event.sender.id || session.disposed) {
+    throw new Error('Terminal session is unavailable.')
+  }
   return session
 }
 
 const publishOutput = (session: ManagedTerminal): void => {
   session.flushTimer = null
   if (!session.pendingOutput) return
-  const owner = BrowserWindow.getAllWindows()
-    .map((window) => window.webContents)
-    .find((contents) => contents.id === session.ownerId && !contents.isDestroyed())
   const data = session.pendingOutput
   session.pendingOutput = ''
-  owner?.send('terminals:data', session.info.id, data)
+  ownerContents(session)?.send('terminals:data', session.info.id, data)
 }
 
 const queueOutput = (session: ManagedTerminal, data: string): void => {
   session.buffer = `${session.buffer}${data}`.slice(-maximumBufferLength)
   session.pendingOutput += data
   if (!session.flushTimer) session.flushTimer = setTimeout(() => publishOutput(session), 12)
+}
+
+const markExited = (session: ManagedTerminal, exitCode: number | null): void => {
+  if (session.info.status === 'exited') return
+  session.info = { ...session.info, status: 'exited', exitCode }
+  publishOutput(session)
+  ownerContents(session)?.send('terminals:exit', session.info)
+}
+
+const disposeSession = (session: ManagedTerminal): void => {
+  if (session.disposed) return
+  session.disposed = true
+  sessions.delete(session.info.id)
+  if (session.flushTimer) clearTimeout(session.flushTimer)
+  session.flushTimer = null
+  if (session.info.status === 'running') {
+    const hostPid = session.host.pid
+    session.host.postMessage({ type: 'kill' })
+    session.forceKillTimer = setTimeout(() => {
+      session.forceKillTimer = null
+      if (hostPid) {
+        try {
+          process.kill(hostPid, 'SIGKILL')
+        } catch {
+          // The utility process already exited normally.
+        }
+      } else {
+        session.host.kill()
+      }
+    }, 350)
+  } else {
+    session.host.kill()
+  }
 }
 
 const createTerminal = async (
@@ -150,67 +206,122 @@ const createTerminal = async (
       }
     })
   }
+
   const profiles = await terminalProfiles()
-  const profile = profiles.find((candidate) => candidate.id === input.profileId) ??
-    profiles.find((candidate) => candidate.default) ?? profiles[0]
-  if (!profile) throw new Error('No supported command shell was found.')
-  const cwd = await normalizeCwd(input.cwd)
+  const sshConnection = input.sshConnectionId
+    ? getSshRuntimeConnection(input.sshConnectionId)
+    : null
+  const profile = sshConnection
+    ? null
+    : profiles.find((candidate) => candidate.id === input.profileId)
+      ?? profiles.find((candidate) => candidate.default)
+      ?? profiles[0]
+  if (!sshConnection && !profile) throw new Error('No supported command shell was found.')
+
+  const cwd = sshConnection
+    ? `${sshConnection.username}@${sshConnection.host}`
+    : await normalizeCwd(input.cwd)
+  const hostCwd = sshConnection ? app.getPath('home') : cwd
   const id = `terminal-${Date.now()}-${++sessionSequence}`
   const info: TerminalSessionInfo = {
     id,
-    title: profile.name,
+    title: sshConnection
+      ? `SSH � ${sshConnection.username}@${sshConnection.host}`
+      : profile!.name,
     cwd,
-    profileId: profile.id,
+    profileId: sshConnection ? `ssh:${sshConnection.id}` : profile!.id,
+    kind: sshConnection ? 'ssh' : 'local',
+    sshConnectionId: sshConnection?.id ?? null,
     status: 'running',
     exitCode: null,
   }
-  const terminalProcess = pty.spawn(profile.executable, profile.args, {
-    name: 'xterm-256color',
-    cols: Math.max(2, Math.min(500, Math.round(input.cols || 100))),
-    rows: Math.max(1, Math.min(200, Math.round(input.rows || 30))),
-    cwd,
-    env: {
-      ...Object.fromEntries(Object.entries(process.env).flatMap(([key, value]) =>
-        value === undefined ? [] : [[key, value]])),
-      TERM: 'xterm-256color',
-      COLORTERM: 'truecolor',
-    },
-    handleFlowControl: true,
-    // node-pty's native Windows ConPTY path forks a console-list helper while
-    // closing a session. That helper can fail to attach inside Electron and
-    // terminate the application. The bundled ConPTY backend owns cleanup
-    // directly and avoids that fragile helper process.
-    ...(platform() === 'win32' ? { useConpty: true, useConptyDll: true } : {}),
+  const host = utilityProcess.fork(join(app.getAppPath(), 'terminal-host.cjs'), [], {
+    cwd: hostCwd,
+    env: { ...process.env },
+    stdio: 'pipe',
+    serviceName: 'MyRepos Terminal',
   })
   const session: ManagedTerminal = {
     info,
     ownerId: event.sender.id,
-    process: terminalProcess,
+    host,
     buffer: '',
     pendingOutput: '',
     flushTimer: null,
+    forceKillTimer: null,
+    disposed: false,
   }
   sessions.set(id, session)
-  terminalProcess.onData((data) => queueOutput(session, data))
-  terminalProcess.onExit(({ exitCode }) => {
-    session.info = { ...session.info, status: 'exited', exitCode }
-    publishOutput(session)
-    if (!event.sender.isDestroyed()) event.sender.send('terminals:exit', session.info)
-  })
-  return { ...info }
-}
 
-const disposeSession = (session: ManagedTerminal): void => {
-  if (session.flushTimer) clearTimeout(session.flushTimer)
-  session.flushTimer = null
-  if (session.info.status === 'running') {
-    try {
-      session.process.kill()
-    } catch {
-      // The process may have exited between the status check and cleanup.
+  await new Promise<void>((resolve, reject) => {
+    let ready = false
+    const startupTimer = setTimeout(() => {
+      if (ready) return
+      session.disposed = true
+      sessions.delete(id)
+      host.kill()
+      reject(new Error('The terminal process did not start in time.'))
+    }, 10_000)
+    const failStartup = (message: string): void => {
+      if (ready) {
+        queueOutput(session, `\r\n[Terminal host error: ${message}]\r\n`)
+        markExited(session, 1)
+        return
+      }
+      clearTimeout(startupTimer)
+      session.disposed = true
+      sessions.delete(id)
+      host.kill()
+      reject(new Error(message))
     }
-  }
-  sessions.delete(session.info.id)
+
+    host.on('message', (message: HostMessage) => {
+      if (message.type === 'ready') {
+        if (ready) return
+        ready = true
+        clearTimeout(startupTimer)
+        resolve()
+      } else if (message.type === 'data' && typeof message.chunk === 'string') {
+        queueOutput(session, message.chunk)
+      } else if (message.type === 'exit') {
+        markExited(session, message.exitCode ?? null)
+      } else if (message.type === 'error') {
+        failStartup(message.message ?? 'The terminal host failed.')
+      }
+    })
+    host.on('error', (type, location) => {
+      failStartup(`Terminal host failed (${type} at ${location}).`)
+    })
+    host.on('exit', (code) => {
+      if (!ready) {
+        failStartup(`The terminal host exited during startup (code ${code}).`)
+      } else if (!session.disposed) {
+        markExited(session, code)
+      }
+    })
+    host.stderr?.on('data', (chunk) => {
+      const message = String(chunk).trim()
+      if (message) queueOutput(session, `\r\n[${message}]\r\n`)
+    })
+    host.postMessage({
+      type: 'start',
+      kind: sshConnection ? 'ssh' : 'local',
+      executable: profile?.executable,
+      args: profile?.args,
+      connection: sshConnection,
+      cwd,
+      cols: Math.max(2, Math.min(500, Math.round(input.cols || 100))),
+      rows: Math.max(1, Math.min(200, Math.round(input.rows || 30))),
+      env: {
+        ...Object.fromEntries(Object.entries(process.env).flatMap(([key, value]) =>
+          value === undefined ? [] : [[key, value]])),
+        TERM: 'xterm-256color',
+        COLORTERM: 'truecolor',
+      },
+    })
+  })
+
+  return { ...info }
 }
 
 export const registerTerminalHandlers = (): void => {
@@ -219,13 +330,14 @@ export const registerTerminalHandlers = (): void => {
   ipcMain.handle('terminals:buffer', (event, id: string) => ownedSession(event, id).buffer)
   ipcMain.handle('terminals:write', (event, id: string, data: string) => {
     if (typeof data !== 'string' || data.length > 65_536) throw new Error('Invalid terminal input.')
-    ownedSession(event, id).process.write(data)
+    ownedSession(event, id).host.postMessage({ type: 'write', data })
   })
   ipcMain.handle('terminals:resize', (event, id: string, cols: number, rows: number) => {
-    ownedSession(event, id).process.resize(
-      Math.max(2, Math.min(500, Math.round(cols))),
-      Math.max(1, Math.min(200, Math.round(rows))),
-    )
+    ownedSession(event, id).host.postMessage({
+      type: 'resize',
+      cols: Math.max(2, Math.min(500, Math.round(cols))),
+      rows: Math.max(1, Math.min(200, Math.round(rows))),
+    })
   })
   ipcMain.handle('terminals:kill', (event, id: string) => disposeSession(ownedSession(event, id)))
 }

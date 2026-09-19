@@ -49,6 +49,7 @@ import xmlLogo from 'devicon/icons/xml/xml-original.svg'
 import yamlLogo from 'devicon/icons/yaml/yaml-original.svg'
 import { FileIcon, FolderIcon } from '@react-symbols/icons/utils'
 import { marked } from 'marked'
+import { SshConnectionsPage } from './SshConnectionsPage'
 import {
   ActionIcon,
   Alert,
@@ -138,6 +139,7 @@ import {
   IconRefresh,
   IconRestore,
   IconSearch,
+  IconServer2,
   IconSettings,
   IconShieldCheck,
   IconStar,
@@ -225,7 +227,7 @@ const RepositoryPortfolioAnalytics = (
 )
 
 type AuthorizationState = 'idle' | 'starting' | 'waiting'
-type ActiveView = 'accounts' | 'repositories' | 'workspaces' | 'groups' | 'tags' | 'settings'
+type ActiveView = 'accounts' | 'repositories' | 'ssh' | 'workspaces' | 'groups' | 'tags' | 'settings'
 type RepositoryTab = 'local' | 'github' | 'workspace'
 type RepositoryLayout = 'list' | 'grid'
 type RepositoryPaneLayout = 'line' | 'card'
@@ -1039,7 +1041,11 @@ const mergeRepositoryDetails = (
 export function App() {
   const [terminalVisible, setTerminalVisible] = useState(false)
   const [terminalMounted, setTerminalMounted] = useState(false)
-  const [terminalRequest, setTerminalRequest] = useState<{ id: number; cwd: string } | null>(null)
+  const [terminalRequest, setTerminalRequest] = useState<
+    | { id: number; kind: 'local'; cwd: string }
+    | { id: number; kind: 'ssh'; sshConnectionId: string }
+    | null
+  >(null)
   const [sidebarVisible, setSidebarVisible] = useState(true)
   const [repositoryPaneVisible, setRepositoryPaneVisible] = useState(true)
   const [scmNavigatorVisible, setScmNavigatorVisible] = useState(true)
@@ -4131,6 +4137,15 @@ export function App() {
             <IconBook2 size={17} stroke={1.7} />
             <Text size="sm" fw={600}>Repositories</Text>
           </UnstyledButton>
+          <UnstyledButton
+            className="nav-item"
+            title="SSH"
+            data-active={activeView === 'ssh' || undefined}
+            onClick={() => setActiveView('ssh')}
+          >
+            <IconServer2 size={17} stroke={1.7} />
+            <Text size="sm" fw={600}>SSH</Text>
+          </UnstyledButton>
           <Text className="nav-section-title nav-section-title--secondary">ORGANIZE</Text>
           <UnstyledButton
             className="nav-item"
@@ -4178,8 +4193,8 @@ export function App() {
               <IconBrandGithub size={17} />
             </ThemeIcon>
             <div>
-              <Text size="xs" fw={650}>GitHub</Text>
-              <Text size="10px" c="dimmed">Only provider enabled</Text>
+              <Text size="xs" fw={650}>Connections</Text>
+              <Text size="10px" c="dimmed">GitHub + SSH</Text>
             </div>
           </Group>
           <Badge size="xs" variant="light" color="teal">Ready</Badge>
@@ -4272,6 +4287,12 @@ export function App() {
                 onClick={() => setActiveView('repositories')}
               >
                 Repositories
+              </Menu.Item>
+              <Menu.Item
+                leftSection={<IconServer2 size={15} />}
+                onClick={() => setActiveView('ssh')}
+              >
+                SSH
               </Menu.Item>
               <Menu.Item
                 leftSection={<IconBriefcase size={15} />}
@@ -4557,6 +4578,13 @@ export function App() {
               </Group>
             )}
             </>
+          ) : activeView === 'ssh' ? (
+            <div className="topbar-heading">
+              <Text fw={700} fz="lg">SSH</Text>
+              <Text size="xs" c="dimmed">
+                Remote connections and server access
+              </Text>
+            </div>
           ) : activeOrganizationCopy ? (
             <div className="topbar-heading">
               <Text fw={700} fz="lg">{activeOrganizationCopy.plural}</Text>
@@ -4597,7 +4625,7 @@ export function App() {
                 <IconRefresh size={18} />
               </ActionIcon>
             </Tooltip>
-          ) : activeOrganizationKind && activeOrganizationCopy ? (
+          ) : activeView === 'ssh' ? null : activeOrganizationKind && activeOrganizationCopy ? (
             <Button
               size="sm"
               leftSection={<IconPlus size={16} />}
@@ -5851,7 +5879,7 @@ export function App() {
                                 onClick={() => {
                                   setTerminalMounted(true)
                                   setTerminalVisible(true)
-                                  setTerminalRequest({ id: Date.now(), cwd: repository.localPath! })
+                                  setTerminalRequest({ id: Date.now(), kind: 'local', cwd: repository.localPath! })
                                 }}
                               >
                                 <IconTerminal2 size={16} />
@@ -7240,6 +7268,16 @@ export function App() {
                 )}
               </div>
             </div>
+          ) : activeView === 'ssh' ? (
+            <SshConnectionsPage onOpenTerminal={(connection) => {
+              setTerminalMounted(true)
+              setTerminalVisible(true)
+              setTerminalRequest({
+                id: Date.now(),
+                kind: 'ssh',
+                sshConnectionId: connection.id,
+              })
+            }} />
           ) : activeOrganizationKind && activeOrganizationCopy ? (
             <div className="organization-management-content">
               <section className="intro-row">

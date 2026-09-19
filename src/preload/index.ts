@@ -65,6 +65,14 @@ const desktopApi: DesktopApi = {
       return () => ipcRenderer.removeListener('terminals:exit', listener)
     },
   },
+  ssh: {
+    list: () => ipcRenderer.invoke('ssh:list'),
+    save: (input) => ipcRenderer.invoke('ssh:save', input),
+    remove: (id) => ipcRenderer.invoke('ssh:remove', id),
+    test: (id, trustHostKey = false) => ipcRenderer.invoke('ssh:test', id, trustHostKey),
+    choosePrivateKey: () => ipcRenderer.invoke('ssh:choose-private-key'),
+    vaultStatus: () => ipcRenderer.invoke('ssh:vault-status'),
+  },
   github: {
     start: () => ipcRenderer.invoke('github:start'),
     launch: (requestId) => ipcRenderer.invoke('github:launch', requestId),

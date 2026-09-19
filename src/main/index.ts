@@ -12,6 +12,7 @@ import { registerWorkingCopyHandlers } from './working-copies'
 import { registerProjectInsightHandlers } from './project-insights'
 import { registerUpdateHandlers, startAutomaticUpdateChecks } from './app-updater'
 import { closeAllTerminals, registerTerminalHandlers } from './terminal-service'
+import { registerSshConnectionHandlers } from './ssh-connections'
 
 // Squirrel invokes the application briefly while installing, updating, and uninstalling. Its
 // startup helper creates/removes shortcuts and exits before normal application initialization.
@@ -66,6 +67,9 @@ const createWindow = (): void => {
     if (url !== currentUrl) event.preventDefault()
   })
 
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[renderer-gone]', details.reason, details.exitCode)
+  })
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
@@ -103,6 +107,7 @@ app.whenReady().then(async () => {
   registerSettingsHandlers()
   registerUpdateHandlers()
   registerTerminalHandlers()
+  registerSshConnectionHandlers()
   registerOrganizationHandlers()
   registerConfigurationSyncHandlers()
   registerWorkingCopyHandlers()

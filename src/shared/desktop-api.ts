@@ -140,6 +140,7 @@ export interface TerminalProfile {
 export interface TerminalCreateInput {
   profileId?: string | null
   cwd?: string | null
+  sshConnectionId?: string | null
   cols: number
   rows: number
 }
@@ -149,8 +150,55 @@ export interface TerminalSessionInfo {
   title: string
   cwd: string
   profileId: string
+  kind: 'local' | 'ssh'
+  sshConnectionId: string | null
   status: 'running' | 'exited'
   exitCode: number | null
+}
+
+export type SshAuthenticationType = 'password' | 'private-key' | 'agent'
+
+export interface SshConnection {
+  id: string
+  name: string
+  host: string
+  port: number
+  username: string
+  authenticationType: SshAuthenticationType
+  privateKeyPath: string | null
+  agentSocket: string | null
+  hasPassword: boolean
+  hasPassphrase: boolean
+  hostFingerprint: string | null
+  createdAt: string
+  updatedAt: string
+  lastConnectedAt: string | null
+}
+
+export interface SshConnectionInput {
+  id?: string
+  name: string
+  host: string
+  port: number
+  username: string
+  authenticationType: SshAuthenticationType
+  privateKeyPath?: string | null
+  agentSocket?: string | null
+  password?: string
+  passphrase?: string
+}
+
+export interface SshConnectionTestResult {
+  status: 'connected' | 'untrusted'
+  fingerprint: string
+  latencyMs: number | null
+  message: string
+}
+
+export interface SshVaultStatus {
+  available: boolean
+  backend: string
+  label: string
 }
 
 export interface RepositoryGitStatus {
@@ -421,6 +469,14 @@ export interface DesktopApi {
     kill: (id: string) => Promise<void>
     onData: (callback: (id: string, data: string) => void) => () => void
     onExit: (callback: (session: TerminalSessionInfo) => void) => () => void
+  }
+  ssh: {
+    list: () => Promise<SshConnection[]>
+    save: (input: SshConnectionInput) => Promise<SshConnection[]>
+    remove: (id: string) => Promise<SshConnection[]>
+    test: (id: string, trustHostKey?: boolean) => Promise<SshConnectionTestResult>
+    choosePrivateKey: () => Promise<string | null>
+    vaultStatus: () => Promise<SshVaultStatus>
   }
   github: {
     start: () => Promise<GitHubDeviceAuthorization>

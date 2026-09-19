@@ -15,6 +15,7 @@ import {
   IconPlus,
   IconRefresh,
   IconSearch,
+  IconServer2,
   IconTerminal2,
   IconTrash,
   IconX,
@@ -26,6 +27,10 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import './terminal.css'
 import type { TerminalProfile, TerminalSessionInfo } from '../../shared/desktop-api'
+
+export type TerminalOpenRequest =
+  | { id: number; kind: 'local'; cwd: string }
+  | { id: number; kind: 'ssh'; sshConnectionId: string }
 
 interface TerminalController {
   fit: () => void
@@ -123,6 +128,7 @@ function TerminalViewport({
         lastCols = terminal.cols
         lastRows = terminal.rows
         void window.desktop?.terminals.resize(session.id, terminal.cols, terminal.rows)
+          .catch(() => undefined)
       }
     }
     const scheduleFit = (): void => {
@@ -150,9 +156,10 @@ function TerminalViewport({
     }).catch(() => { hydrated = true })
 
     const input = terminal.onData((data) => {
-      void window.desktop?.terminals.write(session.id, data)
+      void window.desktop?.terminals.write(session.id, data).catch(() => undefined)
     })
-    const focus = terminal.onFocus(() => onActivate(session.id))
+    const handleFocus = (): void => onActivate(session.id)
+    container.addEventListener('focusin', handleFocus)
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'f') {
@@ -168,7 +175,7 @@ function TerminalViewport({
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'v') {
         event.preventDefault()
         void navigator.clipboard.readText().then((text) =>
-          window.desktop?.terminals.write(session.id, text))
+          window.desktop?.terminals.write(session.id, text)).catch(() => undefined)
         return false
       }
       return true
@@ -183,7 +190,7 @@ function TerminalViewport({
       },
       paste: async () => {
         const text = await navigator.clipboard.readText()
-        if (text) await window.desktop?.terminals.write(session.id, text)
+        if (text) await window.desktop?.terminals.write(session.id, text).catch(() => undefined)
       },
       findNext: (query) => searchAddon.findNext(query, { incremental: true }),
       findPrevious: (query) => searchAddon.findPrevious(query, { incremental: true }),
@@ -200,7 +207,7 @@ function TerminalViewport({
       observer.disconnect()
       unsubscribeData()
       input.dispose()
-      focus.dispose()
+      container.removeEventListener('focusin', handleFocus)
       terminal.dispose()
     }
   }, [session.id])
@@ -224,7 +231,7 @@ export function TerminalPanel({
 }: {
   visible: boolean
   cwd: string | null
-  request: { id: number; cwd: string } | null
+  request: TerminalOpenRequest | null
   onRequestHandled: () => void
   onClose: () => void
 }) {
@@ -261,6 +268,7 @@ export function TerminalPanel({
   const createSession = async (
     profileId = selectedProfile,
     requestedCwd = cwd,
+    sshConnectionId: string | null = null,
   ): Promise<TerminalSessionInfo | null> => {
     if (!window.desktop || creatingRef.current) return null
     creatingRef.current = true
@@ -270,6 +278,7 @@ export function TerminalPanel({
       const session = await window.desktop.terminals.create({
         profileId,
         cwd: requestedCwd,
+        sshConnectionId,
         cols: 100,
         rows: 30,
       })
@@ -302,7 +311,12 @@ export function TerminalPanel({
   }, [visible, profiles.length, request?.id])
 
   useEffect(() => {
-    if (!visible || !request || profiles.length === 0 || creatingRef.current) return
+    if (!visible || !request || creatingRef.current) return
+    if (request.kind === 'ssh') {
+      void createSession(null, null, request.sshConnectionId).finally(onRequestHandled)
+      return
+    }
+    if (profiles.length === 0) return
     void createSession(
       profiles.find((profile) => profile.default)?.id ?? profiles[0].id,
       request.cwd,
@@ -336,7 +350,11 @@ export function TerminalPanel({
     }
     if (!activeSession) return
     const primaryId = activeSession.id
-    const secondary = await createSession(activeSession.profileId, activeSession.cwd)
+    const secondary = await createSession(
+      activeSession.kind === 'ssh' ? null : activeSession.profileId,
+      activeSession.kind === 'ssh' ? null : activeSession.cwd,
+      activeSession.sshConnectionId,
+    )
     if (secondary) setSplitPair([primaryId, secondary.id])
   }
 
@@ -344,7 +362,11 @@ export function TerminalPanel({
     if (!activeSession) return
     const { id, profileId, cwd: sessionCwd } = activeSession
     await closeSession(id)
-    await createSession(profileId, sessionCwd)
+    await createSession(
+      activeSession.kind === 'ssh' ? null : profileId,
+      activeSession.kind === 'ssh' ? null : sessionCwd,
+      activeSession.sshConnectionId,
+    )
   }
 
   const beginResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
@@ -402,7 +424,7 @@ export function TerminalPanel({
               key={session.id}
               onClick={() => setActiveId(session.id)}
             >
-              <IconTerminal2 size={14} />
+              {session.kind === 'ssh' ? <IconServer2 size={14} /> : <IconTerminal2 size={14} />}
               <span>{index + 1}: {session.title}</span>
               {session.status === 'exited' && <small>{session.exitCode ?? 'done'}</small>}
               <IconX
