@@ -11,6 +11,7 @@ import { registerConfigurationSyncHandlers } from './configuration-sync'
 import { registerWorkingCopyHandlers } from './working-copies'
 import { registerProjectInsightHandlers } from './project-insights'
 import { registerUpdateHandlers, startAutomaticUpdateChecks } from './app-updater'
+import { closeAllTerminals, registerTerminalHandlers } from './terminal-service'
 
 // Squirrel invokes the application briefly while installing, updating, and uninstalling. Its
 // startup helper creates/removes shortcuts and exits before normal application initialization.
@@ -101,6 +102,7 @@ app.whenReady().then(async () => {
   registerProjectInsightHandlers()
   registerSettingsHandlers()
   registerUpdateHandlers()
+  registerTerminalHandlers()
   registerOrganizationHandlers()
   registerConfigurationSyncHandlers()
   registerWorkingCopyHandlers()
@@ -116,7 +118,10 @@ app.whenReady().then(async () => {
   app.quit()
 })
 
-app.on('before-quit', closeDatabase)
+app.on('before-quit', () => {
+  closeAllTerminals()
+  closeDatabase()
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

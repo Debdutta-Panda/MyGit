@@ -123,9 +123,34 @@ export interface AppUpdateState {
   progress: number | null
   transferred: number | null
   total: number | null
+  bytesPerSecond: number | null
   checkedAt: string | null
   message: string | null
   packaged: boolean
+}
+
+export interface TerminalProfile {
+  id: string
+  name: string
+  executable: string
+  args: string[]
+  default: boolean
+}
+
+export interface TerminalCreateInput {
+  profileId?: string | null
+  cwd?: string | null
+  cols: number
+  rows: number
+}
+
+export interface TerminalSessionInfo {
+  id: string
+  title: string
+  cwd: string
+  profileId: string
+  status: 'running' | 'exited'
+  exitCode: number | null
 }
 
 export interface RepositoryGitStatus {
@@ -386,6 +411,16 @@ export interface DesktopApi {
     download: () => Promise<AppUpdateState>
     install: () => Promise<void>
     onStateChanged: (callback: (state: AppUpdateState) => void) => () => void
+  }
+  terminals: {
+    profiles: () => Promise<TerminalProfile[]>
+    create: (input: TerminalCreateInput) => Promise<TerminalSessionInfo>
+    buffer: (id: string) => Promise<string>
+    write: (id: string, data: string) => Promise<void>
+    resize: (id: string, cols: number, rows: number) => Promise<void>
+    kill: (id: string) => Promise<void>
+    onData: (callback: (id: string, data: string) => void) => () => void
+    onExit: (callback: (session: TerminalSessionInfo) => void) => () => void
   }
   github: {
     start: () => Promise<GitHubDeviceAuthorization>

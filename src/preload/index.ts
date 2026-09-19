@@ -42,6 +42,29 @@ const desktopApi: DesktopApi = {
       return () => ipcRenderer.removeListener('updates:state-changed', listener)
     },
   },
+  terminals: {
+    profiles: () => ipcRenderer.invoke('terminals:profiles'),
+    create: (input) => ipcRenderer.invoke('terminals:create', input),
+    buffer: (id) => ipcRenderer.invoke('terminals:buffer', id),
+    write: (id, data) => ipcRenderer.invoke('terminals:write', id, data),
+    resize: (id, cols, rows) => ipcRenderer.invoke('terminals:resize', id, cols, rows),
+    kill: (id) => ipcRenderer.invoke('terminals:kill', id),
+    onData: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, id: string, data: string): void => {
+        callback(id, data)
+      }
+      ipcRenderer.on('terminals:data', listener)
+      return () => ipcRenderer.removeListener('terminals:data', listener)
+    },
+    onExit: (callback) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        session: Parameters<typeof callback>[0],
+      ): void => callback(session)
+      ipcRenderer.on('terminals:exit', listener)
+      return () => ipcRenderer.removeListener('terminals:exit', listener)
+    },
+  },
   github: {
     start: () => ipcRenderer.invoke('github:start'),
     launch: (requestId) => ipcRenderer.invoke('github:launch', requestId),

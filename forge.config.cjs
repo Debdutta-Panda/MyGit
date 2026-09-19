@@ -1,7 +1,9 @@
 module.exports = {
   outDir: 'release',
   packagerConfig: {
-    asar: true,
+    asar: {
+      unpack: '**/node_modules/node-pty/**'
+    },
     executableName: 'MyRepos',
     appBundleId: 'com.debduttapanda.myrepos',
     icon: './build/icon',
@@ -20,7 +22,11 @@ module.exports = {
       /^\/build\/icon\.iconset(?:\/|$)/
     ]
   },
-  rebuildConfig: {},
+  // node-pty 1.1 ships an Electron-compatible Node-API prebuild. Rebuilding it is both
+  // unnecessary and currently blocked by node-gyp not recognizing Visual Studio 18.
+  rebuildConfig: {
+    ignoreModules: ['node-pty']
+  },
   makers: [
     {
       name: '@electron-forge/maker-squirrel',

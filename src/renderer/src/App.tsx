@@ -144,6 +144,7 @@ import {
   IconSquare,
   IconTags,
   IconTemplate,
+  IconTerminal2,
   IconClock,
   IconTrash,
   IconUpload,
@@ -198,6 +199,9 @@ const LazyRepositoryChangeAnalytics = lazy(async () => ({
 }))
 const LazyRepositoryPortfolioAnalytics = lazy(async () => ({
   default: (await import('./RepositoryPortfolioAnalytics')).RepositoryPortfolioAnalytics,
+}))
+const LazyTerminalPanel = lazy(async () => ({
+  default: (await import('./TerminalPanel')).TerminalPanel,
 }))
 
 const DeferredFeature = ({ children }: { children: ReactNode }) => (
@@ -683,6 +687,7 @@ const emptyUpdateState: AppUpdateState = {
   progress: null,
   transferred: null,
   total: null,
+  bytesPerSecond: null,
   checkedAt: null,
   message: null,
   packaged: false,
@@ -901,6 +906,12 @@ const formatBytes = (bytes: number): string => {
   return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`
 }
 
+const formatDuration = (seconds: number): string => {
+  if (seconds < 60) return `${Math.max(1, Math.round(seconds))} sec`
+  if (seconds < 3_600) return `${Math.ceil(seconds / 60)} min`
+  return `${Math.floor(seconds / 3_600)} hr ${Math.ceil(seconds % 3_600 / 60)} min`
+}
+
 const repositoryLanguageIcon = (language: string | null): ReactNode => {
   let logo: string | null = null
   switch (language?.toLowerCase()) {
@@ -1026,6 +1037,9 @@ const mergeRepositoryDetails = (
 }
 
 export function App() {
+  const [terminalVisible, setTerminalVisible] = useState(false)
+  const [terminalMounted, setTerminalMounted] = useState(false)
+  const [terminalRequest, setTerminalRequest] = useState<{ id: number; cwd: string } | null>(null)
   const [sidebarVisible, setSidebarVisible] = useState(true)
   const [repositoryPaneVisible, setRepositoryPaneVisible] = useState(true)
   const [scmNavigatorVisible, setScmNavigatorVisible] = useState(true)
@@ -1266,6 +1280,17 @@ export function App() {
   useEffect(() => {
     const timer = window.setInterval(() => setRelativeTimeNow(Date.now()), 60_000)
     return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    const handleTerminalShortcut = (event: KeyboardEvent): void => {
+      if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.key !== '`') return
+      event.preventDefault()
+      setTerminalMounted(true)
+      setTerminalVisible((visible) => !visible)
+    }
+    window.addEventListener('keydown', handleTerminalShortcut)
+    return () => window.removeEventListener('keydown', handleTerminalShortcut)
   }, [])
 
   useEffect(() => {
@@ -4389,47 +4414,54 @@ export function App() {
             </Tabs>
             {repositoryTab === 'workspace' ? (
               <Group gap="xs" wrap="nowrap">
-                <Button
-                  size="xs"
-                  variant="light"
-                  leftSection={<IconChartBar size={15} />}
-                  disabled={!selectedWorkspaceId || selectedWorkspaceRepositoryCount === 0}
-                  onClick={() => openPortfolioAnalytics(
-                    repositories.filter((repository) => selectedWorkspaceId &&
-                      organizationAssignments[repositoryOrganizationKey(repository)]?.workspaceIds
-                        .includes(selectedWorkspaceId)),
-                    `${selectedWorkspace?.name ?? 'Workspace'} analytics`,
-                  )}
-                >
-                  Analytics
-                </Button>
+                <Tooltip label="Workspace analytics" withArrow>
+                  <ActionIcon
+                    className="topbar-workspace-action"
+                    size={34}
+                    variant="light"
+                    aria-label="Open workspace analytics"
+                    disabled={!selectedWorkspaceId || selectedWorkspaceRepositoryCount === 0}
+                    onClick={() => openPortfolioAnalytics(
+                      repositories.filter((repository) => selectedWorkspaceId &&
+                        organizationAssignments[repositoryOrganizationKey(repository)]?.workspaceIds
+                          .includes(selectedWorkspaceId)),
+                      `${selectedWorkspace?.name ?? 'Workspace'} analytics`,
+                    )}
+                  >
+                    <IconChartBar size={17} />
+                  </ActionIcon>
+                </Tooltip>
                 {workspaceTarget && (
-                  <Tooltip label={workspaceTarget.path}>
-                    <Button
-                      size="xs"
-                      leftSection={<IconBrandVscode size={15} />}
+                  <Tooltip label={`Open in VS Code · ${workspaceTarget.path}`} withArrow>
+                    <ActionIcon
+                      className="topbar-workspace-action"
+                      size={34}
                       loading={workspaceTargetAction === 'open'}
                       disabled={Boolean(workspaceTargetAction)}
+                      aria-label="Open workspace in VS Code"
                       onClick={() => void openWorkspaceLaunchTarget()}
                     >
-                      Open in VS Code
-                    </Button>
+                      <IconBrandVscode size={17} />
+                    </ActionIcon>
                   </Tooltip>
                 )}
                 <Menu position="bottom-end" shadow="xl" width={245} withinPortal>
                   <Menu.Target>
-                    <Button
-                      size="xs"
-                      variant="light"
-                      leftSection={workspaceTarget
-                        ? <IconLink size={15} />
-                        : <IconFolderSearch size={15} />}
-                      loading={workspaceTargetLoading || workspaceProvisioning ||
-                        Boolean(workspaceTargetAction?.startsWith('connect:'))}
-                      disabled={workspaceTargetLoading || workspaceProvisioning || Boolean(workspaceTargetAction)}
-                    >
-                      Workspace
-                    </Button>
+                    <Tooltip label="Workspace actions" withArrow>
+                      <ActionIcon
+                        className="topbar-workspace-action"
+                        size={34}
+                        variant="light"
+                        loading={workspaceTargetLoading || workspaceProvisioning ||
+                          Boolean(workspaceTargetAction?.startsWith('connect:'))}
+                        disabled={workspaceTargetLoading || workspaceProvisioning || Boolean(workspaceTargetAction)}
+                        aria-label="Workspace actions"
+                      >
+                        {workspaceTarget
+                          ? <IconLink size={17} />
+                          : <IconFolderSearch size={17} />}
+                      </ActionIcon>
+                    </Tooltip>
                   </Menu.Target>
                   <Menu.Dropdown>
                     <Menu.Label>Workspace lifecycle</Menu.Label>
@@ -4591,6 +4623,20 @@ export function App() {
               Save settings
             </Button>
           )}
+          <Tooltip label={`${terminalVisible ? 'Hide' : 'Show'} terminal (Ctrl+\`)`}>
+            <ActionIcon
+              className="workspace-menu-button"
+              variant={terminalVisible ? 'light' : 'subtle'}
+              color={terminalVisible ? 'teal' : 'gray'}
+              aria-label={`${terminalVisible ? 'Hide' : 'Show'} terminal`}
+              onClick={() => {
+                setTerminalMounted(true)
+                setTerminalVisible((visible) => !visible)
+              }}
+            >
+              <IconTerminal2 size={18} />
+            </ActionIcon>
+          </Tooltip>
         </header>
 
         <div
@@ -5320,9 +5366,6 @@ export function App() {
                         }
                       }}
                       radius="lg"
-                      title={repository.metadataLoaded
-                        ? repository.description || 'No description provided.'
-                        : repository.localPath}
                       key={`${repository.accountId}:${repository.fullName}`}
                     >
                       {repositorySelectionMode && (
@@ -5335,22 +5378,26 @@ export function App() {
                       )}
                       <div className="repository-details">
                         <Group className="repository-heading" gap={8} wrap="wrap">
-                          <span
-                            className="repository-language-icon"
-                            style={{ color: repositoryLanguageColor(repository.language) }}
-                            title={repository.language ?? 'Primary language unavailable'}
-                            aria-label={repository.language
-                              ? `Primary language: ${repository.language}`
-                              : 'Primary language unavailable'}
-                          >
-                            {repositoryLanguageIcon(repository.language)}
-                          </span>
-                          {repositoryColor && (
+                          <Tooltip label={repository.language
+                            ? `Primary language: ${repository.language}`
+                            : 'Primary language unavailable'}>
                             <span
-                              className="repository-color-dot"
-                              style={{ backgroundColor: repositoryColor }}
-                              title="Repository color"
-                            />
+                              className="repository-language-icon"
+                              style={{ color: repositoryLanguageColor(repository.language) }}
+                              aria-label={repository.language
+                                ? `Primary language: ${repository.language}`
+                                : 'Primary language unavailable'}
+                            >
+                              {repositoryLanguageIcon(repository.language)}
+                            </span>
+                          </Tooltip>
+                          {repositoryColor && (
+                            <Tooltip label="Repository color">
+                              <span
+                                className="repository-color-dot"
+                                style={{ backgroundColor: repositoryColor }}
+                              />
+                            </Tooltip>
                           )}
                           <Tooltip label={'Repository owner: @' + repositoryOwner}>
                             <Avatar
@@ -5793,6 +5840,21 @@ export function App() {
                                 onClick={() => void openRepositoryInVSCode(repository.localPath!)}
                               >
                                 <IconBrandVscode size={16} />
+                              </ActionIcon>
+                            </Tooltip>
+                            <Tooltip label="Open terminal here">
+                              <ActionIcon
+                                className="repository-secondary-action"
+                                variant="subtle"
+                                color="gray"
+                                aria-label={`Open terminal in ${repository.fullName}`}
+                                onClick={() => {
+                                  setTerminalMounted(true)
+                                  setTerminalVisible(true)
+                                  setTerminalRequest({ id: Date.now(), cwd: repository.localPath! })
+                                }}
+                              >
+                                <IconTerminal2 size={16} />
                               </ActionIcon>
                             </Tooltip>
                             <Tooltip label="Open folder">
@@ -7556,10 +7618,46 @@ export function App() {
                   </Group>
                   {updateState.phase === 'downloading' && (
                     <div className="update-progress">
-                      <Progress value={100} animated striped size="sm" radius="xl" />
-                      <Text size="xs" c="dimmed">
-                        Downloading update in the background…
-                      </Text>
+                      <div className="update-progress-heading">
+                        <Text size="xs" fw={650}>Downloading update</Text>
+                        <Text size="xs" fw={750} c="teal.3">
+                          {updateState.progress === null
+                            ? 'Preparing...'
+                            : `${updateState.progress.toFixed(1)}%`}
+                        </Text>
+                      </div>
+                      <Progress
+                        className="update-progress-bar"
+                        value={updateState.progress ?? 100}
+                        data-indeterminate={updateState.progress === null || undefined}
+                        animated
+                        striped
+                        size="md"
+                        radius="xl"
+                      />
+                      <div className="update-progress-details">
+                        <Text size="xs" c="dimmed">
+                          {updateState.transferred !== null
+                            ? formatBytes(updateState.transferred)
+                            : 'Locating package'}
+                          {' / '}
+                          {updateState.total !== null
+                            ? formatBytes(updateState.total)
+                            : 'calculating total'}
+                        </Text>
+                        <Text size="xs" c="dimmed">
+                          {updateState.bytesPerSecond
+                            ? `${formatBytes(updateState.bytesPerSecond)}/s`
+                            : 'Waiting for transfer'}
+                          {updateState.bytesPerSecond && updateState.total !== null &&
+                            updateState.transferred !== null
+                            ? ` - ${formatDuration(
+                              (updateState.total - updateState.transferred) /
+                              updateState.bytesPerSecond,
+                            )} left`
+                            : ''}
+                        </Text>
+                      </div>
                     </div>
                   )}
                 </Paper>
@@ -7618,6 +7716,20 @@ export function App() {
             </div>
           )}
         </div>
+        {terminalMounted && (
+          <Suspense fallback={terminalVisible
+            ? <div className="terminal-loading"><Loader size="sm" /></div>
+            : null}>
+            <LazyTerminalPanel
+              visible={terminalVisible}
+              cwd={gitRepository?.localPath ??
+                (workspaceTarget?.type === 'folder' ? workspaceTarget.path : null)}
+              request={terminalRequest}
+              onRequestHandled={() => setTerminalRequest(null)}
+              onClose={() => setTerminalVisible(false)}
+            />
+          </Suspense>
+        )}
       </main>
 
       <Modal

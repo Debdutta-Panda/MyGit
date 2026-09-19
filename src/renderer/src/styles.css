@@ -577,8 +577,34 @@ textarea { font: inherit; }
 
 .update-progress {
   display: grid;
-  gap: 7px;
+  gap: 9px;
   margin-top: 14px;
+  padding-top: 13px;
+  border-top: 1px solid rgba(71, 84, 98, 0.58);
+}
+
+.topbar-workspace-action {
+  flex: 0 0 auto;
+}
+
+.update-progress-heading,
+.update-progress-details {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.update-progress-details > *:last-child { text-align: right; }
+
+.update-progress-bar[data-indeterminate] .mantine-Progress-section {
+  width: 38% !important;
+  animation: update-progress-indeterminate 1.15s ease-in-out infinite;
+}
+
+@keyframes update-progress-indeterminate {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(270%); }
 }
 
 .topbar-tabs .mantine-Tabs-list {
