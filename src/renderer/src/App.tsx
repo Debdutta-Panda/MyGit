@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useDeferredValue,
   useEffect,
   useMemo,
@@ -7,6 +9,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type CSSProperties,
+  type ComponentProps,
 } from 'react'
 import cplusplusLogo from 'devicon/icons/cplusplus/cplusplus-original.svg'
 import csharpLogo from 'devicon/icons/csharp/csharp-original.svg'
@@ -77,7 +80,10 @@ import {
 } from '@mantine/core'
 import {
   IconAlertCircle,
+  IconArchive,
+  IconArrowDown,
   IconArrowUp,
+  IconArrowsExchange,
   IconBrandGit,
   IconBrandGithub,
   IconBrandVscode,
@@ -85,6 +91,7 @@ import {
   IconBriefcase,
   IconChartBar,
   IconCheck,
+  IconCircleCheck,
   IconChevronDown,
   IconChevronRight,
   IconChevronsDown,
@@ -92,10 +99,14 @@ import {
   IconCommand,
   IconCode,
   IconCopy,
+  IconCloudCheck,
+  IconCloudExclamation,
+  IconCloudOff,
   IconDownload,
   IconDeviceFloppy,
   IconExternalLink,
   IconFileCode,
+  IconFileDiff,
   IconFile,
   IconFileSpreadsheet,
   IconFileText,
@@ -109,6 +120,7 @@ import {
   IconGitBranch,
   IconGitCommit,
   IconGitFork,
+  IconGitMerge,
   IconGripVertical,
   IconLayoutGrid,
   IconLayoutList,
@@ -116,6 +128,7 @@ import {
   IconLayoutSidebarLeftExpand,
   IconLayoutSidebarRightCollapse,
   IconLayoutSidebarRightExpand,
+  IconHome,
   IconKey,
   IconLink,
   IconLock,
@@ -131,6 +144,7 @@ import {
   IconSquare,
   IconTags,
   IconTemplate,
+  IconClock,
   IconTrash,
   IconUpload,
   IconUsers,
@@ -172,19 +186,51 @@ import type {
   WorkspaceProvisionResult,
 } from '../../shared/desktop-api'
 import myReposIcon from './assets/myrepos-icon.png'
-import { ReadOnlyMonaco } from './ReadOnlyMonaco'
 import { SqlSchemaPreview } from './SqlSchemaPreview'
-import { RepositoryChangeAnalytics } from './RepositoryChangeAnalytics'
-import {
-  RepositoryPortfolioAnalytics,
-  type PortfolioAnalyticsRepository,
-} from './RepositoryPortfolioAnalytics'
+import { RepositorySortMenu } from './RepositorySortMenu'
+import type { PortfolioAnalyticsRepository } from './RepositoryPortfolioAnalytics'
+
+const LazyReadOnlyMonaco = lazy(async () => ({
+  default: (await import('./ReadOnlyMonaco')).ReadOnlyMonaco,
+}))
+const LazyRepositoryChangeAnalytics = lazy(async () => ({
+  default: (await import('./RepositoryChangeAnalytics')).RepositoryChangeAnalytics,
+}))
+const LazyRepositoryPortfolioAnalytics = lazy(async () => ({
+  default: (await import('./RepositoryPortfolioAnalytics')).RepositoryPortfolioAnalytics,
+}))
+
+const DeferredFeature = ({ children }: { children: ReactNode }) => (
+  <Suspense fallback={<div className="deferred-feature-loader"><Loader size="sm" /></div>}>
+    {children}
+  </Suspense>
+)
+
+const ReadOnlyMonaco = (props: ComponentProps<typeof LazyReadOnlyMonaco>) => (
+  <DeferredFeature><LazyReadOnlyMonaco {...props} /></DeferredFeature>
+)
+const RepositoryChangeAnalytics = (
+  props: ComponentProps<typeof LazyRepositoryChangeAnalytics>
+) => (
+  <DeferredFeature><LazyRepositoryChangeAnalytics {...props} /></DeferredFeature>
+)
+const RepositoryPortfolioAnalytics = (
+  props: ComponentProps<typeof LazyRepositoryPortfolioAnalytics>
+) => (
+  <DeferredFeature><LazyRepositoryPortfolioAnalytics {...props} /></DeferredFeature>
+)
 
 type AuthorizationState = 'idle' | 'starting' | 'waiting'
 type ActiveView = 'accounts' | 'repositories' | 'workspaces' | 'groups' | 'tags' | 'settings'
 type RepositoryTab = 'local' | 'github' | 'workspace'
 type RepositoryLayout = 'list' | 'grid'
 type RepositoryPaneLayout = 'line' | 'card'
+type RepositorySortField = 'saved' | 'attention' | 'name' | 'owner' | 'language' | 'updated' | 'sync'
+type RepositorySortDirection = 'asc' | 'desc'
+interface RepositorySortRule {
+  field: RepositorySortField
+  direction: RepositorySortDirection
+}
 type FilesPanelTab = 'changes' | 'files' | 'history' | 'analytics'
 type InsightsTab = 'overview' | 'files' | 'technologies' | 'projects'
 type InsightsMode = 'off' | 'manual' | 'automatic' | 'hybrid'
@@ -202,6 +248,38 @@ interface PortfolioAnalyticsTarget {
   name: string
   path: string | null
   color: string | null
+}
+
+const repositorySortLabels: Record<RepositorySortField, string> = {
+  saved: 'Saved order',
+  attention: 'Needs attention',
+  name: 'Name',
+  owner: 'Owner',
+  language: 'Language',
+  updated: 'Last updated',
+  sync: 'Sync state',
+}
+
+const repositorySortFields = Object.keys(repositorySortLabels) as RepositorySortField[]
+const defaultRepositorySortRules: RepositorySortRule[] = [{ field: 'saved', direction: 'asc' }]
+
+const loadRepositorySortRules = (): RepositorySortRule[] => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('myrepos:repository-sort') ?? 'null')
+    if (!Array.isArray(parsed)) return defaultRepositorySortRules
+    const seen = new Set<RepositorySortField>()
+    const rules = parsed.flatMap((candidate): RepositorySortRule[] => {
+      const field = candidate?.field as RepositorySortField
+      const direction = candidate?.direction as RepositorySortDirection
+      if (!repositorySortFields.includes(field) || seen.has(field) ||
+        (direction !== 'asc' && direction !== 'desc')) return []
+      seen.add(field)
+      return [{ field, direction }]
+    })
+    return rules.length > 0 ? rules : defaultRepositorySortRules
+  } catch {
+    return defaultRepositorySortRules
+  }
 }
 
 const workingTreePreviewKind = (path: string): WorkingTreePreviewKind | null => {
@@ -476,6 +554,10 @@ const HorizontalSplitter = ({
   onChange,
 }: HorizontalSplitterProps) => {
   const splitterRef = useRef<HTMLDivElement>(null)
+  const valueRef = useRef(value)
+  const onChangeRef = useRef(onChange)
+  valueRef.current = value
+  onChangeRef.current = onChange
   const availableMax = (): number => {
     const parentWidth = splitterRef.current?.parentElement?.getBoundingClientRect().width
     return Math.max(min, Math.min(max, parentWidth ? parentWidth - reserveEnd : max))
@@ -490,37 +572,77 @@ const HorizontalSplitter = ({
         max,
         Math.max(min, parent.getBoundingClientRect().width - reserveEnd),
       )
-      if (value > nextValue) onChange(nextValue)
+      if (valueRef.current > nextValue) onChangeRef.current(nextValue)
     }
     const observer = new ResizeObserver(keepSiblingsVisible)
     observer.observe(parent)
     keepSiblingsVisible()
     return () => observer.disconnect()
-  }, [max, min, onChange, reserveEnd, value])
+  }, [max, min, reserveEnd])
 
   const beginResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
     event.preventDefault()
+    const splitter = splitterRef.current
+    const parent = splitter?.parentElement
+    const previousPane = splitter?.previousElementSibling as HTMLElement | null
+    if (!splitter || !parent || !previousPane) return
     const startX = event.clientX
-    const startValue = value
+    const startValue = valueRef.current
+    const parentWidth = parent.getBoundingClientRect().width
+    const dragMax = Math.max(min, Math.min(max, parentWidth - reserveEnd))
+    const clampDrag = (nextValue: number): number =>
+      Math.min(dragMax, Math.max(min, Math.round(nextValue)))
+    const computedParentStyle = window.getComputedStyle(parent)
+    const isGrid = computedParentStyle.display.includes('grid')
+    const resolvedTracks = isGrid
+      ? computedParentStyle.gridTemplateColumns.trim().split(/\s+/)
+      : []
+    const splitterIndex = Array.from(parent.children).indexOf(splitter)
+    const resizedTrackIndex = splitterIndex - 1
+    let nextValue = startValue
+    let renderedValue = startValue
+    let animationFrame = 0
     const previousCursor = document.body.style.cursor
     const previousUserSelect = document.body.style.userSelect
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
+    splitter.setPointerCapture(event.pointerId)
 
+    const preview = (): void => {
+      animationFrame = 0
+      if (nextValue === renderedValue) return
+      renderedValue = nextValue
+      splitter.setAttribute('aria-valuenow', String(renderedValue))
+      if (isGrid && resizedTrackIndex >= 0 && resizedTrackIndex < resolvedTracks.length) {
+        resolvedTracks[resizedTrackIndex] = renderedValue + 'px'
+        parent.style.gridTemplateColumns = resolvedTracks.join(' ')
+      } else {
+        previousPane.style.width = renderedValue + 'px'
+        previousPane.style.minWidth = renderedValue + 'px'
+        previousPane.style.flexBasis = renderedValue + 'px'
+      }
+    }
     const move = (moveEvent: PointerEvent): void => {
-      onChange(clamp(startValue + moveEvent.clientX - startX))
+      nextValue = clampDrag(startValue + moveEvent.clientX - startX)
+      if (!animationFrame) animationFrame = window.requestAnimationFrame(preview)
     }
     const finish = (): void => {
+      if (animationFrame) {
+        window.cancelAnimationFrame(animationFrame)
+        preview()
+      }
       document.body.style.cursor = previousCursor
       document.body.style.userSelect = previousUserSelect
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', finish)
-      window.removeEventListener('pointercancel', finish)
+      if (splitter.hasPointerCapture(event.pointerId)) splitter.releasePointerCapture(event.pointerId)
+      splitter.removeEventListener('pointermove', move)
+      splitter.removeEventListener('pointerup', finish)
+      splitter.removeEventListener('pointercancel', finish)
+      if (renderedValue !== valueRef.current) onChangeRef.current(renderedValue)
     }
 
-    window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', finish)
-    window.addEventListener('pointercancel', finish)
+    splitter.addEventListener('pointermove', move)
+    splitter.addEventListener('pointerup', finish)
+    splitter.addEventListener('pointercancel', finish)
   }
 
   return (
@@ -572,13 +694,30 @@ const VirtualizedInsightFiles = ({ files }: { files: ProjectInsightFile[] }) => 
   const visibleRows = 24
   const viewportRef = useRef<HTMLDivElement>(null)
   const [scrollTop, setScrollTop] = useState(0)
+  const scrollFrameRef = useRef<number | null>(null)
+  const nextScrollTopRef = useRef(0)
   const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan)
   const end = Math.min(files.length, start + visibleRows + overscan * 2)
 
   useEffect(() => {
+    if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current)
+    scrollFrameRef.current = null
     setScrollTop(0)
     if (viewportRef.current) viewportRef.current.scrollTop = 0
   }, [files])
+
+  useEffect(() => () => {
+    if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current)
+  }, [])
+
+  const scheduleScrollTop = (nextScrollTop: number): void => {
+    nextScrollTopRef.current = nextScrollTop
+    if (scrollFrameRef.current !== null) return
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollFrameRef.current = null
+      setScrollTop(nextScrollTopRef.current)
+    })
+  }
 
   return (
     <div className="insights-file-table">
@@ -589,7 +728,7 @@ const VirtualizedInsightFiles = ({ files }: { files: ProjectInsightFile[] }) => 
       <div
         ref={viewportRef}
         className="insights-virtual-viewport insights-file-viewport"
-        onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+        onScroll={(event) => scheduleScrollTop(event.currentTarget.scrollTop)}
       >
         <div className="insights-virtual-spacer" style={{ height: files.length * rowHeight }}>
           <div className="insights-virtual-window" style={{ transform: `translateY(${start * rowHeight}px)` }}>
@@ -633,20 +772,37 @@ const VirtualizedTechnologies = ({
   const visibleRows = 9
   const viewportRef = useRef<HTMLDivElement>(null)
   const [scrollTop, setScrollTop] = useState(0)
+  const scrollFrameRef = useRef<number | null>(null)
+  const nextScrollTopRef = useRef(0)
   const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan)
   const end = Math.min(technologies.length, start + visibleRows + overscan * 2)
 
   useEffect(() => {
+    if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current)
+    scrollFrameRef.current = null
     setScrollTop(0)
     if (viewportRef.current) viewportRef.current.scrollTop = 0
   }, [technologies])
+
+  useEffect(() => () => {
+    if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current)
+  }, [])
+
+  const scheduleScrollTop = (nextScrollTop: number): void => {
+    nextScrollTopRef.current = nextScrollTop
+    if (scrollFrameRef.current !== null) return
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollFrameRef.current = null
+      setScrollTop(nextScrollTopRef.current)
+    })
+  }
 
   return (
     <div
       ref={viewportRef}
       className="insights-virtual-viewport insights-technology-viewport"
       style={{ height: Math.min(603, Math.max(rowHeight, technologies.length * rowHeight)) }}
-      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+      onScroll={(event) => scheduleScrollTop(event.currentTarget.scrollTop)}
     >
       <div className="insights-virtual-spacer" style={{ height: technologies.length * rowHeight }}>
         <div className="insights-virtual-window" style={{ transform: `translateY(${start * rowHeight}px)` }}>
@@ -939,6 +1095,9 @@ export function App() {
   const [draggedRepositoryKey, setDraggedRepositoryKey] = useState<string | null>(null)
   const [repositoryDropTarget, setRepositoryDropTarget] = useState<string | null>(null)
   const [repositoryLayout, setRepositoryLayout] = useState<RepositoryLayout>('list')
+  const [repositorySortRules, setRepositorySortRules] = useState<RepositorySortRule[]>(
+    loadRepositorySortRules,
+  )
   const [repositoryPaneLayout, setRepositoryPaneLayout] = useState<RepositoryPaneLayout>(() =>
     localStorage.getItem('myrepos:repository-pane-layout') === 'line' ? 'line' : 'card',
   )
@@ -1426,16 +1585,67 @@ export function App() {
   const workspaceOrderIndex = new Map(
     workspaceRepositoryOrder.map((repositoryKey, index) => [repositoryKey, index]),
   )
+  const repositorySourceOrderIndex = new Map(
+    repositories.map((repository, index) => [repositoryOrganizationKey(repository), index]),
+  )
+  const savedRepositoryOrder = (repository: GitHubRepository): number =>
+    repositoryTab === 'workspace'
+      ? workspaceOrderIndex.get(repositoryOrganizationKey(repository)) ?? Number.MAX_SAFE_INTEGER
+      : repositorySourceOrderIndex.get(repositoryOrganizationKey(repository)) ?? Number.MAX_SAFE_INTEGER
+  const repositoryAttentionScore = (repository: GitHubRepository): number => {
+    if (!repository.localPath) return 0
+    const preferred = repository.workingCopies.find((copy) =>
+      copy.id === repository.preferredWorkingCopyId) ?? repository.workingCopies[0]
+    if (preferred && !preferred.available) return 1_000_000_000
+    const status = gitStatuses[repository.localPath]
+    if (!status) return 0
+    if (status.error) return 900_000_000
+    return status.conflicts * 10_000_000 + status.behind * 100_000 +
+      (status.staged + status.unstaged + status.untracked) * 100 + status.ahead
+  }
+  const repositorySyncScore = (repository: GitHubRepository): number => {
+    if (!repository.localPath) return -1
+    const status = gitStatuses[repository.localPath]
+    if (!status || status.error) return 6
+    if (status.conflicts > 0) return 5
+    if (status.behind > 0) return 4
+    if (status.ahead > 0) return 3
+    if (!status.clean) return 2
+    if (!status.upstream) return 1
+    return 0
+  }
+  const compareRepositoryField = (
+    left: GitHubRepository,
+    right: GitHubRepository,
+    field: RepositorySortField,
+  ): number => {
+    switch (field) {
+      case 'saved': return savedRepositoryOrder(left) - savedRepositoryOrder(right)
+      case 'attention': return repositoryAttentionScore(left) - repositoryAttentionScore(right)
+      case 'name': return left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: 'base' })
+      case 'owner': return left.fullName.split('/')[0].localeCompare(
+        right.fullName.split('/')[0], undefined, { numeric: true, sensitivity: 'base' },
+      )
+      case 'language': return (left.language ?? '').localeCompare(
+        right.language ?? '', undefined, { numeric: true, sensitivity: 'base' },
+      )
+      case 'updated': return new Date(left.updatedAt).getTime() - new Date(right.updatedAt).getTime()
+      case 'sync': return repositorySyncScore(left) - repositorySyncScore(right)
+    }
+  }
   const visibleRepositories = organizationFilteredRepositories.filter((repository) => {
     if (repositoryTab === 'local') return Boolean(repository.localPath)
     if (repositoryTab === 'github') return !repository.localPath
     if (!selectedWorkspaceId) return false
     return organizationAssignments[repositoryOrganizationKey(repository)]?.workspaceIds
       .includes(selectedWorkspaceId) ?? false
-  }).sort((left, right) => repositoryTab === 'workspace'
-    ? (workspaceOrderIndex.get(repositoryOrganizationKey(left)) ?? Number.MAX_SAFE_INTEGER) -
-      (workspaceOrderIndex.get(repositoryOrganizationKey(right)) ?? Number.MAX_SAFE_INTEGER)
-    : 0)
+  }).sort((left, right) => {
+    for (const rule of repositorySortRules) {
+      const comparison = compareRepositoryField(left, right, rule.field)
+      if (comparison !== 0) return rule.direction === 'asc' ? comparison : -comparison
+    }
+    return savedRepositoryOrder(left) - savedRepositoryOrder(right)
+  })
   const repositoryPageCount = Math.max(
     1,
     Math.ceil(visibleRepositories.length / repositoriesPerPage),
@@ -1578,6 +1788,12 @@ export function App() {
         commit.authorEmail.trim().toLowerCase() === activeHistoryCommitterFilter)
   const activeHistoryCommitter = historyCommitters.find((committer) =>
     committer.email === activeHistoryCommitterFilter) ?? null
+  const applyRepositorySortRules = (rules: RepositorySortRule[]): void => {
+    const nextRules = rules.length > 0 ? rules : defaultRepositorySortRules
+    setRepositorySortRules(nextRules)
+    localStorage.setItem('myrepos:repository-sort', JSON.stringify(nextRules))
+    setRepositoryPage(1)
+  }
   const pagedRepositoryKeys = pagedRepositories.map(repositoryOrganizationKey)
   const selectedOnPageCount = pagedRepositoryKeys.filter((key) =>
     selectedRepositoryKeys.includes(key),
@@ -1592,7 +1808,8 @@ export function App() {
   })
   const workspaceReorderEnabled = repositoryTab === 'workspace' &&
     !workspaceOrderLoading && !workspaceOrderSaving && !repositorySearch.trim() &&
-    activeRepositoryOrganizationFilterCount === 0
+    activeRepositoryOrganizationFilterCount === 0 && repositorySortRules[0]?.field === 'saved' &&
+    repositorySortRules[0]?.direction === 'asc'
   const monitoredPaths = activeView === 'repositories'
     ? pagedRepositories.flatMap((repository) => {
         const preferred = repository.workingCopies.find((copy) =>
@@ -4280,22 +4497,31 @@ export function App() {
               </Group>
             ) : (
               <Group gap="xs" wrap="nowrap">
-                <Button
-                  size="xs"
-                  variant="light"
-                  leftSection={<IconFolderSearch size={15} />}
-                  onClick={() => void addLocalRepository()}
-                >
-                  Add local repository
-                </Button>
-                <Button
-                  size="xs"
-                  leftSection={<IconUpload size={15} />}
-                  disabled={accounts.length === 0}
-                  onClick={() => void addLocalRepository(true)}
-                >
-                  Publish folder
-                </Button>
+                <Tooltip label="Add an existing local repository">
+                  <ActionIcon
+                    className="repository-toolbar-icon"
+                    size="lg"
+                    variant="subtle"
+                    color="teal"
+                    aria-label="Add an existing local repository"
+                    onClick={() => void addLocalRepository()}
+                  >
+                    <IconFolderSearch size={18} />
+                  </ActionIcon>
+                </Tooltip>
+                <Tooltip label="Publish a local folder to GitHub">
+                  <ActionIcon
+                    className="repository-toolbar-icon"
+                    size="lg"
+                    variant="subtle"
+                    color="teal"
+                    aria-label="Publish a local folder to GitHub"
+                    disabled={accounts.length === 0}
+                    onClick={() => void addLocalRepository(true)}
+                  >
+                    <IconUpload size={18} />
+                  </ActionIcon>
+                </Tooltip>
               </Group>
             )}
             </>
@@ -4326,15 +4552,19 @@ export function App() {
               </Button>
             </Tooltip>
           ) : activeView === 'repositories' ? (
-            <Button
-              size="sm"
-              variant="light"
-              leftSection={<IconRefresh size={16} />}
-              loading={repositoriesLoading}
-              onClick={() => void refreshRepositories()}
-            >
-              Refresh
-            </Button>
+            <Tooltip label="Refresh repositories">
+              <ActionIcon
+                className="repository-toolbar-icon"
+                size="lg"
+                variant="subtle"
+                color="teal"
+                loading={repositoriesLoading}
+                aria-label="Refresh repositories"
+                onClick={() => void refreshRepositories()}
+              >
+                <IconRefresh size={18} />
+              </ActionIcon>
+            </Tooltip>
           ) : activeOrganizationKind && activeOrganizationCopy ? (
             <Button
               size="sm"
@@ -4534,14 +4764,14 @@ export function App() {
                     {listedConflictCount > 0 && (
                       <Tooltip label={`${listedConflictCount} unresolved ${listedConflictCount === 1 ? 'conflict' : 'conflicts'}`}>
                         <Badge variant="filled" color="red" size="sm">
-                          {listedConflictCount} {listedConflictCount === 1 ? 'conflict' : 'conflicts'}
+                          <IconAlertCircle size={12} /> {listedConflictCount}
                         </Badge>
                       </Tooltip>
                     )}
                     {listedChangeCount > 0 && (
                       <Tooltip label={`${listedChangeCount} pending ${listedChangeCount === 1 ? 'change' : 'changes'} across ${listedRepositoriesWithChanges.length} ${listedRepositoriesWithChanges.length === 1 ? 'repository' : 'repositories'}`}>
                         <Badge variant="filled" color="orange" size="sm">
-                          {listedChangeCount} {listedChangeCount === 1 ? 'change' : 'changes'}
+                          <IconFileCode size={12} /> {listedChangeCount}
                         </Badge>
                       </Tooltip>
                     )}
@@ -4558,7 +4788,7 @@ export function App() {
                           disabled={bulkGitRunning}
                           onClick={pushListedRepositories}
                         >
-                          ↑ {listedPushNeededCount} push
+                          <IconArrowUp size={12} /> {listedPushNeededCount}
                         </Badge>
                       </Tooltip>
                     )}
@@ -4575,14 +4805,14 @@ export function App() {
                           disabled={bulkGitRunning}
                           onClick={pullListedRepositories}
                         >
-                          ↓ {listedPullNeededCount} pull
+                          <IconArrowDown size={12} /> {listedPullNeededCount}
                         </Badge>
                       </Tooltip>
                     )}
                     {!listedHasStatus && (
                       <Tooltip label={`${visibleRepositories.length} repositories in the current view`}>
                         <Badge variant="outline" color="gray" size="sm">
-                          {visibleRepositories.length} repos
+                          <IconBook2 size={12} /> {visibleRepositories.length}
                         </Badge>
                       </Tooltip>
                     )}
@@ -4611,6 +4841,12 @@ export function App() {
                     </Tooltip>
                   </Group>
                   <Group className="repository-toolbar-actions" gap={4} wrap="nowrap">
+                    <RepositorySortMenu
+                      rules={repositorySortRules}
+                      fields={repositorySortFields}
+                      labels={repositorySortLabels}
+                      onChange={applyRepositorySortRules}
+                    />
                     <Menu
                       position="bottom-end"
                       shadow="xl"
@@ -4619,16 +4855,20 @@ export function App() {
                       withinPortal
                     >
                       <Menu.Target>
-                        <Button
-                          size="xs"
+                        <ActionIcon
+                          className="repository-toolbar-icon"
+                          size="lg"
                           variant={activeRepositoryOrganizationFilterCount > 0 ? 'light' : 'subtle'}
                           color={activeRepositoryOrganizationFilterCount > 0 ? 'teal' : 'gray'}
-                          leftSection={<IconFilter size={15} />}
+                          aria-label={activeRepositoryOrganizationFilterCount > 0
+                            ? 'Filters, ' + activeRepositoryOrganizationFilterCount + ' active'
+                            : 'Filter repositories'}
+                          title={activeRepositoryOrganizationFilterCount > 0
+                            ? activeRepositoryOrganizationFilterCount + ' active filters'
+                            : 'Filter repositories'}
                         >
-                          Filters{activeRepositoryOrganizationFilterCount > 0
-                            ? ` ${activeRepositoryOrganizationFilterCount}`
-                            : ''}
-                        </Button>
+                          <IconFilter size={17} />
+                        </ActionIcon>
                       </Menu.Target>
                       <Menu.Dropdown className="repository-filter-menu">
                         {organizationKinds
@@ -4683,11 +4923,13 @@ export function App() {
                         </Menu.Item>
                       </Menu.Dropdown>
                     </Menu>
-                    <Button
-                      size="xs"
+                    <Tooltip label={selectedRepositoryKeys.length > 0 ? 'Sync selected repositories' : 'Sync visible repositories'}>
+                    <ActionIcon
+                      className="repository-toolbar-icon"
+                      size="lg"
                       variant="subtle"
                       color="gray"
-                      leftSection={<IconRefresh size={15} />}
+                      aria-label={selectedRepositoryKeys.length > 0 ? 'Sync selected repositories' : 'Sync visible repositories'}
                       disabled={selectedRepositoryKeys.length > 0
                         ? selectedLocalRepositories.length === 0
                         : visibleLocalRepositories.length === 0}
@@ -4695,20 +4937,24 @@ export function App() {
                         selectedRepositoryKeys.length > 0 ? 'selected' : 'visible',
                       )}
                     >
-                      {selectedRepositoryKeys.length > 0 ? 'Sync selected' : 'Sync visible'}
-                    </Button>
-                    <Button
-                      size="xs"
+                      <IconArrowsExchange size={17} />
+                    </ActionIcon>
+                    </Tooltip>
+                    <Tooltip label={repositorySelectionMode ? 'Finish selecting repositories' : 'Select repositories'}>
+                    <ActionIcon
+                      className="repository-toolbar-icon"
+                      size="lg"
                       variant={repositorySelectionMode ? 'light' : 'subtle'}
                       color={repositorySelectionMode ? 'teal' : 'gray'}
-                      leftSection={<IconCheck size={15} />}
+                      aria-label={repositorySelectionMode ? 'Finish selecting repositories' : 'Select repositories'}
                       onClick={() => {
                         if (repositorySelectionMode) closeRepositorySelection()
                         else setRepositorySelectionMode(true)
                       }}
                     >
-                      {repositorySelectionMode ? 'Done' : 'Select'}
-                    </Button>
+                      <IconCheck size={17} />
+                    </ActionIcon>
+                    </Tooltip>
                   </Group>
                 </section>
                 {activeRepositoryOrganizationFilters.length > 0 && (
@@ -5001,6 +5247,9 @@ export function App() {
                       ? gitStatus.staged + gitStatus.unstaged + gitStatus.untracked + gitStatus.conflicts
                       : 0
                     const assignment = organizationAssignments[repositoryKey]
+                    const repositoryAccount = accounts.find((account) =>
+                      account.id === repository.accountId)
+                    const repositoryOwner = repository.fullName.split('/')[0] || repository.accountLogin
                     const assignedOrganizationItems = assignment ? [
                       ...organizationCatalog.workspaces.filter((item) => assignment.workspaceIds.includes(item.id)),
                       ...organizationCatalog.groups.filter((item) => assignment.groupIds.includes(item.id)),
@@ -5071,6 +5320,9 @@ export function App() {
                         }
                       }}
                       radius="lg"
+                      title={repository.metadataLoaded
+                        ? repository.description || 'No description provided.'
+                        : repository.localPath}
                       key={`${repository.accountId}:${repository.fullName}`}
                     >
                       {repositorySelectionMode && (
@@ -5100,57 +5352,87 @@ export function App() {
                               title="Repository color"
                             />
                           )}
-                          <Text className="repository-title" fw={680}>{repository.fullName}</Text>
+                          <Tooltip label={'Repository owner: @' + repositoryOwner}>
+                            <Avatar
+                              className="repository-owner-avatar"
+                              src={'https://github.com/' + encodeURIComponent(repositoryOwner) + '.png?size=64'}
+                              alt={'Repository owner @' + repositoryOwner}
+                              size={22}
+                              radius="xl"
+                            >
+                              {repositoryOwner.slice(0, 1).toUpperCase()}
+                            </Avatar>
+                          </Tooltip>
+                          <Text
+                            className="repository-title"
+                            fw={680}
+                            aria-label={repository.fullName}
+                          >
+                            <span className="repository-owner-separator">/</span>{repository.name}
+                          </Text>
                           <span className="repository-chip-break" aria-hidden="true" />
                           {repository.metadataLoaded && (
                             <>
-                              <Badge
-                                size="xs"
-                                variant={repository.private ? 'outline' : 'light'}
-                                color="gray"
-                                leftSection={repository.private ? <IconLock size={10} /> : undefined}
-                              >
-                                {repository.private ? 'Private' : 'Public'}
-                              </Badge>
+                              <Tooltip label={repository.private ? 'Private repository' : 'Public repository'}>
+                                <span
+                                  className="repository-icon-status"
+                                  data-tone={repository.private ? 'neutral' : 'info'}
+                                  aria-label={repository.private ? 'Private repository' : 'Public repository'}
+                                >
+                                  {repository.private ? <IconLock size={13} /> : <IconBrandGithub size={13} />}
+                                </span>
+                              </Tooltip>
                               {repository.archived && (
-                                <Badge size="xs" variant="outline" color="gray">Archived</Badge>
+                                <Tooltip label="Archived repository">
+                                  <span className="repository-icon-status" data-tone="warning">
+                                    <IconArchive size={13} />
+                                  </span>
+                                </Tooltip>
                               )}
                               {repository.fork && (
-                                <Badge size="xs" variant="outline" color="blue">Fork</Badge>
+                                <Tooltip label="Forked repository">
+                                  <span className="repository-icon-status" data-tone="info">
+                                    <IconGitFork size={13} />
+                                  </span>
+                                </Tooltip>
                               )}
                             </>
                           )}
                           {repository.localPath && gitStatus && !gitStatus.error && (
-                            <Badge
-                              size="xs"
-                              variant={gitStatus.conflicts === 0 &&
-                                (!gitStatus.clean || gitStatus.ahead > 0 || gitStatus.behind > 0)
-                                ? 'filled'
-                                : 'light'}
-                              color={gitStatus.conflicts > 0
-                                ? 'red'
-                                : gitStatus.clean && gitStatus.upstream &&
-                                    gitStatus.ahead === 0 && gitStatus.behind === 0
-                                  ? 'teal'
-                                  : gitStatus.ahead > 0 || gitStatus.behind > 0
-                                    ? 'pink'
-                                  : gitStatus.clean
-                                    ? 'blue'
-                                    : 'orange'}
-                            >
-                              {gitStatus.conflicts > 0
-                                ? `${gitStatus.conflicts} conflicts`
-                                : gitStatus.clean && gitStatus.upstream &&
-                                    gitStatus.ahead === 0 && gitStatus.behind === 0
-                                  ? `Synced${repository.lastSyncedAt
-                                    ? ` ${timeAgo(repository.lastSyncedAt, relativeTimeNow)}`
-                                    : ''}`
-                                  : gitStatus.ahead > 0 || gitStatus.behind > 0
-                                    ? 'Sync needed'
-                                    : gitStatus.clean
-                                      ? 'Local only'
-                                      : `${changeCount} changes`}
-                            </Badge>
+                            <Tooltip label={gitStatus.conflicts > 0
+                              ? gitStatus.conflicts + ' conflicts'
+                              : gitStatus.clean && gitStatus.upstream &&
+                                  gitStatus.ahead === 0 && gitStatus.behind === 0
+                                ? 'Synced' + (repository.lastSyncedAt
+                                  ? ' ' + timeAgo(repository.lastSyncedAt, relativeTimeNow)
+                                  : '')
+                                : gitStatus.ahead > 0 || gitStatus.behind > 0
+                                  ? 'Sync needed'
+                                  : gitStatus.clean ? 'Local only' : changeCount + ' changes'}>
+                              <span
+                                className="repository-icon-status"
+                                data-tone={gitStatus.conflicts > 0
+                                  ? 'danger'
+                                  : gitStatus.clean && gitStatus.upstream &&
+                                      gitStatus.ahead === 0 && gitStatus.behind === 0
+                                    ? 'success'
+                                    : gitStatus.ahead > 0 || gitStatus.behind > 0
+                                      ? 'attention'
+                                      : gitStatus.clean ? 'info' : 'warning'}
+                                aria-label="Repository synchronization status"
+                              >
+                                {gitStatus.conflicts > 0
+                                  ? <IconGitMerge size={13} />
+                                  : gitStatus.clean && gitStatus.upstream &&
+                                      gitStatus.ahead === 0 && gitStatus.behind === 0
+                                    ? <IconCloudCheck size={13} />
+                                    : gitStatus.ahead > 0 || gitStatus.behind > 0
+                                      ? <IconCloudExclamation size={13} />
+                                      : gitStatus.clean
+                                        ? <IconCloudOff size={13} />
+                                        : <IconFileDiff size={13} />}
+                              </span>
+                            </Tooltip>
                           )}
                           {repository.localPath && !preferredWorkingCopyAvailable && (
                             <Badge size="xs" variant="filled" color="red">Copy missing</Badge>
@@ -5160,11 +5442,17 @@ export function App() {
                               {repository.workingCopies.length} working copies
                             </Badge>
                           )}
-                          {selectedAccountId === 'all' && (
-                            <Badge size="xs" variant="outline" color="gray">
-                              @{repository.accountLogin}
-                            </Badge>
-                          )}
+                          <Tooltip label={'Connected GitHub account: @' + repository.accountLogin}>
+                            <Avatar
+                              className="repository-account-avatar"
+                              src={repositoryAccount?.avatarUrl}
+                              alt={'Connected GitHub account @' + repository.accountLogin}
+                              size={22}
+                              radius="xl"
+                            >
+                              {repository.accountLogin.slice(0, 1).toUpperCase()}
+                            </Avatar>
+                          </Tooltip>
                           {assignedOrganizationItems.slice(0, 3).map((item) => (
                             <Badge
                               size="xs"
@@ -5190,12 +5478,26 @@ export function App() {
                         {repository.metadataLoaded ? (
                           <Group gap="md" mt="sm" className="repository-meta">
                             {repository.language && <Text size="xs">{repository.language}</Text>}
-                            <Group gap={4}>
+                            <Tooltip label={repository.stars + ' stars'}>
+                            <Group className="repository-inline-stat" gap={3}>
                               <IconStar size={13} />
                               <Text size="xs">{repository.stars}</Text>
                             </Group>
-                            <Text size="xs">Updated {new Date(repository.updatedAt).toLocaleDateString()}</Text>
-                            <Text size="xs">Default: {repository.defaultBranch}</Text>
+                            </Tooltip>
+                            <Tooltip label={'Updated ' + new Date(repository.updatedAt).toLocaleDateString()}>
+                              <Group className="repository-inline-stat" gap={3}>
+                                <IconClock size={13} />
+                                <Text size="xs">{new Date(repository.updatedAt).toLocaleDateString()}</Text>
+                              </Group>
+                            </Tooltip>
+                            {(!gitStatus?.branch || gitStatus.branch !== repository.defaultBranch) && (
+                              <Tooltip label={'Default branch: ' + repository.defaultBranch}>
+                                <Group className="repository-inline-stat" gap={3}>
+                                <IconHome size={13} />
+                                  <Text size="xs">{repository.defaultBranch}</Text>
+                                </Group>
+                              </Tooltip>
+                            )}
                           </Group>
                         ) : (
                           <Group gap={7} mt="sm" className="repository-meta">
@@ -5220,18 +5522,63 @@ export function App() {
                               <Text size="xs" c="red.4">{gitStatus.error}</Text>
                             ) : (
                               <>
-                                <Group gap={4}>
-                                  <IconGitBranch size={13} />
-                                  <Text size="xs">{gitStatus.branch ?? 'Detached HEAD'}</Text>
-                                </Group>
-                                {gitStatus.staged > 0 && <Text size="xs">{gitStatus.staged} staged</Text>}
-                                {gitStatus.unstaged > 0 && <Text size="xs">{gitStatus.unstaged} modified</Text>}
-                                {gitStatus.untracked > 0 && <Text size="xs">{gitStatus.untracked} untracked</Text>}
-                                {gitStatus.conflicts > 0 && <Text size="xs" c="red.4">{gitStatus.conflicts} conflicts</Text>}
-                                {gitStatus.ahead > 0 && <Text size="xs" c="teal.4">↑ {gitStatus.ahead} unpushed</Text>}
-                                {gitStatus.behind > 0 && <Text size="xs" c="yellow.4">↓ {gitStatus.behind} behind</Text>}
-                                {gitStatus.clean && gitStatus.ahead === 0 && gitStatus.behind === 0 && (
-                                  <Text size="xs">Working tree clean</Text>
+                                <Tooltip label={gitStatus.branch === repository.defaultBranch
+                                  ? 'Current and default branch'
+                                  : 'Current branch'}>
+                                  <Group gap={4}>
+                                    <IconGitBranch size={13} />
+                                    <Text size="xs">{gitStatus.branch ?? 'Detached HEAD'}</Text>
+                                  </Group>
+                                </Tooltip>
+                                {gitStatus.staged > 0 && (
+                                  <Tooltip label={gitStatus.staged + ' staged changes'}>
+                                    <span className="repository-count-status" data-tone="success">
+                                      <IconGitCommit size={12} />{gitStatus.staged}
+                                    </span>
+                                  </Tooltip>
+                                )}
+                                {gitStatus.unstaged > 0 && (
+                                  <Tooltip label={gitStatus.unstaged + ' modified files'}>
+                                    <span className="repository-count-status" data-tone="warning">
+                                      <IconFileCode size={12} />{gitStatus.unstaged}
+                                    </span>
+                                  </Tooltip>
+                                )}
+                                {gitStatus.untracked > 0 && (
+                                  <Tooltip label={gitStatus.untracked + ' untracked files'}>
+                                    <span className="repository-count-status" data-tone="warning">
+                                      <IconPlus size={12} />{gitStatus.untracked}
+                                    </span>
+                                  </Tooltip>
+                                )}
+                                {gitStatus.conflicts > 0 && (
+                                  <Tooltip label={gitStatus.conflicts + ' conflicts'}>
+                                    <span className="repository-count-status" data-tone="danger">
+                                      <IconAlertCircle size={12} />{gitStatus.conflicts}
+                                    </span>
+                                  </Tooltip>
+                                )}
+                                {gitStatus.ahead > 0 && (
+                                  <Tooltip label={gitStatus.ahead + ' unpushed commits'}>
+                                    <span className="repository-count-status" data-tone="success">
+                                      <IconArrowUp size={12} />{gitStatus.ahead}
+                                    </span>
+                                  </Tooltip>
+                                )}
+                                {gitStatus.behind > 0 && (
+                                  <Tooltip label={gitStatus.behind + ' commits available to pull'}>
+                                    <span className="repository-count-status" data-tone="attention">
+                                      <IconArrowDown size={12} />{gitStatus.behind}
+                                    </span>
+                                  </Tooltip>
+                                )}
+                                {gitStatus.clean && !gitStatus.upstream &&
+                                  gitStatus.ahead === 0 && gitStatus.behind === 0 && (
+                                  <Tooltip label="Working tree clean">
+                                    <span className="repository-icon-status" data-tone="success">
+                                      <IconCircleCheck size={13} />
+                                    </span>
+                                  </Tooltip>
                                 )}
                               </>
                             )}
@@ -5247,7 +5594,7 @@ export function App() {
                               ? 'Saving workspace order…'
                               : 'Clear search and filters to reorder'}>
                             <ActionIcon
-                              className="repository-drag-handle"
+                              className="repository-drag-handle repository-secondary-action"
                               variant="subtle"
                               color="gray"
                               disabled={!workspaceReorderEnabled}
@@ -5274,6 +5621,7 @@ export function App() {
                         )}
                         <Tooltip label="Organize repository">
                           <ActionIcon
+                            className="repository-secondary-action"
                             variant="subtle"
                             color="gray"
                             aria-label={`Organize ${repository.fullName}`}
@@ -5284,6 +5632,7 @@ export function App() {
                         </Tooltip>
                         {repository.profileUrl && (
                           <ActionIcon
+                            className="repository-secondary-action"
                             component="a"
                             href={repository.profileUrl}
                             target="_blank"
@@ -5301,6 +5650,7 @@ export function App() {
                             ? 'copy'
                             : 'copies'}`}>
                           <ActionIcon
+                            className="repository-secondary-action"
                             variant="subtle"
                             color="gray"
                             aria-label={`Manage working copies for ${repository.fullName}`}
@@ -5313,53 +5663,70 @@ export function App() {
                           <Group gap="xs" wrap="nowrap">
                             {gitStatus && gitStatus.behind > 0 && (
                               <Button
+                                className="repository-count-action repository-urgent-action"
                                 size="xs"
                                 variant="light"
                                 color="yellow"
+                                leftSection={<IconArrowDown size={14} />}
+                                aria-label={'Pull ' + gitStatus.behind + ' commits'}
+                                title={'Pull ' + gitStatus.behind + ' commits'}
                                 loading={cardGitAction === `pull:${repository.localPath}`}
                                 disabled={Boolean(cardGitAction)}
                                 onClick={() => void runCardGitAction(repository, 'pull')}
                               >
-                                Pull {gitStatus.behind}
+                                {gitStatus.behind}
                               </Button>
                             )}
                             {gitStatus && gitStatus.staged > 0 && (
                               <Button
+                                className="repository-count-action repository-urgent-action"
                                 size="xs"
                                 variant="light"
                                 color="teal"
+                                leftSection={<IconGitCommit size={14} />}
+                                aria-label={'Commit ' + gitStatus.staged + ' staged changes'}
+                                title={'Commit ' + gitStatus.staged + ' staged changes'}
                                 loading={cardGitAction === `commit:${repository.localPath}`}
                                 disabled={Boolean(cardGitAction)}
                                 onClick={() => openCardCommit(repository, false)}
                               >
-                                Commit {gitStatus.staged}
+                                {gitStatus.staged}
                               </Button>
                             )}
                             {gitStatus && gitStatus.staged === 0 && gitStatus.conflicts === 0 &&
                               gitStatus.unstaged + gitStatus.untracked > 0 && (
                               <Button
+                                className="repository-count-action repository-urgent-action"
                                 size="xs"
                                 variant="light"
                                 color="teal"
+                                leftSection={<IconGitCommit size={14} />}
+                                aria-label={'Commit all ' + (gitStatus.unstaged + gitStatus.untracked) + ' changes'}
+                                title={'Commit all ' + (gitStatus.unstaged + gitStatus.untracked) + ' changes'}
                                 loading={cardGitAction === `commit:${repository.localPath}`}
                                 disabled={Boolean(cardGitAction)}
                                 onClick={() => openCardCommit(repository, true)}
                               >
-                                Commit all {gitStatus.unstaged + gitStatus.untracked}
+                                {gitStatus.unstaged + gitStatus.untracked}
                               </Button>
                             )}
                             {gitStatus && gitStatus.ahead > 0 && (
                               <Button
+                                className="repository-count-action repository-urgent-action"
                                 size="xs"
+                                leftSection={<IconArrowUp size={14} />}
+                                aria-label={'Push ' + gitStatus.ahead + ' commits'}
+                                title={'Push ' + gitStatus.ahead + ' commits'}
                                 loading={cardGitAction === `push:${repository.localPath}`}
                                 disabled={Boolean(cardGitAction)}
                                 onClick={() => void runCardGitAction(repository, 'push')}
                               >
-                                Push {gitStatus.ahead}
+                                {gitStatus.ahead}
                               </Button>
                             )}
                             {gitStatus && !gitStatus.upstream && (
                               <Button
+                                className="repository-urgent-action"
                                 size="xs"
                                 variant="light"
                                 leftSection={<IconUpload size={14} />}
@@ -5370,11 +5737,14 @@ export function App() {
                               </Button>
                             )}
                             {gitStatus?.upstream && (
-                              <Button
-                                size="xs"
+                              <Tooltip label="Sync repository">
+                              <ActionIcon
+                                className="repository-sync-action"
+                                size="lg"
                                 variant="light"
                                 loading={cardGitAction === `sync:${repository.localPath}`}
                                 disabled={Boolean(cardGitAction) || gitStatus.conflicts > 0}
+                                aria-label={`Sync ${repository.fullName}`}
                                 onClick={() => {
                                   const hasChanges = gitStatus.staged + gitStatus.unstaged + gitStatus.untracked > 0
                                   if (hasChanges) {
@@ -5388,39 +5758,46 @@ export function App() {
                                   }
                                 }}
                               >
-                                Sync
-                              </Button>
+                                <IconArrowsExchange size={16} />
+                              </ActionIcon>
+                              </Tooltip>
                             )}
-                            <Button
-                              className="repository-insights-button"
-                              size="xs"
-                              variant="subtle"
-                              color="gray"
-                              leftSection={<IconChartBar size={14} />}
-                              onClick={() => openRepositoryInsights(repository)}
-                            >
-                              Insights
-                            </Button>
-                            <Button
-                              className="repository-files-button"
-                              size="xs"
-                              variant="subtle"
-                              color="gray"
-                              leftSection={<IconGitCommit size={14} />}
-                              onClick={() => void openGitPanel(repository)}
-                            >
-                              Files
-                            </Button>
-                            <Button
-                              size="xs"
-                              variant="light"
-                              leftSection={<IconBrandVscode size={14} />}
-                              onClick={() => void openRepositoryInVSCode(repository.localPath!)}
-                            >
-                              Open in VS Code
-                            </Button>
+                            <Tooltip label="Open Insights">
+                              <ActionIcon
+                                className="repository-insights-button repository-secondary-action"
+                                variant="subtle"
+                                color="gray"
+                                aria-label={`Open Insights for ${repository.fullName}`}
+                                onClick={() => openRepositoryInsights(repository)}
+                              >
+                                <IconChartBar size={16} />
+                              </ActionIcon>
+                            </Tooltip>
+                            <Tooltip label="Browse files and changes">
+                              <ActionIcon
+                                className="repository-files-button repository-secondary-action"
+                                variant="subtle"
+                                color="gray"
+                                aria-label={`Browse files for ${repository.fullName}`}
+                                onClick={() => void openGitPanel(repository)}
+                              >
+                                <IconGitCommit size={16} />
+                              </ActionIcon>
+                            </Tooltip>
+                            <Tooltip label="Open in VS Code">
+                              <ActionIcon
+                                className="repository-secondary-action"
+                                variant="subtle"
+                                color="gray"
+                                aria-label={`Open ${repository.fullName} in VS Code`}
+                                onClick={() => void openRepositoryInVSCode(repository.localPath!)}
+                              >
+                                <IconBrandVscode size={16} />
+                              </ActionIcon>
+                            </Tooltip>
                             <Tooltip label="Open folder">
                               <ActionIcon
+                                className="repository-secondary-action"
                                 variant="subtle"
                                 color="gray"
                                 aria-label={`Open ${repository.fullName} folder`}

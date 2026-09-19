@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MyRepos — Slim repository card proposal</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --app: #090e14;
+      --panel: #10171f;
+      --panel-hover: #141f29;
+      --panel-selected: #102a26;
+      --line: #3b4a59;
+      --muted: #8fa0b3;
+      --text: #edf3f8;
+      --green: #26d5ad;
+      --green-deep: #075b49;
+      --pink: #ff3f87;
+      --orange: #ff9f2f;
+      --red: #ff5d68;
+      --blue: #4ab7ff;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-width: 980px;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 70% -10%, rgba(38, 213, 173, .07), transparent 32%),
+        var(--app);
+      color: var(--text);
+      font: 13px/1.35 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+
+    button, summary { font: inherit; }
+
+    .page {
+      width: min(1500px, calc(100% - 48px));
+      margin: 32px auto;
+    }
+
+    .intro {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      margin-bottom: 18px;
+    }
+
+    h1 { margin: 0; font-size: 20px; }
+    .intro p { margin: 5px 0 0; color: var(--muted); }
+    .measure { color: var(--green); font-size: 11px; font-weight: 800; letter-spacing: .08em; }
+
+    .repo-list { display: grid; gap: 8px; }
+
+    .repo-card {
+      --accent: var(--green);
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(330px, 1.2fr) minmax(290px, .85fr) auto;
+      align-items: center;
+      min-height: 72px;
+      padding: 9px 12px 9px 15px;
+      overflow: visible;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: var(--panel);
+      box-shadow: inset 3px 0 0 var(--accent);
+      transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+    }
+
+    .repo-card:hover,
+    .repo-card:focus-within {
+      border-color: #708397;
+      background: var(--panel-hover);
+      box-shadow: inset 3px 0 0 var(--accent), 0 0 0 1px rgba(112, 131, 151, .18);
+    }
+
+    .repo-card.selected {
+      border-color: var(--green);
+      background: var(--panel-selected);
+      box-shadow: inset 3px 0 0 var(--accent), 0 0 0 1px rgba(38, 213, 173, .2);
+    }
+
+    .repo-card.attention { --accent: var(--pink); }
+    .repo-card.warning { --accent: var(--orange); }
+
+    .identity {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+    }
+
+    .lang-logo {
+      display: grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 7px;
+      background: #0877be;
+      color: white;
+      font-size: 18px;
+      font-weight: 800;
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, .14);
+    }
+
+    .lang-logo.php { border-radius: 50%; background: #777bb3; font-size: 12px; font-style: italic; }
+    .lang-logo.cs { background: #873b91; }
+
+    .primary, .secondary, .status-line, .action-rail {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      gap: 7px;
+    }
+
+    .name {
+      overflow: hidden;
+      color: #f4f7fb;
+      font-size: 14px;
+      font-weight: 750;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .dot {
+      flex: 0 0 auto;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    .secondary {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .secondary span + span::before {
+      content: "·";
+      margin-right: 7px;
+      color: #536273;
+    }
+
+    .chip {
+      flex: 0 0 auto;
+      padding: 2px 6px;
+      border: 1px solid #6f8293;
+      border-radius: 999px;
+      color: #d8e2ea;
+      font-size: 9px;
+      font-weight: 800;
+      line-height: 1.15;
+      text-transform: uppercase;
+    }
+
+    .chip.workspace { border-color: var(--green); color: var(--green); }
+
+    .icon-stat {
+      position: relative;
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      min-width: 22px;
+      height: 22px;
+      padding: 0 5px;
+      border: 1px solid #536272;
+      border-radius: 6px;
+      color: #c9d4de;
+      background: #111820;
+      font-size: 9px;
+      font-weight: 800;
+    }
+
+    .icon-stat svg { width: 13px; height: 13px; }
+    .icon-stat.good { border-color: #08735d; color: #65f1ce; background: #0b2c27; }
+    .icon-stat.danger { border-color: #c21f58; color: #ff83ae; background: #3a1021; }
+    .icon-stat.push { border-color: #0c9071; color: #55eac6; background: #0b2d27; }
+    .icon-stat.pull { border-color: #9b641c; color: #ffc268; background: #33230e; }
+    .icon-stat.changes { border-color: #a8711d; color: #ffd071; background: #34260f; }
+
+    .inline-meta {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .inline-meta svg { width: 13px; height: 13px; }
+
+    .status {
+      min-width: 0;
+      padding-left: 14px;
+      border-left: 1px solid #27333f;
+    }
+
+    .status-line { color: #becbd7; font-size: 11px; }
+    .status-line + .status-line { margin-top: 6px; }
+    .status strong { color: var(--text); font-weight: 650; }
+    .compact-statuses { display: flex; gap: 5px; }
+
+    .action-zone {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      min-width: 405px;
+      padding-left: 14px;
+    }
+
+    .primary-actions, .action-rail { display: flex; align-items: center; gap: 6px; }
+
+    .action-rail {
+      width: 210px;
+      margin-left: 6px;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity 120ms ease, visibility 0s linear 120ms;
+    }
+
+    .repo-card:hover .action-rail,
+    .repo-card:focus-within .action-rail,
+    .repo-card.selected .action-rail {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transition: opacity 120ms ease;
+    }
+
+    .icon-button, .urgent-button, .more summary {
+      position: relative;
+      display: grid;
+      place-items: center;
+      height: 32px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      color: #d9e4ec;
+      background: transparent;
+      cursor: pointer;
+    }
+
+    .icon-button { width: 32px; padding: 0; }
+
+    .icon-button:hover, .more summary:hover {
+      border-color: #516273;
+      background: #22303c;
+      color: white;
+    }
+
+    .icon-button:active, .more summary:active { background: #304253; }
+
+    .urgent-button {
+      grid-auto-flow: column;
+      gap: 6px;
+      padding: 0 11px;
+      background: var(--green-deep);
+      color: white;
+      font-size: 11px;
+      font-weight: 750;
+    }
+
+    .urgent-button:hover { background: #08745d; }
+
+    svg {
+      width: 16px;
+      height: 16px;
+      fill: none;
+      stroke: currentColor;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 1.8;
+    }
+
+    [data-tip]::after {
+      content: attr(data-tip);
+      position: absolute;
+      z-index: 20;
+      right: 0;
+      bottom: calc(100% + 7px);
+      width: max-content;
+      max-width: 200px;
+      padding: 5px 8px;
+      border: 1px solid #465666;
+      border-radius: 6px;
+      background: #05090d;
+      color: #eff5fa;
+      font-size: 10px;
+      font-weight: 600;
+      opacity: 0;
+      transform: translateY(3px);
+      pointer-events: none;
+      transition: 100ms ease;
+    }
+
+    [data-tip]:hover::after, [data-tip]:focus-visible::after {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .more { position: relative; }
+    .more summary { width: 32px; list-style: none; }
+    .more summary::-webkit-details-marker { display: none; }
+    .more-menu {
+      position: absolute;
+      z-index: 30;
+      top: 38px;
+      right: 0;
+      width: 230px;
+      padding: 6px;
+      border: 1px solid #445363;
+      border-radius: 9px;
+      background: #111820;
+      box-shadow: 0 14px 35px rgba(0, 0, 0, .45);
+    }
+
+    .more-menu button {
+      width: 100%;
+      padding: 8px 10px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: #dbe4ec;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .more-menu button:hover { background: #20303c; }
+
+    .legend {
+      display: flex;
+      gap: 18px;
+      margin-top: 18px;
+      padding: 11px 14px;
+      border: 1px solid #25313c;
+      border-radius: 9px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .legend strong { color: var(--text); }
+
+    @media (max-width: 1150px) {
+      .repo-card { grid-template-columns: minmax(300px, 1fr) auto; }
+      .status { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="intro">
+      <div>
+        <h1>Slim repository cards</h1>
+        <p>All information remains available; secondary actions appear on hover, focus, or selection.</p>
+      </div>
+      <div class="measure">72 PX CARD HEIGHT</div>
+    </header>
+
+    <section class="repo-list" aria-label="Repository card examples">
+      <article class="repo-card attention" tabindex="0">
+        <div class="identity">
+          <div class="lang-logo cs" title="C#">C#</div>
+          <div>
+            <div class="primary">
+              <span class="dot" aria-hidden="true"></span>
+              <span class="name">Debdutta-Panda/cpdi</span>
+              <span class="icon-stat" data-tip="Private repository" aria-label="Private repository">
+                <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+              </span>
+              <span class="icon-stat danger" data-tip="Sync needed" aria-label="Sync needed">
+                <svg viewBox="0 0 24 24"><path d="M20 7h-7V3M4 17h7v4M20 7a8 8 0 0 0-13-2M4 17a8 8 0 0 0 13 2"/><path d="M12 8v4m0 4h.01"/></svg>
+              </span>
+              <span class="chip workspace">ClinikPe</span>
+            </div>
+            <div class="secondary">
+              <span>C#</span>
+              <span class="inline-meta" data-tip="0 stars"><svg viewBox="0 0 24 24"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z"/></svg>0</span>
+              <span class="inline-meta" data-tip="Updated 9/19/2026"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>9/19/2026</span>
+              <span class="inline-meta" data-tip="Default branch: master"><svg viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10m2-4c5 0 8-1 8-3"/></svg>master</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="status">
+          <div class="status-line">
+            <span class="inline-meta" data-tip="Current branch: master"><svg viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10m2-4c5 0 8-1 8-3"/></svg><strong>master</strong></span>
+            <span class="inline-meta" data-tip="Working tree clean"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span>
+          </div>
+          <div class="status-line compact-statuses">
+            <span class="icon-stat push" data-tip="2 unpushed commits" aria-label="2 unpushed commits"><svg viewBox="0 0 24 24"><path d="M12 19V5m-5 5 5-5 5 5"/></svg>2</span>
+            <span class="icon-stat pull" data-tip="1 commit available to pull" aria-label="1 commit available to pull"><svg viewBox="0 0 24 24"><path d="M12 5v14m-5-5 5 5 5-5"/></svg>1</span>
+          </div>
+        </div>
+
+        <div class="action-zone">
+          <div class="primary-actions">
+            <button class="urgent-button" type="button" data-tip="Push 2 commits">
+              <svg viewBox="0 0 24 24"><path d="M12 19V5m-5 5 5-5 5 5"/></svg>2
+            </button>
+            <button class="icon-button" type="button" data-tip="Sync: pull, commit if needed, then push">
+              <svg viewBox="0 0 24 24"><path d="M20 7h-7V3M4 17h7v4M20 7a8 8 0 0 0-13-2M4 17a8 8 0 0 0 13 2"/></svg>
+            </button>
+          </div>
+          <div class="action-rail">
+            <button class="icon-button" type="button" data-tip="Open Insights">
+              <svg viewBox="0 0 24 24"><path d="M5 20V10m7 10V4m7 16v-7M3 20h18"/></svg>
+            </button>
+            <button class="icon-button" type="button" data-tip="Browse files and changes">
+              <svg viewBox="0 0 24 24"><path d="M8 4 5 12l3 8m8-16 3 8-3 8"/></svg>
+            </button>
+            <button class="icon-button" type="button" data-tip="Open in VS Code">
+              <svg viewBox="0 0 24 24"><path d="m17 3 4 2v14l-4 2L8 14l-4 3-2-1V8l2-1 4 3 9-7Zm0 5-6 4 6 4V8Z"/></svg>
+            </button>
+            <button class="icon-button" type="button" data-tip="Open local folder">
+              <svg viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v10H3z"/></svg>
+            </button>
+            <details class="more">
+              <summary data-tip="More actions" aria-label="More actions">
+                <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+              </summary>
+              <div class="more-menu">
+                <button type="button">Open on GitHub</button>
+                <button type="button">Copy repository link</button>
+                <button type="button">Manage tags and organization</button>
+                <button type="button">Choose working copy</button>
+              </div>
+            </details>
+          </div>
+        </div>
+      </article>
+
+      <article class="repo-card selected" tabindex="0">
+        <div class="identity">
+          <div class="lang-logo">TS</div>
+          <div>
+            <div class="primary">
+              <span class="dot"></span>
+              <span class="name">vxplore/v-care-admin</span>
+              <span class="icon-stat" data-tip="Private repository" aria-label="Private repository"><svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>
+              <span class="icon-stat good" data-tip="Synced 1 day ago" aria-label="Synced 1 day ago"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span>
+              <span class="chip workspace">ClinikPe</span>
+            </div>
+            <div class="secondary">
+              <span>TypeScript</span>
+              <span class="inline-meta" data-tip="0 stars"><svg viewBox="0 0 24 24"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z"/></svg>0</span>
+              <span class="inline-meta" data-tip="Updated 9/17/2026"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>9/17/2026</span>
+              <span class="inline-meta" data-tip="Default branch: master"><svg viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10m2-4c5 0 8-1 8-3"/></svg>master</span>
+            </div>
+          </div>
+        </div>
+        <div class="status">
+          <div class="status-line">
+            <span class="inline-meta" data-tip="Current branch: master"><svg viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10m2-4c5 0 8-1 8-3"/></svg><strong>master</strong></span>
+            <span class="icon-stat good" data-tip="Working tree clean; no pending operations" aria-label="Working tree clean"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span>
+          </div>
+        </div>
+        <div class="action-zone">
+          <div class="primary-actions">
+            <button class="icon-button" type="button" data-tip="Sync repository">
+              <svg viewBox="0 0 24 24"><path d="M20 7h-7V3M4 17h7v4M20 7a8 8 0 0 0-13-2M4 17a8 8 0 0 0 13 2"/></svg>
+            </button>
+          </div>
+          <div class="action-rail">
+            <button class="icon-button" type="button" data-tip="Open Insights"><svg viewBox="0 0 24 24"><path d="M5 20V10m7 10V4m7 16v-7M3 20h18"/></svg></button>
+            <button class="icon-button" type="button" data-tip="Browse files"><svg viewBox="0 0 24 24"><path d="M8 4 5 12l3 8m8-16 3 8-3 8"/></svg></button>
+            <button class="icon-button" type="button" data-tip="Open in VS Code"><svg viewBox="0 0 24 24"><path d="m17 3 4 2v14l-4 2L8 14l-4 3-2-1V8l2-1 4 3 9-7Z"/></svg></button>
+            <button class="icon-button" type="button" data-tip="Open folder"><svg viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v10H3z"/></svg></button>
+            <details class="more"><summary data-tip="More actions"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></summary><div class="more-menu"><button>Open on GitHub</button><button>Copy repository link</button><button>Manage tags and organization</button></div></details>
+          </div>
+        </div>
+      </article>
+
+      <article class="repo-card warning" tabindex="0">
+        <div class="identity">
+          <div class="lang-logo php">php</div>
+          <div>
+            <div class="primary">
+              <span class="dot"></span>
+              <span class="name">vxplore/clinicpe_backend_ci4</span>
+              <span class="icon-stat" data-tip="Private repository" aria-label="Private repository"><svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>
+              <span class="icon-stat good" data-tip="Synced 1 day ago" aria-label="Synced 1 day ago"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span>
+              <span class="chip workspace">ClinikPe</span>
+            </div>
+            <div class="secondary">
+              <span>PHP</span>
+              <span class="inline-meta" data-tip="0 stars"><svg viewBox="0 0 24 24"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z"/></svg>0</span>
+              <span class="inline-meta" data-tip="Updated 9/19/2026"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>9/19/2026</span>
+              <span class="inline-meta" data-tip="Default branch: master"><svg viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10m2-4c5 0 8-1 8-3"/></svg>master</span>
+            </div>
+          </div>
+        </div>
+        <div class="status">
+          <div class="status-line">
+            <span class="inline-meta" data-tip="Current branch: master"><svg viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10m2-4c5 0 8-1 8-3"/></svg><strong>master</strong></span>
+            <span class="icon-stat changes" data-tip="3 modified files" aria-label="3 modified files"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4Zm9-13 4 4"/></svg>3</span>
+            <span class="icon-stat changes" data-tip="1 untracked file" aria-label="1 untracked file"><svg viewBox="0 0 24 24"><path d="M12 5v14m-7-7h14"/></svg>1</span>
+          </div>
+        </div>
+        <div class="action-zone">
+          <div class="primary-actions">
+            <button class="urgent-button" type="button" data-tip="Commit all 4 changes">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v6m0 6v6"/></svg>4
+            </button>
+            <button class="icon-button" type="button" data-tip="Sync repository"><svg viewBox="0 0 24 24"><path d="M20 7h-7V3M4 17h7v4M20 7a8 8 0 0 0-13-2M4 17a8 8 0 0 0 13 2"/></svg></button>
+          </div>
+          <div class="action-rail">
+            <button class="icon-button" type="button" data-tip="Open Insights"><svg viewBox="0 0 24 24"><path d="M5 20V10m7 10V4m7 16v-7M3 20h18"/></svg></button>
+            <button class="icon-button" type="button" data-tip="Browse files and changes"><svg viewBox="0 0 24 24"><path d="M8 4 5 12l3 8m8-16 3 8-3 8"/></svg></button>
+            <button class="icon-button" type="button" data-tip="Open in VS Code"><svg viewBox="0 0 24 24"><path d="m17 3 4 2v14l-4 2L8 14l-4 3-2-1V8l2-1 4 3 9-7Z"/></svg></button>
+            <button class="icon-button" type="button" data-tip="Open folder"><svg viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v10H3z"/></svg></button>
+            <details class="more"><summary data-tip="More actions"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></summary><div class="more-menu"><button>Open on GitHub</button><button>Copy repository link</button><button>Manage tags and organization</button></div></details>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <aside class="legend">
+      <span><strong>Always visible:</strong> identity plus compact, tooltip-backed metadata icons.</span>
+      <span><strong>Conditionally visible:</strong> commit, pull and push only when required.</span>
+      <span><strong>On interaction:</strong> Insights, Files, VS Code, folder and secondary operations.</span>
+    </aside>
+  </main>
+</body>
+</html>

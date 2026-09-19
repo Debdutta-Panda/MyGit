@@ -368,6 +368,8 @@ const rankChanges = (
 
 function ChangeChart({ buckets }: { buckets: ActivityBucket[] }) {
   const viewportRef = useRef<HTMLDivElement>(null)
+  const tooltipFrameRef = useRef<number | null>(null)
+  const pendingPointerRef = useRef<{ index: number; clientX: number; clientY: number } | null>(null)
   const [viewportWidth, setViewportWidth] = useState(0)
   const [tooltip, setTooltip] = useState<{
     index: number
@@ -398,26 +400,43 @@ function ChangeChart({ buckets }: { buckets: ActivityBucket[] }) {
     return () => observer.disconnect()
   }, [])
 
+  useEffect(() => () => {
+    if (tooltipFrameRef.current !== null) cancelAnimationFrame(tooltipFrameRef.current)
+  }, [])
+
   const showPointerTooltip = (
     index: number,
     event: ReactPointerEvent<SVGGElement>,
   ): void => {
-    const viewport = viewportRef.current
-    if (!viewport) return
-    const bounds = viewport.getBoundingClientRect()
-    const localX = event.clientX - bounds.left
-    const rawX = localX + viewport.scrollLeft
-    const side = localX + 318 <= viewport.clientWidth ? 'right' : 'left'
-    const rawY = event.clientY - bounds.top + viewport.scrollTop
-    setTooltip({
-      index,
-      x: rawX + (side === 'right' ? 18 : -18),
-      y: Math.max(viewport.scrollTop + 96, Math.min(
-        rawY,
-        viewport.scrollTop + viewport.clientHeight - 96,
-      )),
-      side,
+    pendingPointerRef.current = { index, clientX: event.clientX, clientY: event.clientY }
+    if (tooltipFrameRef.current !== null) return
+    tooltipFrameRef.current = requestAnimationFrame(() => {
+      tooltipFrameRef.current = null
+      const pointer = pendingPointerRef.current
+      const viewport = viewportRef.current
+      if (!pointer || !viewport) return
+      const bounds = viewport.getBoundingClientRect()
+      const localX = pointer.clientX - bounds.left
+      const rawX = localX + viewport.scrollLeft
+      const side = localX + 318 <= viewport.clientWidth ? 'right' : 'left'
+      const rawY = pointer.clientY - bounds.top + viewport.scrollTop
+      setTooltip({
+        index: pointer.index,
+        x: rawX + (side === 'right' ? 18 : -18),
+        y: Math.max(viewport.scrollTop + 96, Math.min(
+          rawY,
+          viewport.scrollTop + viewport.clientHeight - 96,
+        )),
+        side,
+      })
     })
+  }
+
+  const hidePointerTooltip = (): void => {
+    pendingPointerRef.current = null
+    if (tooltipFrameRef.current !== null) cancelAnimationFrame(tooltipFrameRef.current)
+    tooltipFrameRef.current = null
+    setTooltip(null)
   }
 
   const showFocusTooltip = (
@@ -444,7 +463,7 @@ function ChangeChart({ buckets }: { buckets: ActivityBucket[] }) {
   }
 
   return (
-    <div className="change-chart-scroll" ref={viewportRef} onPointerLeave={() => setTooltip(null)}>
+    <div className="change-chart-scroll" ref={viewportRef} onPointerLeave={hidePointerTooltip}>
       <svg
         className="change-chart"
         viewBox={`0 0 ${width} ${height}`}
@@ -570,6 +589,8 @@ const trendValue = (bucket: ActivityBucket, metric: TrendMetric): number => {
 
 function TrendLineChart({ buckets, metric }: { buckets: ActivityBucket[]; metric: TrendMetric }) {
   const wrapperRef = useRef<HTMLDivElement>(null)
+  const tooltipFrameRef = useRef<number | null>(null)
+  const pendingPointerRef = useRef<{ index: number; clientX: number; clientY: number } | null>(null)
   const [active, setActive] = useState<{
     index: number
     x: number
@@ -598,18 +619,35 @@ function TrendLineChart({ buckets, metric }: { buckets: ActivityBucket[]; metric
   const activeBucket = active ? buckets[active.index] : null
   const activeValue = active ? values[active.index] : null
 
+  useEffect(() => () => {
+    if (tooltipFrameRef.current !== null) cancelAnimationFrame(tooltipFrameRef.current)
+  }, [])
+
   const showTooltip = (index: number, event: ReactPointerEvent<SVGGElement>): void => {
-    const wrapper = wrapperRef.current
-    if (!wrapper) return
-    const bounds = wrapper.getBoundingClientRect()
-    const localX = event.clientX - bounds.left
-    const side = localX + 250 <= wrapper.clientWidth ? 'right' : 'left'
-    setActive({
-      index,
-      x: localX + (side === 'right' ? 14 : -14),
-      y: Math.max(74, Math.min(event.clientY - bounds.top, wrapper.clientHeight - 74)),
-      side,
+    pendingPointerRef.current = { index, clientX: event.clientX, clientY: event.clientY }
+    if (tooltipFrameRef.current !== null) return
+    tooltipFrameRef.current = requestAnimationFrame(() => {
+      tooltipFrameRef.current = null
+      const pointer = pendingPointerRef.current
+      const wrapper = wrapperRef.current
+      if (!pointer || !wrapper) return
+      const bounds = wrapper.getBoundingClientRect()
+      const localX = pointer.clientX - bounds.left
+      const side = localX + 250 <= wrapper.clientWidth ? 'right' : 'left'
+      setActive({
+        index: pointer.index,
+        x: localX + (side === 'right' ? 14 : -14),
+        y: Math.max(74, Math.min(pointer.clientY - bounds.top, wrapper.clientHeight - 74)),
+        side,
+      })
     })
+  }
+
+  const hideTooltip = (): void => {
+    pendingPointerRef.current = null
+    if (tooltipFrameRef.current !== null) cancelAnimationFrame(tooltipFrameRef.current)
+    tooltipFrameRef.current = null
+    setActive(null)
   }
 
   return (
@@ -626,7 +664,7 @@ function TrendLineChart({ buckets, metric }: { buckets: ActivityBucket[]; metric
         <span>Peak <b>{compactNumber.format(peak)}</b></span>
         <span>Periods <b>{fullNumber.format(values.length)}</b></span>
       </div>
-      <div className="trend-line-viewport" ref={wrapperRef} onPointerLeave={() => setActive(null)}>
+      <div className="trend-line-viewport" ref={wrapperRef} onPointerLeave={hideTooltip}>
         <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${details.label} trend`} preserveAspectRatio="none">
           {[0, .5, 1].map((ratio) => (
             <g key={ratio}>
