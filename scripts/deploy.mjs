@@ -80,8 +80,9 @@ function platformReleaseIsComplete(version, assets) {
   const escapedVersion = version.replace(/\./g, '\\.')
 
   if (process.platform === 'win32') {
-    return names.includes('latest.yml') &&
-      names.some((name) => new RegExp(`^MyRepos-Setup-${escapedVersion}-.+\\.exe$`).test(name))
+    return names.includes('RELEASES') &&
+      names.includes('MyRepos-Setup.exe') &&
+      names.some((name) => new RegExp(`^MyRepos-${escapedVersion}-full\\.nupkg$`, 'i').test(name))
   }
   if (process.platform === 'darwin') {
     return names.includes('latest-mac.yml') &&
@@ -104,6 +105,10 @@ function saveVersion(projectRoot, packageJson, version) {
 
 if (!process.env.npm_execpath) {
   fail('Run deployment through `npm run deploy`.')
+}
+
+if (process.platform !== 'win32') {
+  fail('Squirrel.Windows releases must be built and deployed from Windows.')
 }
 
 const projectRoot = process.cwd()
@@ -173,18 +178,23 @@ run(process.execPath, [process.env.npm_execpath, 'run', 'build'])
 
 console.log(`Packaging MyRepos ${version} for ${process.platform}...`)
 run(process.execPath, [
-  resolve(projectRoot, 'node_modules', 'electron-builder', 'cli.js'),
-  '--publish',
-  'never'
+  resolve(projectRoot, 'node_modules', '@electron-forge', 'cli', 'dist', 'electron-forge.js'),
+  'make'
 ])
 
-const releaseDirectory = resolve(projectRoot, 'release')
-const updateMetadata = new Set(['latest.yml', 'latest-mac.yml', 'latest-linux.yml'])
+const releaseDirectory = process.platform === 'win32'
+  ? resolve(projectRoot, 'release', 'make', 'squirrel.windows', 'x64')
+  : resolve(projectRoot, 'release', 'make', 'zip', process.platform)
+const updateMetadata = new Set(['RELEASES'])
 const artifacts = readdirSync(releaseDirectory, { withFileTypes: true })
   .filter(
     (entry) =>
       entry.isFile() &&
-      (entry.name.includes(`-${version}-`) || updateMetadata.has(entry.name))
+      (
+        entry.name.includes(version) ||
+        updateMetadata.has(entry.name) ||
+        (process.platform === 'win32' && entry.name === 'MyRepos-Setup.exe')
+      )
   )
   .map((entry) => resolve(releaseDirectory, entry.name))
 
@@ -221,11 +231,13 @@ if (existingRelease.status !== 0) {
     defaultBranch,
     '--title',
     version,
-    '--generate-notes'
+    '--generate-notes',
+    '--draft'
   ])
 }
 
 console.log(`Uploading ${artifacts.length} release artifacts...`)
 run(gh, ['release', 'upload', tag, ...artifacts, '--clobber', '--repo', repository])
+run(gh, ['release', 'edit', tag, '--draft=false', '--repo', repository])
 
 console.log(`\nMyRepos ${version} was published successfully.`)

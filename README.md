@@ -20,10 +20,9 @@ Build packages for the current machine automatically:
 npm.cmd run package
 ```
 
-The command detects the host operating system: Windows produces an NSIS installer, macOS produces DMG
-and ZIP packages for Intel and Apple Silicon, and Linux produces AppImage and DEB packages for x64 and
-ARM64. Packages and update metadata are written to `release/`. Each operating system must build its own
-packages locally; macOS packages must be built on macOS.
+The command detects the host operating system. Windows produces a Squirrel installer and update package;
+macOS and Linux produce ZIP packages. Forge writes packages below `release/make/`. Each operating system must
+build its own packages locally; macOS packages must be built on macOS.
 
 Explicit platform commands are also available:
 
@@ -34,7 +33,8 @@ npm.cmd run package:linux
 ```
 
 To publish manually, create a release at `https://github.com/Debdutta-Panda/MyGit/releases/new`, use tag
-`v0.1.0` for package version `0.1.0`, and upload every generated file from `release/`.
+`v0.1.0` for package version `0.1.0`, and upload `MyRepos-Setup.exe`, `RELEASES`, and the matching
+`MyRepos-<version>-full.nupkg` from `release/make/squirrel.windows/x64/`.
 
 To build and publish through the authenticated GitHub CLI:
 
@@ -42,11 +42,11 @@ To build and publish through the authenticated GitHub CLI:
 npm run deploy
 ```
 
-`deploy` detects the current operating system, reads authentication from `gh auth`, increments the patch
-version automatically, creates the matching `v<package-version>` GitHub Release, and uploads all package
-and update-metadata files. If the current release is incomplete, it reuses that version and repairs the
-release instead of skipping to another version. Run it once on each operating system whose downloads you
-want to offer. Never commit a GitHub token or place one in `.env`.
+On Windows, `deploy` reads authentication from `gh auth`, increments the patch version automatically,
+builds the Squirrel artifacts, creates the matching `v<package-version>` GitHub Release as a draft, uploads
+all installer and update files, and publishes the completed release. If the current release is incomplete,
+it reuses that version and repairs the release instead of skipping to another version. Never commit a
+GitHub token or place one in `.env`.
 
 ### GitHub sign-in setup
 

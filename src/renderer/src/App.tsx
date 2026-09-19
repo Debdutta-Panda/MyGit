@@ -7081,16 +7081,6 @@ export function App() {
                       </Text>
                     </div>
                     <Group gap="xs">
-                      {updateState.phase === 'available' && (
-                        <Button
-                          size="xs"
-                          leftSection={<IconDownload size={14} />}
-                          loading={updateAction === 'download'}
-                          onClick={() => void runUpdateAction('download')}
-                        >
-                          Download {updateState.availableVersion}
-                        </Button>
-                      )}
                       {updateState.phase === 'downloaded' && (
                         <Button
                           size="xs"
@@ -7121,11 +7111,9 @@ export function App() {
                   </Group>
                   {updateState.phase === 'downloading' && (
                     <div className="update-progress">
-                      <Progress value={updateState.progress ?? 0} animated size="sm" radius="xl" />
+                      <Progress value={100} animated striped size="sm" radius="xl" />
                       <Text size="xs" c="dimmed">
-                        {updateState.transferred !== null && updateState.total !== null
-                          ? `${formatBytes(updateState.transferred)} of ${formatBytes(updateState.total)}`
-                          : 'Preparing download…'}
+                        Downloading update in the background…
                       </Text>
                     </div>
                   )}
@@ -7136,24 +7124,11 @@ export function App() {
                     checked={settings.automaticallyCheckForUpdates}
                     disabled={settingsLoading}
                     label="Automatically check for updates"
-                    description="Checks shortly after launch and every six hours while MyRepos is running."
+                    description="Checks shortly after launch and every six hours. Available updates download silently and wait for your restart."
                     onChange={(event) => {
                       setSettings((current) => ({
                         ...current,
                         automaticallyCheckForUpdates: event.currentTarget.checked,
-                      }))
-                      setSettingsSaved(false)
-                    }}
-                  />
-                  <Switch
-                    checked={settings.automaticallyDownloadUpdates}
-                    disabled={settingsLoading}
-                    label="Automatically download available updates"
-                    description="Installation waits until you choose Restart and install."
-                    onChange={(event) => {
-                      setSettings((current) => ({
-                        ...current,
-                        automaticallyDownloadUpdates: event.currentTarget.checked,
                       }))
                       setSettingsSaved(false)
                     }}

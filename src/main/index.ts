@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { registerGitHubAccountHandlers } from './github-auth'
 import { registerRepositoryHandlers } from './github-repositories'
@@ -10,6 +11,11 @@ import { registerConfigurationSyncHandlers } from './configuration-sync'
 import { registerWorkingCopyHandlers } from './working-copies'
 import { registerProjectInsightHandlers } from './project-insights'
 import { registerUpdateHandlers, startAutomaticUpdateChecks } from './app-updater'
+
+// Squirrel invokes the application briefly while installing, updating, and uninstalling. Its
+// startup helper creates/removes shortcuts and exits before normal application initialization.
+const squirrelStartup = createRequire(import.meta.url)('electron-squirrel-startup') as boolean
+if (squirrelStartup) app.quit()
 
 const appIconPath = join(process.cwd(), 'build', 'icon.png')
 

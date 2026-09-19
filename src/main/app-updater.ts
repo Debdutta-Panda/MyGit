@@ -1,12 +1,11 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
-import updaterPackage from 'electron-updater'
+import { app, autoUpdater, BrowserWindow, ipcMain } from 'electron'
 import type { AppUpdateState } from '../shared/desktop-api'
 import { getAppSettings } from './settings-store'
 
-const { autoUpdater } = updaterPackage
-
 const automaticCheckIntervalMs = 6 * 60 * 60 * 1000
+const updateFeedUrl = 'https://github.com/Debdutta-Panda/MyGit/releases/latest/download'
 let initialized = false
+let updateCheckRunning = false
 let updateState: AppUpdateState = {
   phase: 'idle',
   channel: 'stable',
@@ -17,7 +16,7 @@ let updateState: AppUpdateState = {
   total: null,
   checkedAt: null,
   message: null,
-  packaged: app.isPackaged,
+  packaged: app.isPackaged && process.platform === 'win32',
 }
 
 const snapshot = (): AppUpdateState => ({ ...updateState })
@@ -32,17 +31,18 @@ const publishState = (patch: Partial<AppUpdateState>): AppUpdateState => {
 }
 
 const checkForUpdates = async (): Promise<AppUpdateState> => {
-  if (!app.isPackaged) {
+  if (!app.isPackaged || process.platform !== 'win32') {
     return publishState({
       phase: 'unavailable',
-      message: 'Update checks are available in installed builds.',
+      message: 'Squirrel updates are available in the installed Windows build.',
     })
   }
 
-  if (updateState.phase === 'checking' || updateState.phase === 'downloading') {
+  if (updateCheckRunning || updateState.phase === 'checking' || updateState.phase === 'downloading') {
     return snapshot()
   }
 
+  updateCheckRunning = true
   publishState({
     phase: 'checking',
     progress: null,
@@ -52,8 +52,9 @@ const checkForUpdates = async (): Promise<AppUpdateState> => {
   })
 
   try {
-    await autoUpdater.checkForUpdates()
+    autoUpdater.checkForUpdates()
   } catch (error) {
+    updateCheckRunning = false
     publishState({
       phase: 'error',
       message: error instanceof Error ? error.message : 'Could not check for updates.',
@@ -63,43 +64,29 @@ const checkForUpdates = async (): Promise<AppUpdateState> => {
 }
 
 const downloadUpdate = async (): Promise<AppUpdateState> => {
-  if (!app.isPackaged) return checkForUpdates()
-  if (updateState.phase === 'downloading' || updateState.phase === 'downloaded') return snapshot()
-  if (!updateState.availableVersion) {
-    return publishState({ phase: 'error', message: 'Check for an update before downloading.' })
-  }
-
-  publishState({ phase: 'downloading', progress: 0, message: 'Starting download…' })
-  try {
-    await autoUpdater.downloadUpdate()
-  } catch (error) {
-    publishState({
-      phase: 'error',
-      message: error instanceof Error ? error.message : 'Could not download the update.',
-    })
-  }
-  return snapshot()
+  // Squirrel downloads an available update as part of checkForUpdates. Keep this action for
+  // compatibility with existing renderers and turn it into an on-demand check/download.
+  return checkForUpdates()
 }
 
 const installUpdate = (): void => {
   if (updateState.phase !== 'downloaded') {
     throw new Error('The update has not finished downloading.')
   }
-  // Updates use NSIS silent mode: close MyRepos, replace the installed files without showing the
-  // installer wizard, then launch the updated application again.
-  autoUpdater.quitAndInstall(true, true)
+  autoUpdater.quitAndInstall()
 }
 
 const configureUpdater = (): void => {
-  autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = false
-  autoUpdater.allowPrerelease = false
-  autoUpdater.fullChangelog = true
+  if (app.isPackaged && process.platform === 'win32') {
+    autoUpdater.setFeedURL({ url: updateFeedUrl })
+  }
 
   autoUpdater.on('checking-for-update', () => {
+    updateCheckRunning = true
     publishState({ phase: 'checking', message: 'Checking GitHub Releases…' })
   })
   autoUpdater.on('update-not-available', () => {
+    updateCheckRunning = false
     publishState({
       phase: 'up-to-date',
       availableVersion: null,
@@ -110,35 +97,33 @@ const configureUpdater = (): void => {
       message: 'You have the latest stable version.',
     })
   })
-  autoUpdater.on('update-available', (info) => {
-    publishState({
-      phase: 'available',
-      availableVersion: info.version,
-      checkedAt: new Date().toISOString(),
-      message: `MyRepos ${info.version} is available.`,
-    })
-    void getAppSettings().then((settings) => {
-      if (settings.automaticallyDownloadUpdates) void downloadUpdate()
-    })
-  })
-  autoUpdater.on('download-progress', (progress) => {
+  autoUpdater.on('update-available', (_event, _releaseNotes, releaseName) => {
+    updateCheckRunning = false
+    const availableVersion = releaseName?.match(/\d+\.\d+\.\d+/)?.[0] ?? null
     publishState({
       phase: 'downloading',
-      progress: Math.max(0, Math.min(100, progress.percent)),
-      transferred: progress.transferred,
-      total: progress.total,
-      message: `Downloading ${progress.percent.toFixed(0)}%`,
+      availableVersion,
+      progress: null,
+      transferred: null,
+      total: null,
+      checkedAt: new Date().toISOString(),
+      message: availableVersion
+        ? `Downloading MyRepos ${availableVersion}…`
+        : 'Downloading the latest MyRepos update…',
     })
   })
-  autoUpdater.on('update-downloaded', (info) => {
+  autoUpdater.on('update-downloaded', (_event, _releaseNotes, releaseName) => {
+    updateCheckRunning = false
+    const availableVersion = releaseName?.match(/\d+\.\d+\.\d+/)?.[0]
     publishState({
       phase: 'downloaded',
-      availableVersion: info.version,
+      availableVersion: availableVersion ?? updateState.availableVersion,
       progress: 100,
       message: 'Update ready. Restart MyRepos to install it.',
     })
   })
   autoUpdater.on('error', (error) => {
+    updateCheckRunning = false
     publishState({ phase: 'error', message: error.message || 'The updater encountered an error.' })
   })
 }
@@ -156,7 +141,7 @@ export const registerUpdateHandlers = (): void => {
 }
 
 export const startAutomaticUpdateChecks = (): void => {
-  if (!app.isPackaged) return
+  if (!app.isPackaged || process.platform !== 'win32') return
 
   const runAutomaticCheck = (): void => {
     void getAppSettings().then((settings) => {
