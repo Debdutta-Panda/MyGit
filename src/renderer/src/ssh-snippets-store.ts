@@ -28,16 +28,43 @@ export const readSshCommandTemplates = (connectionId: string, kind: SshCommandTe
   }
 }
 
+export const loadSshCommandTemplates = async (
+  connectionId: string,
+  kind: SshCommandTemplateKind,
+): Promise<SshSavedCommandTemplate[]> => {
+  const cached = readSshCommandTemplates(connectionId, kind)
+  if (!window.desktop) return cached
+  try {
+    const stored = await window.desktop.ssh.commandTemplates(connectionId, kind)
+    if (stored.length === 0 && cached.length > 0) {
+      return await window.desktop.ssh.saveCommandTemplates(connectionId, kind, cached)
+    }
+    localStorage.setItem(storageKey(connectionId, kind), JSON.stringify(stored))
+    return stored
+  } catch {
+    return cached
+  }
+}
+
+const writeSshCommandTemplates = (
+  connectionId: string,
+  kind: SshCommandTemplateKind,
+  templates: SshSavedCommandTemplate[],
+): void => {
+  localStorage.setItem(storageKey(connectionId, kind), JSON.stringify(templates))
+  void window.desktop?.ssh.saveCommandTemplates(connectionId, kind, templates).catch(() => undefined)
+}
+
 export const readSshSnippets = (connectionId: string): SshSavedSnippet[] =>
   readSshCommandTemplates(connectionId, 'snippets')
 
 export const writeSshSnippets = (connectionId: string, snippets: SshSavedSnippet[]): void => {
-  localStorage.setItem(storageKey(connectionId, 'snippets'), JSON.stringify(snippets))
+  writeSshCommandTemplates(connectionId, 'snippets', snippets)
 }
 
 export const readSshScripts = (connectionId: string): SshSavedScript[] =>
   readSshCommandTemplates(connectionId, 'scripts')
 
 export const writeSshScripts = (connectionId: string, scripts: SshSavedScript[]): void => {
-  localStorage.setItem(storageKey(connectionId, 'scripts'), JSON.stringify(scripts))
+  writeSshCommandTemplates(connectionId, 'scripts', scripts)
 }

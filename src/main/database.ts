@@ -247,6 +247,23 @@ const createSchema = (db: DatabaseSync): void => {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS ssh_command_templates (
+      connection_id TEXT NOT NULL REFERENCES ssh_connections(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('snippets', 'scripts')),
+      id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      template TEXT NOT NULL,
+      variable_types_json TEXT NOT NULL DEFAULT '{}',
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (connection_id, kind, id)
+    );
+
+    CREATE TABLE IF NOT EXISTS portable_preferences (
+      key TEXT PRIMARY KEY,
+      value_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS repository_workspaces_workspace_idx
       ON repository_workspaces(workspace_id, position);
     CREATE INDEX IF NOT EXISTS repository_groups_group_idx
@@ -316,6 +333,15 @@ const createSchema = (db: DatabaseSync): void => {
       VALUES (10, datetime('now'));
     INSERT OR IGNORE INTO schema_migrations (version, applied_at)
       VALUES (11, datetime('now'));
+    INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+      VALUES (12, datetime('now'));
+    INSERT OR IGNORE INTO portable_preferences (key, value_json, updated_at)
+      SELECT 'app.updatePreferences',
+        '{"automaticallyCheckForUpdates":' ||
+          CASE WHEN automatically_check_for_updates <> 0 THEN 'true' ELSE 'false' END ||
+        ',"automaticallyDownloadUpdates":' ||
+          CASE WHEN automatically_download_updates <> 0 THEN 'true' ELSE 'false' END || '}',
+        datetime('now') FROM app_settings WHERE id = 1;
   `)
 
   db.exec(`

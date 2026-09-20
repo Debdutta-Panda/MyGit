@@ -195,6 +195,26 @@ export interface SshConnectionTestResult {
   message: string
 }
 
+export type SshCommandTemplateKind = 'snippets' | 'scripts'
+export type SshCommandVariableType = 'path' | 'user' | 'group' | 'mode' | 'text'
+
+export interface SshCommandTemplate {
+  id: string
+  name: string
+  template: string
+  updatedAt: string
+  variableTypes?: Record<string, SshCommandVariableType>
+}
+
+export type PortablePreferenceKey =
+  | 'app.updatePreferences'
+  | 'repository.sort'
+  | 'repository.paneLayout'
+  | 'ssh.explorerSort'
+  | 'ssh.explorerSortDirection'
+
+export type PortablePreferences = Partial<Record<PortablePreferenceKey, unknown>>
+
 export interface SshVaultStatus {
   available: boolean
   backend: string
@@ -966,6 +986,12 @@ export interface DesktopApi {
     test: (id: string, trustHostKey?: boolean) => Promise<SshConnectionTestResult>
     choosePrivateKey: () => Promise<string | null>
     vaultStatus: () => Promise<SshVaultStatus>
+    commandTemplates: (id: string, kind: SshCommandTemplateKind) => Promise<SshCommandTemplate[]>
+    saveCommandTemplates: (
+      id: string,
+      kind: SshCommandTemplateKind,
+      templates: SshCommandTemplate[],
+    ) => Promise<SshCommandTemplate[]>
     serverOverview: (id: string) => Promise<SshServerOverview>
     mysqlOverview: (id: string) => Promise<SshMySqlOverview>
     mysqlAccessProfile: (id: string) => Promise<SshMySqlAccessProfile | null>
@@ -1161,6 +1187,8 @@ export interface DesktopApi {
     setAutoSync: (enabled: boolean) => Promise<ConfigurationSyncState>
     openFolder: () => Promise<void>
     disconnect: () => Promise<ConfigurationSyncState>
+    preferences: () => Promise<PortablePreferences>
+    savePreference: (key: PortablePreferenceKey, value: unknown) => Promise<PortablePreferences>
     onChanged: (callback: (state: ConfigurationSyncState) => void) => () => void
   }
 }

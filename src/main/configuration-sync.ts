@@ -16,6 +16,8 @@ import type {
   ConfigurationSyncAction,
   ConfigurationSyncState,
   OrganizationKind,
+  PortablePreferenceKey,
+  PortablePreferences,
 } from '../shared/desktop-api'
 
 const CONFIGURATION_PATH = '.myrepos/config.json'
@@ -49,7 +51,7 @@ interface PortableRepository {
 
 interface PortableConfiguration {
   format: 'myrepos-configuration'
-  version: 1
+  version: 2
   workspaces: PortableItem[]
   groups: PortableItem[]
   tags: PortableItem[]
@@ -60,7 +62,16 @@ interface PortableConfiguration {
     preferredLabel: string | null
     workspaceLabels: Record<string, string>
   }>
+  preferences: Array<{ key: PortablePreferenceKey; value: unknown; updatedAt: string }>
 }
+
+const portablePreferenceKeys = new Set<PortablePreferenceKey>([
+  'app.updatePreferences',
+  'repository.sort',
+  'repository.paneLayout',
+  'ssh.explorerSort',
+  'ssh.explorerSortDirection',
+])
 
 interface GitOptions {
   env?: NodeJS.ProcessEnv
@@ -200,10 +211,17 @@ const exportConfiguration = (): PortableConfiguration => {
     workspace_id: string
     label: string
   }>
+  const portablePreferences = db.prepare(`
+    SELECT key, value_json, updated_at FROM portable_preferences ORDER BY key
+  `).all() as unknown as Array<{
+    key: PortablePreferenceKey
+    value_json: string
+    updated_at: string
+  }>
 
   return {
     format: 'myrepos-configuration',
-    version: 1,
+    version: 2,
     workspaces: portableItems('workspaces'),
     groups: portableItems('groups'),
     tags: portableItems('tags'),
@@ -241,20 +259,48 @@ const exportConfiguration = (): PortableConfiguration => {
           copy.full_name.toLowerCase() === repository.fullName.toLowerCase())
         .map((copy) => [copy.workspace_id, copy.label])),
     })),
+    preferences: portablePreferences.flatMap((row) => {
+      if (!portablePreferenceKeys.has(row.key)) return []
+      try {
+        return [{ key: row.key, value: JSON.parse(row.value_json) as unknown, updatedAt: row.updated_at }]
+      } catch {
+        return []
+      }
+    }),
   }
 }
 
 const validatePortableConfiguration = (value: unknown): PortableConfiguration => {
   if (!value || typeof value !== 'object') throw new Error('The configuration file is invalid.')
-  const config = value as Partial<PortableConfiguration>
-  if (config.format !== 'myrepos-configuration' || config.version !== 1 ||
+  const config = value as Partial<PortableConfiguration> & { version?: number }
+  if (config.format !== 'myrepos-configuration' || (config.version !== 1 && config.version !== 2) ||
     !Array.isArray(config.workspaces) || !Array.isArray(config.groups) ||
     !Array.isArray(config.tags) || !Array.isArray(config.repositories) ||
     config.workspaces.length > 10_000 || config.groups.length > 10_000 ||
     config.tags.length > 10_000 || config.repositories.length > 100_000) {
     throw new Error('This is not a supported MyRepos configuration file.')
   }
-  return config as PortableConfiguration
+  if (config.preferences !== undefined && (!Array.isArray(config.preferences) || config.preferences.length > 100)) {
+    throw new Error('This configuration contains invalid preferences.')
+  }
+  return {
+    ...(config as Omit<PortableConfiguration, 'version' | 'preferences'>),
+    version: 2,
+    preferences: Array.isArray(config.preferences) ? config.preferences : [],
+  }
+}
+
+const mergeNewest = <T extends { updatedAt: string }>(
+  local: T[],
+  remote: T[],
+  keyFor: (item: T) => string,
+): T[] => {
+  const merged = new Map(local.map((item) => [keyFor(item), item]))
+  for (const item of remote) {
+    const current = merged.get(keyFor(item))
+    if (!current || Date.parse(item.updatedAt) >= Date.parse(current.updatedAt)) merged.set(keyFor(item), item)
+  }
+  return [...merged.values()].sort((left, right) => keyFor(left).localeCompare(keyFor(right)))
 }
 
 const mergePortableConfigurations = (
@@ -306,7 +352,7 @@ const mergePortableConfigurations = (
 
   return {
     format: 'myrepos-configuration',
-    version: 1,
+    version: 2,
     workspaces: mergeItems(local.workspaces, remote.workspaces),
     groups: mergeItems(local.groups, remote.groups),
     tags: mergeItems(local.tags, remote.tags),
@@ -314,6 +360,7 @@ const mergePortableConfigurations = (
       .sort((left, right) => left.fullName.localeCompare(right.fullName)),
     workingCopyPreferences: [...preferences.values()]
       .sort((left, right) => left.fullName.localeCompare(right.fullName)),
+    preferences: mergeNewest(local.preferences, remote.preferences, (item) => item.key),
   }
 }
 
@@ -424,6 +471,28 @@ const importConfiguration = (config: PortableConfiguration): void => {
           ON CONFLICT(workspace_id, provider, account_id, full_name) DO UPDATE SET
             working_copy_id = excluded.working_copy_id
         `).run(workspaceId, preference.accountId, preference.fullName, copy.id)
+      }
+    }
+    for (const preference of config.preferences) {
+      if (!portablePreferenceKeys.has(preference.key) ||
+        typeof preference.updatedAt !== 'string' || !Number.isFinite(Date.parse(preference.updatedAt))) continue
+      const serialized = JSON.stringify(preference.value)
+      if (!serialized || serialized.length > 50_000) continue
+      db.prepare(`
+        INSERT INTO portable_preferences (key, value_json, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+      `).run(preference.key, serialized, preference.updatedAt)
+      if (preference.key === 'app.updatePreferences' && preference.value &&
+        typeof preference.value === 'object') {
+        const value = preference.value as Record<string, unknown>
+        if (typeof value.automaticallyCheckForUpdates === 'boolean' &&
+          typeof value.automaticallyDownloadUpdates === 'boolean') {
+          db.prepare(`UPDATE app_settings SET automatically_check_for_updates = ?,
+            automatically_download_updates = ? WHERE id = 1`).run(
+            value.automaticallyCheckForUpdates ? 1 : 0,
+            value.automaticallyDownloadUpdates ? 1 : 0,
+          )
+        }
       }
     }
     db.exec('COMMIT')
@@ -724,6 +793,34 @@ export const scheduleConfigurationSync = (): void => {
   }, 1_500)
 }
 
+export const getPortablePreferences = (): PortablePreferences => {
+  const rows = getDatabase().prepare(`
+    SELECT key, value_json FROM portable_preferences ORDER BY key
+  `).all() as unknown as Array<{ key: PortablePreferenceKey; value_json: string }>
+  return Object.fromEntries(rows.flatMap((row) => {
+    if (!portablePreferenceKeys.has(row.key)) return []
+    try { return [[row.key, JSON.parse(row.value_json) as unknown]] }
+    catch { return [] }
+  })) as PortablePreferences
+}
+
+export const savePortablePreference = (
+  inputKey: unknown,
+  value: unknown,
+): PortablePreferences => {
+  if (typeof inputKey !== 'string' || !portablePreferenceKeys.has(inputKey as PortablePreferenceKey)) {
+    throw new Error('This preference cannot be synchronized.')
+  }
+  const serialized = JSON.stringify(value)
+  if (!serialized || serialized.length > 50_000) throw new Error('The preference value is invalid or too large.')
+  getDatabase().prepare(`
+    INSERT INTO portable_preferences (key, value_json, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+  `).run(inputKey, serialized, new Date().toISOString())
+  scheduleConfigurationSync()
+  return getPortablePreferences()
+}
+
 const setAutoSync = async (enabled: unknown): Promise<ConfigurationSyncState> => {
   if (typeof enabled !== 'boolean') throw new Error('Invalid automatic sync setting.')
   getDatabase().prepare(`
@@ -767,6 +864,9 @@ export const registerConfigurationSyncHandlers = (): void => {
     if (result) throw new Error(result)
   })
   ipcMain.handle('configuration-sync:disconnect', () => disconnect())
+  ipcMain.handle('configuration-sync:preferences', () => getPortablePreferences())
+  ipcMain.handle('configuration-sync:save-preference', (_event, key, value) =>
+    savePortablePreference(key, value))
 
   const row = syncRow()
   if (row.local_path && row.auto_sync === 1) {

@@ -1286,6 +1286,29 @@ export function App() {
     (navigator.userAgent.includes('Macintosh') ? 'darwin' : 'unknown')
 
   useEffect(() => {
+    if (!window.desktop) return
+    let cancelled = false
+    const loadPortablePreferences = (): void => {
+      void window.desktop!.configurationSync.preferences().then((preferences) => {
+        if (cancelled) return
+        if (preferences['repository.paneLayout'] === 'line' ||
+          preferences['repository.paneLayout'] === 'card') {
+          setRepositoryPaneLayout(preferences['repository.paneLayout'])
+          localStorage.setItem('myrepos:repository-pane-layout', preferences['repository.paneLayout'])
+        }
+        if (Array.isArray(preferences['repository.sort'])) {
+          const serialized = JSON.stringify(preferences['repository.sort'])
+          localStorage.setItem('myrepos:repository-sort', serialized)
+          setRepositorySortRules(loadRepositorySortRules())
+        }
+      }).catch(() => undefined)
+    }
+    loadPortablePreferences()
+    const unsubscribe = window.desktop.configurationSync.onChanged(loadPortablePreferences)
+    return () => { cancelled = true; unsubscribe() }
+  }, [])
+
+  useEffect(() => {
     const timer = window.setInterval(() => setRelativeTimeNow(Date.now()), 60_000)
     return () => window.clearInterval(timer)
   }, [])
@@ -1479,7 +1502,8 @@ export function App() {
         window.desktop!.organization.list(),
         window.desktop!.organization.assignments(),
         window.desktop!.organization.appearances(),
-      ]).then(([catalog, assignments, appearances]) => {
+        window.desktop!.settings.get(),
+      ]).then(([catalog, assignments, appearances, syncedSettings]) => {
         if (cancelled) return
         setOrganizationCatalog(catalog)
         setOrganizationAssignments(Object.fromEntries(assignments.map((entry) => [
@@ -1492,6 +1516,8 @@ export function App() {
         ])))
         setRepositoryColors(Object.fromEntries(appearances.flatMap((entry) =>
           entry.color ? [[entry.repositoryKey, entry.color]] : [])))
+        setSettings(syncedSettings)
+        setSavedSettings(syncedSettings)
       }).catch((error) => {
         if (!cancelled) setConfigurationSyncError(errorMessage(error))
       })
@@ -1825,6 +1851,7 @@ export function App() {
     const nextRules = rules.length > 0 ? rules : defaultRepositorySortRules
     setRepositorySortRules(nextRules)
     localStorage.setItem('myrepos:repository-sort', JSON.stringify(nextRules))
+    void window.desktop?.configurationSync.savePreference('repository.sort', nextRules)
     setRepositoryPage(1)
   }
   const pagedRepositoryKeys = pagedRepositories.map(repositoryOrganizationKey)
@@ -5147,6 +5174,7 @@ export function App() {
                           onClick={() => {
                             setRepositoryPaneLayout('line')
                             localStorage.setItem('myrepos:repository-pane-layout', 'line')
+                            void window.desktop?.configurationSync.savePreference('repository.paneLayout', 'line')
                           }}
                         >
                           <IconLayoutList size={15} />
@@ -5162,6 +5190,7 @@ export function App() {
                           onClick={() => {
                             setRepositoryPaneLayout('card')
                             localStorage.setItem('myrepos:repository-pane-layout', 'card')
+                            void window.desktop?.configurationSync.savePreference('repository.paneLayout', 'card')
                           }}
                         >
                           <IconLayoutGrid size={15} />
@@ -7434,7 +7463,7 @@ export function App() {
                     <div>
                       <Text fw={680}>Portable configuration repository</Text>
                       <Text size="xs" c="dimmed">
-                        Sync workspaces, groups, tags, colors, assignments, and ordering through Git.
+                        Sync organization, ordering, working-copy labels, update choices, and safe UI preferences through Git.
                       </Text>
                     </div>
                   </Group>
@@ -7456,6 +7485,11 @@ export function App() {
                   <Group gap="sm" mt="lg"><Loader size="sm" /><Text size="sm">Checking configuration…</Text></Group>
                 ) : configurationSync.connected ? (
                   <Stack gap="md" mt="lg">
+                    <Alert color="blue" variant="light">
+                      Server credentials, SSH hosts and usernames, private-key paths, snippets, scripts,
+                      local paths, SQL history, and terminal state stay on this device. Snippets and scripts
+                      are protected in the app database and migrate automatically from older local storage.
+                    </Alert>
                     <Paper className="configuration-sync-location" radius="md">
                       <Text size="sm" fw={650}>
                         {configurationSync.fullName || 'Local configuration repository'}

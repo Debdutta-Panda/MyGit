@@ -40,7 +40,12 @@ import type {
   SshTransferProgress,
 } from '../../shared/desktop-api'
 import { SshSnippetRunner } from './SshSnippetRunner'
-import { readSshScripts, readSshSnippets, type SshSavedCommandTemplate } from './ssh-snippets-store'
+import {
+  loadSshCommandTemplates,
+  readSshScripts,
+  readSshSnippets,
+  type SshSavedCommandTemplate,
+} from './ssh-snippets-store'
 
 const RemoteMonaco = lazy(async () => ({
   default: (await import('./ReadOnlyMonaco')).ReadOnlyMonaco,
@@ -334,13 +339,35 @@ export function SshRemoteFileManager({ connection, onOpenTerminal }: {
     (window.localStorage.getItem('myrepos:ssh-explorer-sort') as RemoteSortKey | null) ?? 'server')
   const [sortDirection, setSortDirection] = useState<RemoteSortDirection>(() =>
     window.localStorage.getItem('myrepos:ssh-explorer-sort-direction') === 'desc' ? 'desc' : 'asc')
+  const portableSortLoadedRef = useRef(false)
   const [draggedEntry, setDraggedEntry] = useState<SshRemoteEntry | null>(null)
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null)
 
   useEffect(() => {
     window.localStorage.setItem('myrepos:ssh-explorer-sort', sortKey)
     window.localStorage.setItem('myrepos:ssh-explorer-sort-direction', sortDirection)
+    if (!portableSortLoadedRef.current) return
+    void window.desktop?.configurationSync.savePreference('ssh.explorerSort', sortKey)
+    void window.desktop?.configurationSync.savePreference('ssh.explorerSortDirection', sortDirection)
   }, [sortKey, sortDirection])
+
+  useEffect(() => {
+    if (!window.desktop) {
+      portableSortLoadedRef.current = true
+      return
+    }
+    let cancelled = false
+    void window.desktop.configurationSync.preferences().then((preferences) => {
+      if (cancelled) return
+      const key = preferences['ssh.explorerSort']
+      const direction = preferences['ssh.explorerSortDirection']
+      if (key === 'server' || key === 'name' || key === 'type' || key === 'size' ||
+        key === 'modified' || key === 'permissions') setSortKey(key)
+      if (direction === 'asc' || direction === 'desc') setSortDirection(direction)
+      portableSortLoadedRef.current = true
+    }).catch(() => { portableSortLoadedRef.current = true })
+    return () => { cancelled = true }
+  }, [])
 
   const loadListing = async (path?: string | null, force = false): Promise<SshDirectoryListing | null> => {
     if (!window.desktop) return null
@@ -399,8 +426,16 @@ export function SshRemoteFileManager({ connection, onOpenTerminal }: {
   }, [connection.id])
 
   useEffect(() => {
-    setSnippets(readSshSnippets(connection.id))
-    setScripts(readSshScripts(connection.id))
+    let cancelled = false
+    void Promise.all([
+      loadSshCommandTemplates(connection.id, 'snippets'),
+      loadSshCommandTemplates(connection.id, 'scripts'),
+    ]).then(([nextSnippets, nextScripts]) => {
+      if (cancelled) return
+      setSnippets(nextSnippets)
+      setScripts(nextScripts)
+    })
+    return () => { cancelled = true }
   }, [connection.id])
 
   useEffect(() => {

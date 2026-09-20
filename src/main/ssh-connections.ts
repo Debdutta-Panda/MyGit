@@ -3,6 +3,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { Client, type ConnectConfig } from 'ssh2'
 import type {
+  SshCommandTemplate,
+  SshCommandTemplateKind,
   SshAuthenticationType,
   SshConnection,
   SshConnectionInput,
@@ -221,6 +223,78 @@ const removeConnection = (id: string): SshConnection[] => {
   return listConnections()
 }
 
+const templateKind = (value: unknown): SshCommandTemplateKind => {
+  if (value !== 'snippets' && value !== 'scripts') throw new Error('Invalid command template kind.')
+  return value
+}
+
+const commandTemplates = (connectionId: string, inputKind: unknown): SshCommandTemplate[] => {
+  const kind = templateKind(inputKind)
+  connectionRow(connectionId)
+  const rows = getDatabase().prepare(`
+    SELECT id, name, template, variable_types_json, updated_at
+    FROM ssh_command_templates WHERE connection_id = ? AND kind = ?
+    ORDER BY updated_at DESC, name COLLATE NOCASE
+  `).all(connectionId, kind) as unknown as Array<{
+    id: string; name: string; template: string; variable_types_json: string; updated_at: string
+  }>
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    template: row.template,
+    updatedAt: row.updated_at,
+    variableTypes: JSON.parse(row.variable_types_json) as SshCommandTemplate['variableTypes'],
+  }))
+}
+
+const saveCommandTemplates = (
+  connectionId: string,
+  inputKind: unknown,
+  input: unknown,
+): SshCommandTemplate[] => {
+  const kind = templateKind(inputKind)
+  connectionRow(connectionId)
+  if (!Array.isArray(input) || input.length > 1_000) throw new Error('Invalid command templates.')
+  const allowedTypes = new Set(['path', 'user', 'group', 'mode', 'text'])
+  const templates = input.map((value): SshCommandTemplate => {
+    if (!value || typeof value !== 'object') throw new Error('Invalid command template.')
+    const item = value as Partial<SshCommandTemplate>
+    if (typeof item.id !== 'string' || !item.id || item.id.length > 100 ||
+      typeof item.name !== 'string' || !item.name.trim() || item.name.length > 200 ||
+      typeof item.template !== 'string' || item.template.length > 200_000 ||
+      typeof item.updatedAt !== 'string' || !Number.isFinite(Date.parse(item.updatedAt))) {
+      throw new Error('Invalid command template.')
+    }
+    const variableTypes = item.variableTypes ?? {}
+    if (!variableTypes || typeof variableTypes !== 'object' || Array.isArray(variableTypes) ||
+      Object.keys(variableTypes).length > 200 ||
+      Object.entries(variableTypes).some(([name, type]) => !name || name.length > 100 || !allowedTypes.has(type))) {
+      throw new Error('Invalid command template variable types.')
+    }
+    return { id: item.id, name: item.name.trim(), template: item.template, updatedAt: item.updatedAt, variableTypes }
+  })
+  const db = getDatabase()
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    db.prepare('DELETE FROM ssh_command_templates WHERE connection_id = ? AND kind = ?')
+      .run(connectionId, kind)
+    const insert = db.prepare(`
+      INSERT INTO ssh_command_templates
+        (connection_id, kind, id, name, template, variable_types_json, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `)
+    for (const item of templates) insert.run(
+      connectionId, kind, item.id, item.name, item.template,
+      JSON.stringify(item.variableTypes ?? {}), item.updatedAt,
+    )
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  return commandTemplates(connectionId, kind)
+}
+
 const fingerprintForKey = (key: Buffer): string =>
   `SHA256:${createHash('sha256').update(key).digest('base64').replace(/=+$/, '')}`
 
@@ -341,4 +415,8 @@ export const registerSshConnectionHandlers = (): void => {
     testConnection(id, Boolean(trustHostKey)))
   ipcMain.handle('ssh:choose-private-key', (event) => choosePrivateKey(event))
   ipcMain.handle('ssh:vault-status', () => vaultStatus())
+  ipcMain.handle('ssh:command-templates', (_event, id: string, kind: unknown) =>
+    commandTemplates(id, kind))
+  ipcMain.handle('ssh:save-command-templates', (_event, id: string, kind: unknown, templates: unknown) =>
+    saveCommandTemplates(id, kind, templates))
 }

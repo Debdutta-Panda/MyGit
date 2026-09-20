@@ -4,7 +4,7 @@ import { IconCheck, IconCopy, IconEdit, IconPlayerPlay, IconPlus, IconScript, Ic
 import type { SshConnection } from '../../shared/desktop-api'
 import { commandSnippetVariables, type CommandSnippetTag, type CommandSnippetVariable } from './CommandSnippetTemplate'
 import { SshSnippetRunner } from './SshSnippetRunner'
-import { readSshScripts, writeSshScripts, type SshSavedScript } from './ssh-snippets-store'
+import { loadSshCommandTemplates, readSshScripts, writeSshScripts, type SshSavedScript } from './ssh-snippets-store'
 
 export function SshScripts({ connection, onOpenTerminal }: {
   connection: SshConnection
@@ -23,7 +23,11 @@ export function SshScripts({ connection, onOpenTerminal }: {
 
   useEffect(() => {
     skipWriteRef.current = true
-    setScripts(readSshScripts(connection.id))
+    let cancelled = false
+    void loadSshCommandTemplates(connection.id, 'scripts').then((items) => {
+      if (!cancelled) setScripts(items)
+    })
+    return () => { cancelled = true }
   }, [connection.id])
   useEffect(() => {
     if (skipWriteRef.current) {

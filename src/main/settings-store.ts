@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import type { AppSettings } from '../shared/desktop-api'
 import { getDatabase } from './database'
+import { savePortablePreference } from './configuration-sync'
 
 interface SettingsRow {
   vscode_application_name: string
@@ -41,6 +42,10 @@ const saveAppSettings = async (settings: unknown): Promise<AppSettings> => {
     candidate.automaticallyCheckForUpdates ? 1 : 0,
     candidate.automaticallyDownloadUpdates ? 1 : 0,
   )
+  savePortablePreference('app.updatePreferences', {
+    automaticallyCheckForUpdates: candidate.automaticallyCheckForUpdates,
+    automaticallyDownloadUpdates: candidate.automaticallyDownloadUpdates,
+  })
   return {
     vscodeApplicationName,
     automaticallyCheckForUpdates: candidate.automaticallyCheckForUpdates,

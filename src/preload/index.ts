@@ -72,6 +72,9 @@ const desktopApi: DesktopApi = {
     test: (id, trustHostKey = false) => ipcRenderer.invoke('ssh:test', id, trustHostKey),
     choosePrivateKey: () => ipcRenderer.invoke('ssh:choose-private-key'),
     vaultStatus: () => ipcRenderer.invoke('ssh:vault-status'),
+    commandTemplates: (id, kind) => ipcRenderer.invoke('ssh:command-templates', id, kind),
+    saveCommandTemplates: (id, kind, templates) =>
+      ipcRenderer.invoke('ssh:save-command-templates', id, kind, templates),
     serverOverview: (id) => ipcRenderer.invoke('ssh:server-overview', id),
     mysqlOverview: (id) => ipcRenderer.invoke('ssh:mysql-overview', id),
     mysqlAccessProfile: (id) => ipcRenderer.invoke('ssh:mysql-access-profile', id),
@@ -269,6 +272,8 @@ const desktopApi: DesktopApi = {
     setAutoSync: (enabled) => ipcRenderer.invoke('configuration-sync:set-auto', enabled),
     openFolder: () => ipcRenderer.invoke('configuration-sync:open-folder'),
     disconnect: () => ipcRenderer.invoke('configuration-sync:disconnect'),
+    preferences: () => ipcRenderer.invoke('configuration-sync:preferences'),
+    savePreference: (key, value) => ipcRenderer.invoke('configuration-sync:save-preference', key, value),
     onChanged: (callback) => {
       const listener = (_event: Electron.IpcRendererEvent, state: Parameters<typeof callback>[0]): void => {
         callback(state)
