@@ -12,7 +12,7 @@ interface QueryTab { id: string; name: string; sql: string; database: string | n
 interface QueryHistory { id: string; sql: string; database: string | null; durationMs: number | null; success: boolean; error: string | null; executedAt: string }
 const tabsKey = (id: string): string => `myrepos:mysql-query-tabs:${id}`
 const historyKey = (id: string): string => `myrepos:mysql-query-history:${id}`
-const newTab = (index: number): QueryTab => ({ id: crypto.randomUUID(), name: `Query ${index}`, sql: '', database: null })
+const newTab = (index: number, database: string | null = null): QueryTab => ({ id: crypto.randomUUID(), name: `Query ${index}`, sql: '', database })
 const readJson = <T,>(key: string, fallback: T): T => { try { return JSON.parse(localStorage.getItem(key) ?? '') as T } catch { return fallback } }
 
 const cellText = (value: string | number | boolean | null): string => value === null ? 'NULL' : String(value)
@@ -54,7 +54,12 @@ export function SshMySqlQuery({ connection, onNeedAccess }: { connection: SshCon
       const access = await window.desktop.ssh.mysqlAccessProfile(connection.id)
       setProfile(access)
       if (!access) { setDatabases([]); return }
-      setDatabases((await window.desktop.ssh.mysqlDatabases(connection.id)).filter((item) => !item.system))
+      const items = (await window.desktop.ssh.mysqlDatabases(connection.id)).filter((item) => !item.system)
+      setDatabases(items)
+      setTabs((current) => current.map((tab) => ({
+        ...tab,
+        database: tab.database && items.some((item) => item.name === tab.database) ? tab.database : (items[0]?.name ?? null),
+      })))
     } catch (reason) { setError(messageFor(reason)) } finally { setLoading(false) }
   }, [connection.id])
   useEffect(() => { void loadBase() }, [loadBase])
@@ -69,7 +74,7 @@ export function SshMySqlQuery({ connection, onNeedAccess }: { connection: SshCon
   }, [active?.database, connection.id, profile])
 
   const updateActive = (change: Partial<QueryTab>): void => setTabs((current) => current.map((tab) => tab.id === activeId ? { ...tab, ...change } : tab))
-  const addTab = (): void => { const tab = newTab(tabs.length + 1); setTabs((current) => [...current, tab]); setActiveId(tab.id) }
+  const addTab = (): void => { const tab = newTab(tabs.length + 1, active?.database ?? databases[0]?.name ?? null); setTabs((current) => [...current, tab]); setActiveId(tab.id) }
   const closeTab = (id: string): void => setTabs((current) => {
     if (current.length === 1) return [{ ...current[0], sql: '', name: 'Query 1' }]
     const index = current.findIndex((tab) => tab.id === id); const next = current.filter((tab) => tab.id !== id)
@@ -115,7 +120,7 @@ export function SshMySqlQuery({ connection, onNeedAccess }: { connection: SshCon
 
   return <div className="ssh-sql-workspace">
     <header className="ssh-sql-toolbar">
-      <Group gap={6} wrap="nowrap"><Select size="xs" w={210} placeholder="No default database" clearable searchable leftSection={<IconDatabase size={13} />}
+      <Group gap={6} wrap="nowrap"><Select size="xs" w={210} placeholder="Choose database" clearable searchable leftSection={<IconDatabase size={13} />}
         data={databases.map((item) => item.name)} value={active?.database} onChange={(value) => updateActive({ database: value })} />
         <Tooltip label="Refresh databases and schema"><ActionIcon variant="default" loading={loading || schemaLoading} onClick={() => void loadBase()}><IconRefresh size={15} /></ActionIcon></Tooltip>
         <Select size="xs" w={105} data={['100', '500', '1000', '5000', '10000'].map((value) => ({ value, label: `${value} rows` }))} value={rowLimit} onChange={(value) => setRowLimit(value ?? '500')} /></Group>

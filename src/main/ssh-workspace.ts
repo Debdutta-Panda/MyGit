@@ -2,6 +2,7 @@ import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electro
 import { createReadStream, createWriteStream } from 'node:fs'
 import { copyFile as localCopyFile, readFile, stat as localStat, unlink as localUnlink } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
+import { createGzip } from 'node:zlib'
 import { basename as localBasename, posix } from 'node:path'
 import { Client, type ConnectConfig, type SFTPWrapper } from 'ssh2'
 import { createConnection as createMysqlConnection, type Connection as MySqlConnection, type FieldPacket, type ResultSetHeader, type RowDataPacket } from 'mysql2/promise'
@@ -19,6 +20,9 @@ import type {
   SshMySqlDatabaseMaintenanceMessage,
   SshMySqlDatabaseMaintenanceOperation,
   SshMySqlDatabaseOperation,
+  SshMySqlExportInput,
+  SshMySqlExportProgress,
+  SshMySqlExportResult,
   SshMySqlUser,
   SshMySqlUserOperation,
   SshMySqlSchemaColumn,
@@ -46,6 +50,7 @@ const MAX_PREVIEW_FILE_BYTES = 15 * 1024 * 1024
 const transferCancellers = new Map<string, () => void>()
 const commandRuns = new Map<string, { connectionId: string; cancelled: boolean; cancel: () => void }>()
 const mysqlQueryRuns = new Map<string, { connectionId: string; cancelled: boolean; cancel: () => void }>()
+const mysqlExportRuns = new Map<string, { connectionId: string; cancelled: boolean; cancel: () => void }>()
 const accessPreviewTokens = new Map<string, { connectionId: string; inputHash: string; signature: string; expiresAt: number }>()
 
 const connect = async (connection: SshRuntimeConnection): Promise<Client> => {
@@ -787,6 +792,131 @@ const maintainMysqlDatabase = async (id: string, operation: SshMySqlDatabaseMain
     const rows = await mysqlTabular(client, profile, `${verb} TABLE ${targets}`, ['Table', 'Op', 'Msg_type', 'Msg_text'])
     return rows.map((row) => ({ table: row.Table, operation: row.Op, messageType: row.Msg_type, message: row.Msg_text }))
   })
+
+const emitMysqlExportProgress = (event: IpcMainInvokeEvent, progress: SshMySqlExportProgress): void => {
+  if (!event.sender.isDestroyed()) event.sender.send('ssh:mysql-export-progress', progress)
+}
+
+const mysqlOptionValue = (value: string): string => `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r/g, '\\r').replace(/\n/g, '\\n')}"`
+
+const exportMysql = async (event: IpcMainInvokeEvent, id: string, input: SshMySqlExportInput): Promise<SshMySqlExportResult | null> => {
+  if (!/^[a-z0-9-]{12,80}$/i.test(input.runId) || mysqlExportRuns.has(input.runId)) throw new Error('Invalid or duplicate export identifier.')
+  if (!['structure', 'data', 'structure-and-data'].includes(input.content)) throw new Error('Choose valid export content.')
+  if (!['none', 'gzip'].includes(input.compression)) throw new Error('Choose a supported compression format.')
+  const names = Array.from(new Set(input.databases.map((name) => name.trim())))
+  if (!names.length || names.length > 100) throw new Error('Choose between 1 and 100 databases to export.')
+  names.forEach(mysqlIdentifier)
+  const owner = BrowserWindow.fromWebContents(event.sender)
+  const date = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+  const label = names.length === 1 ? names[0] : `${names.length}-databases`
+  const extension = input.compression === 'gzip' ? 'sql.gz' : 'sql'
+  const destination = await dialog.showSaveDialog(owner ?? undefined, {
+    title: 'Export MySQL databases',
+    defaultPath: `${label}-${date}.${extension}`,
+    filters: input.compression === 'gzip'
+      ? [{ name: 'Compressed SQL dump', extensions: ['sql.gz', 'gz'] }]
+      : [{ name: 'SQL dump', extensions: ['sql'] }],
+  })
+  if (destination.canceled || !destination.filePath) return null
+
+  const startedAt = new Date().toISOString()
+  const temporaryPath = `${destination.filePath}.myrepos-${input.runId}.part`
+  const run = { connectionId: id, cancelled: false, cancel: (): void => undefined }
+  mysqlExportRuns.set(input.runId, run)
+  let outputBytes = 0
+  try {
+    const result = await withClient(id, async (client) => {
+      const profile = mysqlProfileOrThrow(id)
+      const catalog = await mysqlRows(client, profile)
+      if (names.some((name) => !catalog.some((item) => item.name === name && !item.system))) throw new Error('One or more selected databases no longer exist or are protected system databases.')
+      const estimatedTotalBytes = catalog.filter((item) => names.includes(item.name)).reduce((sum, item) => sum + item.sizeBytes, 0)
+      const options = ['--quick', '--hex-blob', '--default-character-set=utf8mb4']
+      if (input.singleTransaction) options.push('--single-transaction')
+      if (input.content === 'structure') options.push('--no-data')
+      if (input.content === 'data') options.push('--no-create-info')
+      if (!input.includeTriggers) options.push('--skip-triggers')
+      if (input.includeRoutines) options.push('--routines')
+      if (input.includeEvents) options.push('--events')
+      options.push('--databases', ...names.map(shellQuote))
+      let command = ''
+      let stdin = ''
+      if (profile.mode === 'system') {
+        const privilege = await accountPrivilege(client)
+        if (!privilege.canManage) throw new Error('System administrator export requires root or passwordless sudo.')
+        const body = `dump=$(command -v mysqldump 2>/dev/null || command -v mariadb-dump 2>/dev/null || true); [ -n "$dump" ] || { echo 'mysqldump or mariadb-dump was not found.' >&2; exit 127; }; ${privilege.root ? '"$dump"' : 'sudo -n "$dump"'} ${options.join(' ')}`
+        command = `set -eu; ${body}`
+      } else {
+        if (!profile.username || !profile.password) throw new Error('The saved MySQL username or password is missing.')
+        const port = await mysqlPort(client)
+        stdin = `[client]\nuser=${mysqlOptionValue(profile.username)}\npassword=${mysqlOptionValue(profile.password)}\nhost=127.0.0.1\nport=${port}\nprotocol=tcp\n`
+        command = `set -eu; cfg=$(mktemp); trap 'rm -f "$cfg"' EXIT HUP INT TERM; chmod 600 "$cfg"; cat > "$cfg"; dump=$(command -v mysqldump 2>/dev/null || command -v mariadb-dump 2>/dev/null || true); [ -n "$dump" ] || { echo 'mysqldump or mariadb-dump was not found.' >&2; exit 127; }; "$dump" --defaults-extra-file="$cfg" ${options.join(' ')}`
+      }
+      emitMysqlExportProgress(event, { runId: input.runId, phase: 'starting', databaseCount: names.length, processedBytes: 0, estimatedTotalBytes, outputBytes: 0, message: 'Preparing secure export stream…' })
+      await new Promise<void>((resolve, reject) => {
+        client.exec(command, (error, stream) => {
+          if (error) { reject(error); return }
+          const file = createWriteStream(temporaryPath, { flags: 'wx' })
+          const compressor = input.compression === 'gzip' ? createGzip({ level: 6 }) : null
+          const sink = compressor ?? file
+          if (compressor) compressor.pipe(file)
+          let processedBytes = 0
+          let stderr = ''
+          let settled = false
+          let lastEmission = 0
+          const finish = (failure?: Error): void => {
+            if (settled) return
+            settled = true
+            if (failure) reject(failure); else resolve()
+          }
+          run.cancel = () => { run.cancelled = true; stream.close(); sink.destroy(); file.destroy() }
+          stream.on('data', (chunk: Buffer) => {
+            processedBytes += chunk.length
+            if (!sink.write(chunk)) { stream.pause(); sink.once('drain', () => stream.resume()) }
+            const now = Date.now()
+            if (now - lastEmission >= 120) {
+              lastEmission = now; outputBytes = file.bytesWritten
+              emitMysqlExportProgress(event, { runId: input.runId, phase: 'exporting', databaseCount: names.length, processedBytes, estimatedTotalBytes, outputBytes, message: `Exporting ${names.length} database${names.length === 1 ? '' : 's'}…` })
+            }
+          })
+          stream.stderr.on('data', (chunk: Buffer) => { if (stderr.length < 64 * 1024) stderr += chunk.toString('utf8') })
+          stream.once('error', (streamError: Error) => { sink.destroy(); file.destroy(); finish(streamError) })
+          file.once('error', (fileError) => { stream.close(); sink.destroy(); finish(fileError) })
+          if (compressor) compressor.once('error', (zipError) => { stream.close(); file.destroy(); finish(zipError) })
+          stream.once('close', (code: number | null) => {
+            if (run.cancelled) { sink.destroy(); file.destroy(); finish(new Error('Export cancelled.')); return }
+            if (code && code !== 0) { sink.destroy(); file.destroy(); finish(new Error(stderr.trim() || `Database export exited with code ${code}.`)); return }
+            sink.end()
+          })
+          file.once('finish', () => { outputBytes = file.bytesWritten; finish() })
+          stream.end(stdin)
+          if (run.cancelled) run.cancel()
+        })
+      })
+      await localCopyFile(temporaryPath, destination.filePath!)
+      const finalResult: SshMySqlExportResult = { runId: input.runId, path: destination.filePath!, bytes: outputBytes, cancelled: false, startedAt, finishedAt: new Date().toISOString() }
+      emitMysqlExportProgress(event, { runId: input.runId, phase: 'completed', databaseCount: names.length, processedBytes: Math.max(estimatedTotalBytes, 1), estimatedTotalBytes, outputBytes, message: 'Export completed.' })
+      return finalResult
+    })
+    return result
+  } catch (error) {
+    if (run.cancelled) {
+      emitMysqlExportProgress(event, { runId: input.runId, phase: 'cancelled', databaseCount: names.length, processedBytes: 0, estimatedTotalBytes: 0, outputBytes, message: 'Export cancelled; partial file removed.' })
+      return { runId: input.runId, path: destination.filePath, bytes: 0, cancelled: true, startedAt, finishedAt: new Date().toISOString() }
+    }
+    emitMysqlExportProgress(event, { runId: input.runId, phase: 'failed', databaseCount: names.length, processedBytes: 0, estimatedTotalBytes: 0, outputBytes, message: error instanceof Error ? error.message : String(error) })
+    throw error
+  } finally {
+    mysqlExportRuns.delete(input.runId)
+    await localUnlink(temporaryPath).catch(() => undefined)
+  }
+}
+
+const cancelMysqlExport = (runId: string): void => {
+  const run = mysqlExportRuns.get(runId)
+  if (!run) return
+  run.cancelled = true
+  run.cancel()
+}
 
 const mysqlTableDetailsFor = async (client: Client, profile: MySqlRuntimeProfile, database: string, tableName: string): Promise<SshMySqlTableDetails> => {
   mysqlIdentifier(database); mysqlIdentifier(tableName)
@@ -2024,12 +2154,19 @@ export const registerSshWorkspaceHandlers = (): void => {
   ipcMain.handle('ssh:mysql-database-details', (_event, id: string, database: string) => mysqlDatabaseDetails(id, database))
   ipcMain.handle('ssh:maintain-mysql-database', (_event, id: string, operation: SshMySqlDatabaseMaintenanceOperation) =>
     maintainMysqlDatabase(id, operation))
+  ipcMain.handle('ssh:export-mysql', async (event, id: string, input: SshMySqlExportInput) => {
+    try { return { ok: true as const, value: await exportMysql(event, id, input) } }
+    catch (error) { return { ok: false as const, error: error instanceof Error ? error.message : String(error) } }
+  })
+  ipcMain.handle('ssh:cancel-mysql-export', (_event, runId: string) => cancelMysqlExport(runId))
   ipcMain.handle('ssh:mysql-users', (_event, id: string) => mysqlUsers(id))
   ipcMain.handle('ssh:manage-mysql-user', (_event, id: string, operation: SshMySqlUserOperation) =>
     manageMysqlUser(id, operation))
   ipcMain.handle('ssh:mysql-schema', (_event, id: string, database: string | null) => mysqlSchema(id, database))
-  ipcMain.handle('ssh:run-mysql-query', (_event, id: string, runId: string, input: SshMySqlQueryInput) =>
-    runMysqlQuery(id, runId, input))
+  ipcMain.handle('ssh:run-mysql-query', async (_event, id: string, runId: string, input: SshMySqlQueryInput) => {
+    try { return { ok: true as const, value: await runMysqlQuery(id, runId, input) } }
+    catch (error) { return { ok: false as const, error: error instanceof Error ? error.message : String(error) } }
+  })
   ipcMain.handle('ssh:cancel-mysql-query', (_event, runId: string) => cancelMysqlQuery(runId))
   ipcMain.handle('ssh:mysql-tables', (_event, id: string, database: string) => mysqlTables(id, database))
   ipcMain.handle('ssh:mysql-table-details', (_event, id: string, database: string, table: string) =>

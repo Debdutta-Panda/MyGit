@@ -17,9 +17,10 @@ import { SshMySqlDatabases } from './SshMySqlDatabases'
 import { SshMySqlUsers } from './SshMySqlUsers'
 import { SshMySqlQuery } from './SshMySqlQuery'
 import { SshMySqlTables } from './SshMySqlTables'
+import { SshMySqlTransfer } from './SshMySqlTransfer'
 import type { SshSavedSnippet } from './ssh-snippets-store'
 
-type DatabaseTab = 'overview' | 'install' | 'databases' | 'tables' | 'users' | 'sql'
+type DatabaseTab = 'overview' | 'install' | 'databases' | 'tables' | 'users' | 'sql' | 'transfer'
 type InstallFlavor = 'recommended' | 'mysql' | 'mariadb'
 
 interface InstallPlan {
@@ -225,7 +226,8 @@ export function SshDatabases({ connection }: { connection: SshConnection }) {
       <button type="button" data-active={activeTab === 'tables' || undefined} disabled={!overview?.installed} onClick={() => setActiveTab('tables')}>Tables</button>
       <button type="button" data-active={activeTab === 'users' || undefined} disabled={!overview?.installed} onClick={() => setActiveTab('users')}>Users & Access</button>
       <button type="button" data-active={activeTab === 'sql' || undefined} disabled={!overview?.installed} onClick={() => setActiveTab('sql')}>SQL</button>
-      {['Backup & Restore', 'Administration', 'Logs'].map((label) =>
+      <button type="button" data-active={activeTab === 'transfer' || undefined} disabled={!overview?.installed} onClick={() => setActiveTab('transfer')}>Backup / Import / Export</button>
+      {['Administration', 'Logs'].map((label) =>
         <Tooltip label="Available in a later implementation step" key={label}>
           <button type="button" disabled>{label}</button>
         </Tooltip>)}
@@ -295,6 +297,7 @@ export function SshDatabases({ connection }: { connection: SshConnection }) {
     {activeTab === 'tables' && overview?.installed && <SshMySqlTables connection={connection} onNeedAccess={() => setActiveTab('databases')} />}
     {activeTab === 'users' && overview?.installed && <SshMySqlUsers connection={connection} onNeedAccess={() => setActiveTab('databases')} />}
     {activeTab === 'sql' && overview?.installed && <SshMySqlQuery connection={connection} onNeedAccess={() => setActiveTab('databases')} />}
+    {activeTab === 'transfer' && overview?.installed && <SshMySqlTransfer connection={connection} onNeedAccess={() => setActiveTab('databases')} />}
 
     {activeTab === 'overview' && (loading ? <div className="ssh-database-loading"><Loader size="sm" /><Text size="sm">Inspecting MySQL on the server...</Text></div>
       : overview && !overview.installed ? <div className="ssh-database-not-installed">

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActionIcon, Alert, Badge, Button, Group, Loader, Modal, MultiSelect, Select, Switch, Text, TextInput, Tooltip } from '@mantine/core'
 import { IconAlertCircle, IconBraces, IconColumns, IconCopy, IconDatabase, IconEye, IconKey, IconPlus, IconRefresh, IconSearch, IconTable, IconTrash } from '@tabler/icons-react'
 import type { SshConnection, SshMySqlAccessProfile, SshMySqlDatabase, SshMySqlQueryResultSet, SshMySqlTable, SshMySqlTableColumn, SshMySqlTableDetails, SshMySqlTableIndex, SshMySqlTableOperation } from '../../shared/desktop-api'
@@ -31,6 +31,8 @@ export function SshMySqlTables({ connection, onNeedAccess }: { connection: SshCo
   const [dataResult, setDataResult] = useState<SshMySqlQueryResultSet | null>(null)
   const [dataOffset, setDataOffset] = useState(0)
   const [ddl, setDdl] = useState('')
+  const tableLoadRequestRef = useRef(0)
+  const detailRequestRef = useRef(0)
 
   const loadBase = useCallback(async (): Promise<void> => {
     if (!window.desktop) return
@@ -46,17 +48,21 @@ export function SshMySqlTables({ connection, onNeedAccess }: { connection: SshCo
 
   const loadTables = useCallback(async (name: string): Promise<void> => {
     if (!window.desktop) return
+    const request = ++tableLoadRequestRef.current
     setLoading(true); setError(null); setSelected(null); setDetails(null); setDataResult(null); setDdl('')
-    try { setTables(await window.desktop.ssh.mysqlTables(connection.id, name)) }
-    catch (reason) { setError(messageFor(reason)); setTables([]) } finally { setLoading(false) }
+    try { const items = await window.desktop.ssh.mysqlTables(connection.id, name); if (request === tableLoadRequestRef.current) setTables(items) }
+    catch (reason) { if (request === tableLoadRequestRef.current) { setError(messageFor(reason)); setTables([]) } }
+    finally { if (request === tableLoadRequestRef.current) setLoading(false) }
   }, [connection.id])
   useEffect(() => { if (database && profile) void loadTables(database); else setTables([]) }, [database, profile, loadTables])
 
   const openTable = async (table: SshMySqlTable): Promise<void> => {
-    if (!window.desktop) return
+    if (!window.desktop || table.database !== database) return
+    const request = ++detailRequestRef.current
     setSelected(table); setDetails(null); setActiveTab('overview'); setDetailLoading(true); setError(null); setDataResult(null); setDdl(''); setDataOffset(0)
-    try { setDetails(await window.desktop.ssh.mysqlTableDetails(connection.id, table.database, table.name)) }
-    catch (reason) { setError(messageFor(reason)) } finally { setDetailLoading(false) }
+    try { const next = await window.desktop.ssh.mysqlTableDetails(connection.id, table.database, table.name); if (request === detailRequestRef.current) setDetails(next) }
+    catch (reason) { if (request === detailRequestRef.current) setError(messageFor(reason)) }
+    finally { if (request === detailRequestRef.current) setDetailLoading(false) }
   }
   const refreshDetails = async (): Promise<void> => { if (selected) await openTable(selected) }
   const visible = useMemo(() => { const query = filter.trim().toLowerCase(); return tables.filter((table) => !query || table.name.toLowerCase().includes(query)) }, [filter, tables])
@@ -81,17 +87,25 @@ export function SshMySqlTables({ connection, onNeedAccess }: { connection: SshCo
     setDetailLoading(true); setError(null)
     const runId = crypto.randomUUID()
     try {
-      const result = await window.desktop.ssh.runMysqlQuery(connection.id, runId, { database: selected.database, sql: `SELECT * FROM \`${selected.name.replace(/`/g, '``')}\` LIMIT 100 OFFSET ${offset}`, rowLimit: 100, readOnly: true, destructiveConfirmation: null })
+      const target = `\`${selected.database.replace(/`/g, '``')}\`.\`${selected.name.replace(/`/g, '``')}\``
+      const result = await window.desktop.ssh.runMysqlQuery(connection.id, runId, { database: selected.database, sql: `SELECT * FROM ${target} LIMIT 100 OFFSET ${offset}`, rowLimit: 100, readOnly: true, destructiveConfirmation: null })
       setDataResult(result.resultSets[0] ?? null); setDataOffset(offset)
-    } catch (reason) { setError(messageFor(reason)) } finally { setDetailLoading(false) }
+    } catch (reason) {
+      const message = messageFor(reason); setError(message)
+      if (/doesn't exist|unknown table/i.test(message) && database) { setSelected(null); setDetails(null); void loadTables(database) }
+    } finally { setDetailLoading(false) }
   }, [connection.id, selected])
   const loadDdl = useCallback(async (): Promise<void> => {
     if (!window.desktop || !selected) return
     setDetailLoading(true); setError(null)
     try {
-      const result = await window.desktop.ssh.runMysqlQuery(connection.id, crypto.randomUUID(), { database: selected.database, sql: `SHOW CREATE ${selected.type === 'view' ? 'VIEW' : 'TABLE'} \`${selected.name.replace(/`/g, '``')}\``, rowLimit: 10, readOnly: true, destructiveConfirmation: null })
+      const target = `\`${selected.database.replace(/`/g, '``')}\`.\`${selected.name.replace(/`/g, '``')}\``
+      const result = await window.desktop.ssh.runMysqlQuery(connection.id, crypto.randomUUID(), { database: selected.database, sql: `SHOW CREATE ${selected.type === 'view' ? 'VIEW' : 'TABLE'} ${target}`, rowLimit: 10, readOnly: true, destructiveConfirmation: null })
       const set = result.resultSets[0]; setDdl(set?.rows[0]?.[1] === undefined ? '' : String(set.rows[0][1]))
-    } catch (reason) { setError(messageFor(reason)) } finally { setDetailLoading(false) }
+    } catch (reason) {
+      const message = messageFor(reason); setError(message)
+      if (/doesn't exist|unknown table/i.test(message) && database) { setSelected(null); setDetails(null); void loadTables(database) }
+    } finally { setDetailLoading(false) }
   }, [connection.id, selected])
   useEffect(() => { if (activeTab === 'data' && selected && !dataResult) void loadData(0); if (activeTab === 'ddl' && selected && !ddl) void loadDdl() }, [activeTab, dataResult, ddl, loadData, loadDdl, selected])
 

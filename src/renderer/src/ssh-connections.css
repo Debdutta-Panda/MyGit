@@ -604,6 +604,48 @@
 .ssh-db-maintenance-result > header { padding: 7px 9px; display: flex; justify-content: space-between; border-bottom: 1px solid #26343e; }
 .ssh-db-maintenance-result > div { min-height: 38px; padding: 6px 9px; display: grid; grid-template-columns: minmax(140px, 1fr) 80px auto minmax(180px, 2fr); align-items: center; gap: 8px; border-bottom: 1px solid #202d36; font-size: 9px; }
 .ssh-db-maintenance-result p { margin: 0; color: #899aa4; }
+.ssh-db-transfer { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: #0a1117; }
+.ssh-db-transfer > header { min-height: 56px; padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid #293741; background: #0d151c; }
+.ssh-db-transfer > nav { min-height: 38px; display: flex; overflow-x: auto; border-bottom: 1px solid #293842; background: #0c141a; scrollbar-width: thin; }
+.ssh-db-transfer > nav button { min-width: max-content; padding: 0 12px; display: flex; align-items: center; gap: 5px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #7c8e99; font: inherit; font-size: 10px; font-weight: 650; cursor: pointer; }
+.ssh-db-transfer > nav button:hover { color: #c6d1d7; }
+.ssh-db-transfer > nav button[data-active] { border-bottom-color: #20c997; color: #bcebdd; }
+.ssh-transfer-error { margin: 7px 9px 0; }
+.ssh-transfer-config { min-height: 0; flex: 1; overflow: auto; scrollbar-gutter: stable; }
+.ssh-transfer-config > section { padding: 12px 14px; display: grid; gap: 10px; border-bottom: 1px solid #26343e; }
+.ssh-transfer-config > section > header { display: flex; align-items: flex-start; gap: 9px; }
+.ssh-transfer-config > section > header > span { width: 23px; height: 23px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid #2b6c5a; border-radius: 50%; background: #10261f; color: #62dab6; font-size: 10px; font-weight: 800; }
+.ssh-transfer-config > section > header > div { display: grid; gap: 2px; }
+.ssh-transfer-config > section > header strong { color: #d2dde2; font-size: 11.5px; }
+.ssh-transfer-config > section > header small { color: #7d8f9a; font-size: 9.5px; }
+.ssh-transfer-switches { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 8px; }
+.ssh-transfer-switches > div { padding: 8px; border: 1px solid #2b3a45; border-radius: 6px; background: #0d161d; }
+.ssh-transfer-summary { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 7px; }
+.ssh-transfer-summary > div { min-width: 0; padding: 8px 9px; display: grid; gap: 3px; border: 1px solid #2b3a45; border-radius: 6px; background: #0d161d; }
+.ssh-transfer-summary small { color: #71838f; font-size: 8.5px; text-transform: uppercase; }
+.ssh-transfer-summary strong { overflow: hidden; color: #c7d3d9; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-transfer-config > footer { min-height: 58px; padding: 9px 14px; display: flex; align-items: center; justify-content: space-between; gap: 15px; background: #0d151c; }
+.ssh-transfer-config > footer > div { display: grid; gap: 2px; }
+.ssh-transfer-config > footer strong { color: #c9d4da; font-size: 10.5px; }
+.ssh-transfer-config > footer small { color: #778995; font-size: 9px; }
+.ssh-transfer-coming { min-height: 0; flex: 1; padding: 30px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 7px; color: #71848f; }
+.ssh-transfer-coming > span, .ssh-transfer-coming > svg { color: #42cfa6; }
+.ssh-transfer-history { min-height: 0; flex: 1; overflow: auto; }
+.ssh-transfer-history > article { min-height: 52px; padding: 7px 11px; display: grid; grid-template-columns: auto minmax(0, 1fr) 90px 150px; align-items: center; gap: 9px; border-bottom: 1px solid #22303a; }
+.ssh-transfer-history > article > svg { color: #36c89e; }
+.ssh-transfer-history article > div { min-width: 0; display: grid; gap: 2px; }
+.ssh-transfer-history strong, .ssh-transfer-history small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-transfer-history strong { color: #c9d5db; font-size: 10.5px; }
+.ssh-transfer-history small, .ssh-transfer-history time, .ssh-transfer-history article > span { color: #758793; font-size: 9px; }
+.ssh-transfer-progress { position: absolute; right: 18px; bottom: 17px; z-index: 20; width: min(600px, calc(100% - 36px)); padding: 10px; display: grid; gap: 9px; border: 1px solid #24765f; border-radius: 8px; background: #0e1a18; box-shadow: 0 12px 35px rgba(0, 0, 0, .48); }
+.ssh-transfer-progress[data-terminal] { border-color: #35505a; background: #10191f; }
+.ssh-transfer-progress > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.ssh-transfer-progress > header strong { color: #d1dce1; font-size: 10.5px; }
+.ssh-transfer-progress > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.ssh-transfer-progress > div > span { min-width: 0; display: grid; gap: 2px; }
+.ssh-transfer-progress small { color: #70828e; font-size: 8px; text-transform: uppercase; }
+.ssh-transfer-progress span strong { overflow: hidden; color: #bed5cd; font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-transfer-progress > .mantine-Button-root { justify-self: end; }
 .ssh-mysql-users { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .ssh-mysql-users > header { min-height: 57px; padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid #293741; background: #0d151c; }
 .ssh-mysql-user-grid { min-height: 0; padding: 9px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); align-content: start; gap: 7px; overflow: auto; }
@@ -758,6 +800,7 @@
   .ssh-db-sidebar { width: 220px; min-width: 180px; }
   .ssh-db-sidebar-tools { grid-template-columns: 1fr; }
   .ssh-db-maintenance-kinds { grid-template-columns: 1fr; }
+  .ssh-transfer-switches, .ssh-transfer-summary { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
   .ssh-sql-toolbar { align-items: stretch; flex-direction: column; }
   .ssh-table-sidebar { width: 230px; min-width: 190px; }
   .ssh-table-overview { grid-template-columns: repeat(2, minmax(120px, 1fr)); }

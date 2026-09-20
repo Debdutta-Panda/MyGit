@@ -379,6 +379,36 @@ export interface SshMySqlDatabaseMaintenanceMessage {
   message: string
 }
 
+export interface SshMySqlExportInput {
+  runId: string
+  databases: string[]
+  content: 'structure' | 'data' | 'structure-and-data'
+  includeTriggers: boolean
+  includeRoutines: boolean
+  includeEvents: boolean
+  singleTransaction: boolean
+  compression: 'none' | 'gzip'
+}
+
+export interface SshMySqlExportProgress {
+  runId: string
+  phase: 'starting' | 'exporting' | 'completed' | 'cancelled' | 'failed'
+  databaseCount: number
+  processedBytes: number
+  estimatedTotalBytes: number
+  outputBytes: number
+  message: string
+}
+
+export interface SshMySqlExportResult {
+  runId: string
+  path: string
+  bytes: number
+  cancelled: boolean
+  startedAt: string
+  finishedAt: string
+}
+
 export interface SshMySqlDatabaseGrant {
   database: string
   privileges: string[]
@@ -945,6 +975,9 @@ export interface DesktopApi {
     manageMysqlDatabase: (id: string, operation: SshMySqlDatabaseOperation) => Promise<SshMySqlDatabase[]>
     mysqlDatabaseDetails: (id: string, database: string) => Promise<SshMySqlDatabaseDetails>
     maintainMysqlDatabase: (id: string, operation: SshMySqlDatabaseMaintenanceOperation) => Promise<SshMySqlDatabaseMaintenanceMessage[]>
+    exportMysql: (id: string, input: SshMySqlExportInput) => Promise<SshMySqlExportResult | null>
+    cancelMysqlExport: (runId: string) => Promise<void>
+    onMysqlExportProgress: (callback: (progress: SshMySqlExportProgress) => void) => () => void
     mysqlUsers: (id: string) => Promise<SshMySqlUser[]>
     manageMysqlUser: (id: string, operation: SshMySqlUserOperation) => Promise<SshMySqlUser[]>
     mysqlSchema: (id: string, database: string | null) => Promise<SshMySqlSchemaColumn[]>

@@ -81,10 +81,27 @@ const desktopApi: DesktopApi = {
     manageMysqlDatabase: (id, operation) => ipcRenderer.invoke('ssh:manage-mysql-database', id, operation),
     mysqlDatabaseDetails: (id, database) => ipcRenderer.invoke('ssh:mysql-database-details', id, database),
     maintainMysqlDatabase: (id, operation) => ipcRenderer.invoke('ssh:maintain-mysql-database', id, operation),
+    exportMysql: async (id, input) => {
+      const result = await ipcRenderer.invoke('ssh:export-mysql', id, input) as
+        { ok: true; value: Awaited<ReturnType<DesktopApi['ssh']['exportMysql']>> } | { ok: false; error: string }
+      if (!result.ok) throw new Error(result.error)
+      return result.value
+    },
+    cancelMysqlExport: (runId) => ipcRenderer.invoke('ssh:cancel-mysql-export', runId),
+    onMysqlExportProgress: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof callback>[0]): void => callback(progress)
+      ipcRenderer.on('ssh:mysql-export-progress', listener)
+      return () => ipcRenderer.removeListener('ssh:mysql-export-progress', listener)
+    },
     mysqlUsers: (id) => ipcRenderer.invoke('ssh:mysql-users', id),
     manageMysqlUser: (id, operation) => ipcRenderer.invoke('ssh:manage-mysql-user', id, operation),
     mysqlSchema: (id, database) => ipcRenderer.invoke('ssh:mysql-schema', id, database),
-    runMysqlQuery: (id, runId, input) => ipcRenderer.invoke('ssh:run-mysql-query', id, runId, input),
+    runMysqlQuery: async (id, runId, input) => {
+      const result = await ipcRenderer.invoke('ssh:run-mysql-query', id, runId, input) as
+        { ok: true; value: Awaited<ReturnType<DesktopApi['ssh']['runMysqlQuery']>> } | { ok: false; error: string }
+      if (!result.ok) throw new Error(result.error)
+      return result.value
+    },
     cancelMysqlQuery: (runId) => ipcRenderer.invoke('ssh:cancel-mysql-query', runId),
     mysqlTables: (id, database) => ipcRenderer.invoke('ssh:mysql-tables', id, database),
     mysqlTableDetails: (id, database, table) => ipcRenderer.invoke('ssh:mysql-table-details', id, database, table),
