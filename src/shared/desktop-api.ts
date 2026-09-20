@@ -429,6 +429,27 @@ export interface SshMySqlExportResult {
   finishedAt: string
 }
 
+export interface SshMySqlImportWarning {
+  severity: 'info' | 'warning' | 'danger'
+  operation: string
+  count: number
+  message: string
+}
+
+export interface SshMySqlImportInspection {
+  path: string
+  name: string
+  fileBytes: number
+  compression: 'none' | 'gzip'
+  sampledBytes: number
+  sampleTruncated: boolean
+  databases: string[]
+  tables: string[]
+  statementCounts: Array<{ operation: string; count: number }>
+  warnings: SshMySqlImportWarning[]
+  preview: string
+}
+
 export interface SshMySqlDatabaseGrant {
   database: string
   privileges: string[]
@@ -1002,6 +1023,7 @@ export interface DesktopApi {
     mysqlDatabaseDetails: (id: string, database: string) => Promise<SshMySqlDatabaseDetails>
     maintainMysqlDatabase: (id: string, operation: SshMySqlDatabaseMaintenanceOperation) => Promise<SshMySqlDatabaseMaintenanceMessage[]>
     exportMysql: (id: string, input: SshMySqlExportInput) => Promise<SshMySqlExportResult | null>
+    inspectMysqlImport: () => Promise<SshMySqlImportInspection | null>
     cancelMysqlExport: (runId: string) => Promise<void>
     onMysqlExportProgress: (callback: (progress: SshMySqlExportProgress) => void) => () => void
     mysqlUsers: (id: string) => Promise<SshMySqlUser[]>

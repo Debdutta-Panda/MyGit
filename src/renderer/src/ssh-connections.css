@@ -637,12 +637,54 @@
 .ssh-transfer-history strong, .ssh-transfer-history small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ssh-transfer-history strong { color: #c9d5db; font-size: 10.5px; }
 .ssh-transfer-history small, .ssh-transfer-history time, .ssh-transfer-history article > span { color: #758793; font-size: 9px; }
+.ssh-import-inspector { min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.ssh-import-inspector > header { min-height: 52px; padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid #293842; background: #0d151c; }
+.ssh-import-inspector > header > div { min-width: 0; display: grid; gap: 2px; }
+.ssh-import-results { min-height: 0; padding: 10px 12px 14px; flex: 1; display: grid; align-content: start; gap: 9px; overflow: auto; scrollbar-gutter: stable; }
+.ssh-import-file { min-width: 0; padding: 9px 11px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 10px; border: 1px solid #2d3d47; border-radius: 7px; background: #0e171e; }
+.ssh-import-file > svg { color: #48d4a9; }
+.ssh-import-file > div { min-width: 0; display: grid; gap: 2px; }
+.ssh-import-file strong, .ssh-import-file small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-import-file strong { color: #d1dce1; font-size: 11px; }
+.ssh-import-file small, .ssh-import-file > span { color: #7c8e9a; font-size: 9px; }
+.ssh-import-summary { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 7px; }
+.ssh-import-summary article { padding: 8px 9px; display: grid; gap: 3px; border: 1px solid #2c3b46; border-radius: 7px; background: #0d161d; }
+.ssh-import-summary article[data-danger] { border-color: #78404a; background: #221418; }
+.ssh-import-summary small { color: #71838f; font-size: 8px; text-transform: uppercase; }
+.ssh-import-summary strong { color: #c8d5db; font-size: 14px; }
+.ssh-import-findings, .ssh-import-operations, .ssh-import-detail-grid > section { border: 1px solid #2c3b46; border-radius: 7px; overflow: hidden; background: #0c141a; }
+.ssh-import-findings > header, .ssh-import-operations > header, .ssh-import-detail-grid section > header { min-height: 35px; padding: 6px 9px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid #26343e; }
+.ssh-import-findings header strong, .ssh-import-operations header strong, .ssh-import-detail-grid header strong { color: #c9d5db; font-size: 10px; }
+.ssh-import-findings header small, .ssh-import-operations header small { color: #72848f; font-size: 8.5px; }
+.ssh-import-findings > div { padding: 7px 9px; display: flex; align-items: flex-start; gap: 8px; border-bottom: 1px solid #202d36; }
+.ssh-import-findings > div:last-child { border-bottom: 0; }
+.ssh-import-findings > div[data-severity='danger'] { background: rgba(151, 39, 57, .13); color: #ff8996; }
+.ssh-import-findings > div[data-severity='warning'] { background: rgba(156, 104, 17, .1); color: #e7bc68; }
+.ssh-import-findings > div > span { display: grid; gap: 2px; }
+.ssh-import-findings > div strong { font-size: 9.5px; }
+.ssh-import-findings > div small { color: #8797a1; font-size: 8.8px; }
+.ssh-import-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.ssh-import-detail-grid section > div { max-height: 112px; padding: 8px; display: flex; align-content: flex-start; flex-wrap: wrap; gap: 5px; overflow: auto; }
+.ssh-import-detail-grid code { padding: 3px 6px; border: 1px solid #2e493f; border-radius: 999px; background: #102019; color: #9ce2ca; font-size: 8.5px; }
+.ssh-import-detail-grid section > div > small { color: #71838f; font-size: 9px; }
+.ssh-import-operations > div { padding: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(135px, 1fr)); gap: 6px; }
+.ssh-import-operations > div > span { padding: 6px 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid #283741; border-radius: 5px; background: #0e171e; }
+.ssh-import-operations code { color: #91cdb9; font-size: 8.5px; }
+.ssh-import-operations span strong { color: #d0dbe0; font-size: 10px; }
+.ssh-import-preview { border: 1px solid #2d3c47; border-radius: 7px; overflow: hidden; background: #090f14; }
+.ssh-import-preview summary { padding: 8px 10px; color: #9babb4; font-size: 9.5px; font-weight: 650; cursor: pointer; }
+.ssh-import-preview pre { max-height: 300px; margin: 0; padding: 10px; overflow: auto; border-top: 1px solid #26343e; color: #a8c9be; font: 9px/1.5 Consolas, "Cascadia Code", monospace; white-space: pre; user-select: text; }
+.ssh-import-results > footer { padding: 9px 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid #2c3b46; border-radius: 7px; background: #0d151c; }
+.ssh-import-results > footer > div { min-width: 0; display: grid; gap: 2px; }
+.ssh-import-results > footer strong { color: #cbd7dc; font-size: 10px; }
+.ssh-import-results > footer small { color: #72848f; font-size: 8.7px; }
 .ssh-transfer-progress { position: absolute; right: 18px; bottom: 17px; z-index: 20; width: min(600px, calc(100% - 36px)); padding: 10px; display: grid; gap: 9px; border: 1px solid #24765f; border-radius: 8px; background: #0e1a18; box-shadow: 0 12px 35px rgba(0, 0, 0, .48); }
 .ssh-transfer-progress[data-terminal] { border-color: #35505a; background: #10191f; }
 .ssh-transfer-progress > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .ssh-transfer-progress > header strong { color: #d1dce1; font-size: 10.5px; }
-.ssh-transfer-progress > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
-.ssh-transfer-progress > div > span { min-width: 0; display: grid; gap: 2px; }
+.ssh-transfer-progress-bar { width: 100%; display: block; }
+.ssh-transfer-progress-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.ssh-transfer-progress-stats > span { min-width: 0; display: grid; gap: 2px; }
 .ssh-transfer-progress small { color: #70828e; font-size: 8px; text-transform: uppercase; }
 .ssh-transfer-progress span strong { overflow: hidden; color: #bed5cd; font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
 .ssh-transfer-progress > .mantine-Button-root { justify-self: end; }

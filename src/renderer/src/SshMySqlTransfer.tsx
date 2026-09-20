@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Badge, Button, Checkbox, Group, Loader, MultiSelect, Progress, SegmentedControl, Switch, Text } from '@mantine/core'
-import { IconAlertCircle, IconArchive, IconCheck, IconDatabaseExport, IconDatabaseImport, IconDownload, IconHistory, IconRestore, IconShieldLock, IconSquare, IconUpload } from '@tabler/icons-react'
-import type { SshConnection, SshMySqlAccessProfile, SshMySqlDatabase, SshMySqlExportProgress, SshMySqlExportResult } from '../../shared/desktop-api'
+import { IconAlertCircle, IconArchive, IconCheck, IconDatabaseExport, IconDatabaseImport, IconDownload, IconFileSearch, IconHistory, IconRestore, IconShieldLock, IconSquare, IconUpload } from '@tabler/icons-react'
+import type { SshConnection, SshMySqlAccessProfile, SshMySqlDatabase, SshMySqlExportProgress, SshMySqlExportResult, SshMySqlImportInspection } from '../../shared/desktop-api'
 
 type TransferTab = 'export' | 'backup' | 'import' | 'restore' | 'history' | 'schedules'
 const messageFor = (reason: unknown): string => reason instanceof Error ? reason.message.replace(/^Error invoking remote method '[^']+': Error: /, '') : String(reason)
@@ -28,6 +28,8 @@ export function SshMySqlTransfer({ connection, onNeedAccess }: { connection: Ssh
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<SshMySqlExportProgress | null>(null)
   const [history, setHistory] = useState<SshMySqlExportResult[]>([])
+  const [inspection, setInspection] = useState<SshMySqlImportInspection | null>(null)
+  const [inspecting, setInspecting] = useState(false)
   const runIdRef = useRef<string | null>(null)
 
   const load = useCallback(async (): Promise<void> => {
@@ -64,6 +66,18 @@ export function SshMySqlTransfer({ connection, onNeedAccess }: { connection: Ssh
     } catch (reason) { setError(messageFor(reason)) } finally { setRunning(false); runIdRef.current = null }
   }
   const cancel = async (): Promise<void> => { if (runIdRef.current) await window.desktop?.ssh.cancelMysqlExport(runIdRef.current) }
+  const inspectImport = async (): Promise<void> => {
+    if (!window.desktop || inspecting) return
+    setInspecting(true); setError(null)
+    try {
+      const result = await window.desktop.ssh.inspectMysqlImport()
+      if (result) setInspection(result)
+    } catch (reason) {
+      setError(messageFor(reason))
+    } finally {
+      setInspecting(false)
+    }
+  }
 
   if (loading && !profile) return <div className="ssh-mysql-access-empty"><Loader size="sm" /><Text size="sm">Preparing transfer workspace…</Text></div>
   if (!profile) return <div className="ssh-mysql-access-empty"><IconShieldLock size={38} /><Text fw={730}>Database access is not configured</Text><Text size="sm" c="dimmed">Configure administration access before exporting databases.</Text>{error && <Alert color="red">{error}</Alert>}<Button size="xs" onClick={onNeedAccess}>Configure access</Button></div>
@@ -82,10 +96,23 @@ export function SshMySqlTransfer({ connection, onNeedAccess }: { connection: Ssh
       <footer><div><strong>Nothing has run yet</strong><small>Review selections, choose Run, then approve the local save destination.</small></div>{running ? <Button color="red" variant="light" leftSection={<IconSquare size={13} />} onClick={() => void cancel()}>Cancel export</Button> : <Button disabled={!selected.length} leftSection={<IconDownload size={14} />} onClick={() => void start()}>{tab === 'backup' ? 'Create backup' : 'Run export'}</Button>}</footer>
     </div>}
 
-    {(tab === 'import' || tab === 'restore') && <div className="ssh-transfer-coming"><span>{tab === 'import' ? <IconDatabaseImport size={34} /> : <IconRestore size={34} />}</span><Text fw={720}>{tab === 'import' ? 'Guided import is the next safe step' : 'Guarded restore is not enabled yet'}</Text><Text size="sm" c="dimmed" ta="center" maw={560}>{tab === 'import' ? 'The file inspector, destination mapping, conflict policy, validation, and dry-run preview will be built before execution is enabled.' : 'Restore requires dump inspection, target verification, overwrite detection, an exact confirmation, and a complete streamed result.'}</Text><Badge variant="outline" color="yellow">No database action available</Badge></div>}
+    {tab === 'import' && <div className="ssh-import-inspector">
+      <header><div><Text fw={720}>Inspect an import safely</Text><Text size="xs" c="dimmed">Reads a bounded local sample only. Nothing is uploaded or executed.</Text></div><Button size="xs" loading={inspecting} leftSection={<IconFileSearch size={14} />} onClick={() => void inspectImport()}>{inspection ? 'Choose another file' : 'Choose SQL dump'}</Button></header>
+      {!inspection ? <div className="ssh-transfer-coming"><IconDatabaseImport size={36} /><Text fw={720}>Choose a .sql or .sql.gz dump</Text><Text size="sm" c="dimmed" ta="center" maw={580}>MyRepos will inspect its structure, identify databases and tables, count recognized operations, and highlight statements that could remove data or change server accounts.</Text><Badge variant="outline" color="teal">Read-only local inspection</Badge></div> : <div className="ssh-import-results">
+        <section className="ssh-import-file"><IconDatabaseImport size={25} /><div><strong>{inspection.name}</strong><small title={inspection.path}>{inspection.path}</small></div><Badge size="sm" variant="light">{inspection.compression === 'gzip' ? 'GZIP' : 'SQL'}</Badge><span>{formatBytes(inspection.fileBytes)}</span></section>
+        {inspection.sampleTruncated && <Alert color="blue" variant="light" icon={<IconAlertCircle size={15} />}>Analysis uses the first {formatBytes(inspection.sampledBytes)} of decompressed SQL. Counts and detected objects are sample-based; execution remains disabled.</Alert>}
+        <div className="ssh-import-summary"><article><small>Databases detected</small><strong>{inspection.databases.length}</strong></article><article><small>Tables detected</small><strong>{inspection.tables.length}</strong></article><article><small>Recognized operations</small><strong>{inspection.statementCounts.reduce((sum, item) => sum + item.count, 0)}</strong></article><article data-danger={inspection.warnings.some((item) => item.severity === 'danger') || undefined}><small>Safety findings</small><strong>{inspection.warnings.length}</strong></article></div>
+        {inspection.warnings.length > 0 ? <section className="ssh-import-findings"><header><strong>Safety findings</strong><small>These must be resolved or explicitly accepted in a later execution step.</small></header>{inspection.warnings.map((warning) => <div key={warning.operation} data-severity={warning.severity}><IconAlertCircle size={15} /><span><strong>{warning.operation} · {warning.count}</strong><small>{warning.message}</small></span></div>)}</section> : <Alert color="teal" variant="light" icon={<IconCheck size={15} />}>No destructive or server-account statements were found in the inspected sample.</Alert>}
+        <div className="ssh-import-detail-grid"><section><header><strong>Detected databases</strong><Badge size="xs" variant="outline">{inspection.databases.length}</Badge></header><div>{inspection.databases.length ? inspection.databases.map((name) => <code key={name}>{name}</code>) : <small>No CREATE DATABASE or USE statement detected.</small>}</div></section><section><header><strong>Detected tables</strong><Badge size="xs" variant="outline">{inspection.tables.length}</Badge></header><div>{inspection.tables.length ? inspection.tables.map((name) => <code key={name}>{name}</code>) : <small>No table declarations detected in the sample.</small>}</div></section></div>
+        <section className="ssh-import-operations"><header><strong>Statement profile</strong><small>Recognized statement families in the inspected sample</small></header><div>{inspection.statementCounts.map((item) => <span key={item.operation}><code>{item.operation}</code><strong>{item.count}</strong></span>)}{!inspection.statementCounts.length && <small>No supported SQL statements detected.</small>}</div></section>
+        <details className="ssh-import-preview"><summary>SQL sample preview</summary><pre>{inspection.preview}</pre></details>
+        <footer><div><strong>Inspection complete</strong><small>Target mapping, conflict policy and dry-run preview are the next stage. Import execution is still unavailable.</small></div><Button size="xs" variant="default" onClick={() => setInspection(null)}>Clear inspection</Button></footer>
+      </div>}
+    </div>}
+    {tab === 'restore' && <div className="ssh-transfer-coming"><IconRestore size={34} /><Text fw={720}>Guarded restore is not enabled yet</Text><Text size="sm" c="dimmed" ta="center" maw={560}>Restore requires target verification, overwrite detection, an exact confirmation, and a complete streamed result.</Text><Badge variant="outline" color="yellow">No database action available</Badge></div>}
     {tab === 'history' && <div className="ssh-transfer-history">{history.map((item) => <article key={item.runId}><IconCheck size={17} /><div><strong>{item.path.split(/[\\/]/).at(-1)}</strong><small>{item.path}</small></div><span>{formatBytes(item.bytes)}</span><time>{new Date(item.finishedAt).toLocaleString()}</time></article>)}{!history.length && <div className="ssh-transfer-coming"><IconHistory size={34} /><Text fw={700}>No exports in this session</Text><Text size="sm" c="dimmed">Completed exports will appear here. Persistent history arrives with backup profiles.</Text></div>}</div>}
     {tab === 'schedules' && <div className="ssh-transfer-coming"><IconArchive size={34} /><Text fw={720}>Schedules follow persistent backup profiles</Text><Text size="sm" c="dimmed" ta="center" maw={560}>Retention, rotation, cron/systemd integration, and failure reporting will be added after restore validation.</Text><Badge variant="outline" color="gray">Not active</Badge></div>}
 
-    {progress && <div className="ssh-transfer-progress" data-terminal={['completed', 'cancelled', 'failed'].includes(progress.phase) || undefined}><header><Group gap={7}>{running && <Loader size={13} />}<strong>{progress.message}</strong></Group><Badge size="xs" color={progress.phase === 'completed' ? 'teal' : progress.phase === 'failed' ? 'red' : progress.phase === 'cancelled' ? 'gray' : 'blue'}>{progress.phase}</Badge></header><Progress value={percent} size={7} animated={progress.phase === 'starting' || progress.phase === 'exporting'} color={progress.phase === 'failed' ? 'red' : 'teal'} /><div><span><small>Progress</small><strong>{percent.toFixed(1)}%</strong></span><span><small>Read from dump</small><strong>{formatBytes(progress.processedBytes)} / ~{formatBytes(progress.estimatedTotalBytes)}</strong></span><span><small>Local output</small><strong>{formatBytes(progress.outputBytes)}</strong></span></div>{!running && <Button size="compact-xs" variant="default" onClick={() => setProgress(null)}>Dismiss</Button>}</div>}
+    {progress && <div className="ssh-transfer-progress" data-terminal={['completed', 'cancelled', 'failed'].includes(progress.phase) || undefined}><header><Group gap={7}>{running && <Loader size={13} />}<strong>{progress.message}</strong></Group><Badge size="xs" color={progress.phase === 'completed' ? 'teal' : progress.phase === 'failed' ? 'red' : progress.phase === 'cancelled' ? 'gray' : 'blue'}>{progress.phase}</Badge></header><Progress className="ssh-transfer-progress-bar" value={percent} size={7} animated={progress.phase === 'starting' || progress.phase === 'exporting'} color={progress.phase === 'failed' ? 'red' : 'teal'} /><div className="ssh-transfer-progress-stats"><span><small>Progress</small><strong>{percent.toFixed(1)}%</strong></span><span><small>Read from dump</small><strong>{formatBytes(progress.processedBytes)} / ~{formatBytes(progress.estimatedTotalBytes)}</strong></span><span><small>Local output</small><strong>{formatBytes(progress.outputBytes)}</strong></span></div>{!running && <Button size="compact-xs" variant="default" onClick={() => setProgress(null)}>Dismiss</Button>}</div>}
   </div>
 }

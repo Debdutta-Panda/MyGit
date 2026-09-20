@@ -90,6 +90,7 @@ const desktopApi: DesktopApi = {
       if (!result.ok) throw new Error(result.error)
       return result.value
     },
+    inspectMysqlImport: () => ipcRenderer.invoke('ssh:inspect-mysql-import'),
     cancelMysqlExport: (runId) => ipcRenderer.invoke('ssh:cancel-mysql-export', runId),
     onMysqlExportProgress: (callback) => {
       const listener = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof callback>[0]): void => callback(progress)

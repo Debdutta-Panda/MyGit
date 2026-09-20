@@ -2,7 +2,7 @@ import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electro
 import { createReadStream, createWriteStream } from 'node:fs'
 import { copyFile as localCopyFile, readFile, stat as localStat, unlink as localUnlink } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
-import { createGzip } from 'node:zlib'
+import { createGunzip, createGzip } from 'node:zlib'
 import { basename as localBasename, posix } from 'node:path'
 import { Client, type ConnectConfig, type SFTPWrapper } from 'ssh2'
 import { createConnection as createMysqlConnection, type Connection as MySqlConnection, type FieldPacket, type ResultSetHeader, type RowDataPacket } from 'mysql2/promise'
@@ -23,6 +23,7 @@ import type {
   SshMySqlExportInput,
   SshMySqlExportProgress,
   SshMySqlExportResult,
+  SshMySqlImportInspection,
   SshMySqlUser,
   SshMySqlUserOperation,
   SshMySqlSchemaColumn,
@@ -795,6 +796,99 @@ const maintainMysqlDatabase = async (id: string, operation: SshMySqlDatabaseMain
 
 const emitMysqlExportProgress = (event: IpcMainInvokeEvent, progress: SshMySqlExportProgress): void => {
   if (!event.sender.isDestroyed()) event.sender.send('ssh:mysql-export-progress', progress)
+}
+
+const sqlImportSample = async (path: string, gzip: boolean): Promise<{ text: string; truncated: boolean }> => {
+  const limit = 16 * 1024 * 1024
+  return await new Promise((resolve, reject) => {
+    const source = createReadStream(path)
+    const input = gzip ? source.pipe(createGunzip()) : source
+    const chunks: Buffer[] = []
+    let bytes = 0
+    let settled = false
+    const finish = (truncated: boolean): void => {
+      if (settled) return
+      settled = true
+      source.destroy()
+      input.destroy()
+      resolve({ text: Buffer.concat(chunks).toString('utf8'), truncated })
+    }
+    input.on('data', (chunk: Buffer) => {
+      const remaining = limit - bytes
+      if (remaining <= 0) return finish(true)
+      chunks.push(chunk.length > remaining ? chunk.subarray(0, remaining) : chunk)
+      bytes += Math.min(chunk.length, remaining)
+      if (chunk.length >= remaining) finish(true)
+    })
+    input.once('end', () => finish(false))
+    input.once('error', (error) => { if (!settled) reject(error) })
+    source.once('error', (error) => { if (!settled) reject(error) })
+  })
+}
+
+const regexCount = (text: string, expression: RegExp): number => [...text.matchAll(expression)].length
+const sqlNames = (text: string, expression: RegExp): string[] => [...new Set(
+  [...text.matchAll(expression)].map((match) => (match[1] ?? match[2] ?? '').replaceAll('`', '')).filter(Boolean),
+)].slice(0, 500)
+
+const inspectMysqlImport = async (event: IpcMainInvokeEvent): Promise<SshMySqlImportInspection | null> => {
+  const owner = BrowserWindow.fromWebContents(event.sender)
+  const selection = await dialog.showOpenDialog(owner ?? undefined, {
+    title: 'Inspect MySQL import file',
+    properties: ['openFile'],
+    filters: [
+      { name: 'MySQL dump', extensions: ['sql', 'gz'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  })
+  const path = selection.filePaths[0]
+  if (selection.canceled || !path) return null
+  const details = await localStat(path)
+  if (!details.isFile()) throw new Error('Choose a regular SQL dump file.')
+  const gzip = path.toLowerCase().endsWith('.gz')
+  const sample = await sqlImportSample(path, gzip)
+  if (sample.text.includes('\u0000')) throw new Error('The selected file does not appear to be a text SQL dump.')
+  const normalized = sample.text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*--.*$/gm, ' ')
+  const operations: Array<[string, RegExp]> = [
+    ['CREATE TABLE', /\bCREATE\s+(?:TEMPORARY\s+)?TABLE\b/gi],
+    ['INSERT', /\bINSERT\s+INTO\b/gi],
+    ['ALTER TABLE', /\bALTER\s+TABLE\b/gi],
+    ['CREATE VIEW', /\bCREATE\s+(?:OR\s+REPLACE\s+)?VIEW\b/gi],
+    ['CREATE ROUTINE', /\bCREATE\s+(?:DEFINER\s*=\s*[^\s]+\s+)?(?:PROCEDURE|FUNCTION)\b/gi],
+    ['CREATE TRIGGER', /\bCREATE\s+(?:DEFINER\s*=\s*[^\s]+\s+)?TRIGGER\b/gi],
+    ['DROP', /\bDROP\s+(?:DATABASE|SCHEMA|TABLE|VIEW|USER|PROCEDURE|FUNCTION|TRIGGER|EVENT)\b/gi],
+    ['TRUNCATE', /\bTRUNCATE\s+(?:TABLE\s+)?/gi],
+    ['DELETE', /\bDELETE\s+FROM\b/gi],
+    ['CREATE USER', /\bCREATE\s+USER\b/gi],
+    ['GRANT', /\bGRANT\b[\s\S]{0,200}\bON\b/gi],
+  ]
+  const statementCounts = operations.map(([operation, expression]) => ({
+    operation,
+    count: regexCount(normalized, expression),
+  })).filter((item) => item.count > 0)
+  const countFor = (operation: string): number => statementCounts.find((item) => item.operation === operation)?.count ?? 0
+  const warnings = [
+    countFor('DROP') ? { severity: 'danger' as const, operation: 'DROP', count: countFor('DROP'), message: 'May permanently remove existing databases, tables, routines, users, or other objects.' } : null,
+    countFor('TRUNCATE') ? { severity: 'danger' as const, operation: 'TRUNCATE', count: countFor('TRUNCATE'), message: 'Removes every row from a table and is normally not reversible.' } : null,
+    countFor('DELETE') ? { severity: 'warning' as const, operation: 'DELETE', count: countFor('DELETE'), message: 'May remove rows from an existing target.' } : null,
+    countFor('CREATE USER') || countFor('GRANT') ? { severity: 'warning' as const, operation: 'ACCOUNTS / GRANTS', count: countFor('CREATE USER') + countFor('GRANT'), message: 'Contains server-level account or privilege changes.' } : null,
+    /\bDEFINER\s*=/i.test(normalized) ? { severity: 'warning' as const, operation: 'DEFINER', count: regexCount(normalized, /\bDEFINER\s*=/gi), message: 'Object definers may not exist or may grant unexpected execution context on the target.' } : null,
+  ].filter((item): item is NonNullable<typeof item> => item !== null)
+  const databases = sqlNames(normalized, /\b(?:CREATE\s+(?:DATABASE|SCHEMA)(?:\s+IF\s+NOT\s+EXISTS)?|USE)\s+(?:`([^`]+)`|([a-zA-Z0-9_$-]+))/gi)
+  const tables = sqlNames(normalized, /\b(?:CREATE\s+(?:TEMPORARY\s+)?TABLE(?:\s+IF\s+NOT\s+EXISTS)?|INSERT\s+INTO|ALTER\s+TABLE)\s+(?:`[^`]+`\.)?(?:`([^`]+)`|([a-zA-Z0-9_$-]+))/gi)
+  return {
+    path,
+    name: localBasename(path),
+    fileBytes: details.size,
+    compression: gzip ? 'gzip' : 'none',
+    sampledBytes: Buffer.byteLength(sample.text),
+    sampleTruncated: sample.truncated,
+    databases,
+    tables,
+    statementCounts,
+    warnings,
+    preview: sample.text.slice(0, 12_000),
+  }
 }
 
 const mysqlOptionValue = (value: string): string => `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r/g, '\\r').replace(/\n/g, '\\n')}"`
@@ -2159,6 +2253,7 @@ export const registerSshWorkspaceHandlers = (): void => {
     catch (error) { return { ok: false as const, error: error instanceof Error ? error.message : String(error) } }
   })
   ipcMain.handle('ssh:cancel-mysql-export', (_event, runId: string) => cancelMysqlExport(runId))
+  ipcMain.handle('ssh:inspect-mysql-import', (event) => inspectMysqlImport(event))
   ipcMain.handle('ssh:mysql-users', (_event, id: string) => mysqlUsers(id))
   ipcMain.handle('ssh:manage-mysql-user', (_event, id: string, operation: SshMySqlUserOperation) =>
     manageMysqlUser(id, operation))
