@@ -291,6 +291,8 @@ export interface SshAccessChangeInput {
   owner: string | null
   group: string | null
   permissions: string | null
+  directoryPermissions: string | null
+  filePermissions: string | null
   recursive: boolean
   crossFilesystem: boolean
   acl: SshAccessAclEntry[]

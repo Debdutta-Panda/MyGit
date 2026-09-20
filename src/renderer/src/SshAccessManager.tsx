@@ -9,12 +9,18 @@ const bitLetters = ['r', 'w', 'x'] as const
 const modeFromRows = (rows: number[]): string => `0${rows.join('')}`
 const rowsFromMode = (mode: string): number[] => mode.slice(-3).split('').map((digit) => Number(digit) || 0)
 const aclPermissions = (value: number): string => bits.map((bit, index) => value & bit ? bitLetters[index] : '-').join('')
+const permissionPresets = [
+  { name: 'Shared web app', hint: 'Team writes; new items inherit group', directory: '2775', file: '0664' },
+  { name: 'Public read-only', hint: 'Owner writes; everyone can read', directory: '0755', file: '0644' },
+  { name: 'Private', hint: 'Only the owner has access', directory: '0700', file: '0600' },
+  { name: 'Group private', hint: 'Team reads; others have no access', directory: '2750', file: '0640' },
+] as const
 const shellQuote = (value: string): string => `'${value.replace(/'/g, `'"'"'`)}'`
 
-const commandFor = (input: SshAccessChangeInput, command: string, directoriesOnly = false): string => {
+const commandFor = (input: SshAccessChangeInput, command: string, targetType: 'directory' | 'file' | null = null): string => {
   const path = shellQuote(input.path)
   if (!input.recursive) return `${command} -- ${path}`
-  return `find ${path}${input.crossFilesystem ? '' : ' -xdev'}${directoriesOnly ? ' -type d' : ''} -exec ${command} -- '{}' +`
+  return `find ${path}${input.crossFilesystem ? '' : ' -xdev'}${targetType ? ` -type ${targetType === 'directory' ? 'd' : 'f'}` : ''} -exec ${command} -- '{}' +`
 }
 const commandsFromInput = (input: SshAccessChangeInput): string => {
   const commands: string[] = []
@@ -22,10 +28,12 @@ const commandsFromInput = (input: SshAccessChangeInput): string => {
   else if (input.owner) commands.push(commandFor(input, `chown -h ${shellQuote(input.owner)}`))
   else if (input.group) commands.push(commandFor(input, `chgrp -h ${shellQuote(input.group)}`))
   if (input.permissions) commands.push(commandFor(input, `chmod ${input.permissions}`))
+  if (input.directoryPermissions) commands.push(commandFor(input, `chmod ${input.directoryPermissions}`, 'directory'))
+  if (input.filePermissions) commands.push(commandFor(input, `chmod ${input.filePermissions}`, 'file'))
   for (const entry of input.acl) {
     const subject = `${entry.kind === 'user' ? 'u' : 'g'}:${entry.name}`
     const spec = `${entry.default ? 'd:' : ''}${subject}${entry.permissions === null ? '' : `:${entry.permissions}`}`
-    commands.push(commandFor(input, `setfacl ${entry.permissions === null ? '-x' : '-m'} ${shellQuote(spec)}`, entry.default))
+    commands.push(commandFor(input, `setfacl ${entry.permissions === null ? '-x' : '-m'} ${shellQuote(spec)}`, entry.default ? 'directory' : null))
   }
   return commands.length ? commands.join('\n')
     : `# MyRepos access ${JSON.stringify({ path: input.path, recursive: input.recursive, crossFilesystem: input.crossFilesystem })}`
@@ -58,6 +66,7 @@ interface ParsedCommand {
   path: string
   recursive: boolean
   crossFilesystem: boolean
+  targetType: 'all' | 'directory' | 'file'
   owner?: string
   group?: string
   permissions?: string
@@ -75,7 +84,7 @@ const parseBasicCommand = (tokens: string[], forced?: Pick<ParsedCommand, 'path'
   })
   const path = forced?.path ?? args.pop()
   if (!path?.startsWith('/')) throw new Error(`${command} requires one absolute target path.`)
-  const base = { path, recursive, crossFilesystem: forced?.crossFilesystem ?? recursive }
+  const base = { path, recursive, crossFilesystem: forced?.crossFilesystem ?? recursive, targetType: 'all' as const }
   if (command === 'chmod') {
     const permissions = args.shift()
     if (!permissions || !/^[0-7]{3,4}$/.test(permissions) || args.length) throw new Error('Supported chmod form: chmod [-R] 0755 /absolute/path')
@@ -113,7 +122,8 @@ const parseAccessCommands = (source: string): SshAccessChangeInput => {
       const parsed = JSON.parse(metadata.slice('# MyRepos access '.length)) as { path?: unknown; recursive?: unknown; crossFilesystem?: unknown }
       if (typeof parsed.path !== 'string' || !parsed.path.startsWith('/')) throw new Error()
       return {
-        path: parsed.path, owner: null, group: null, permissions: null, acl: [],
+        path: parsed.path, owner: null, group: null, permissions: null,
+        directoryPermissions: null, filePermissions: null, acl: [],
         recursive: Boolean(parsed.recursive), crossFilesystem: Boolean(parsed.crossFilesystem),
       }
     } catch {
@@ -129,18 +139,21 @@ const parseAccessCommands = (source: string): SshAccessChangeInput => {
     }
     const path = tokens[1]
     const options = tokens.slice(2, execIndex)
-    if (!path.startsWith('/') || options.some((option) => !['-xdev', '-type', 'd'].includes(option))) {
+    if (!path.startsWith('/') || options.some((option) => !['-xdev', '-type', 'd', 'f'].includes(option))) {
       throw new Error('The find command contains unsupported path or traversal options.')
     }
+    const typeIndex = options.indexOf('-type')
+    const targetType = typeIndex < 0 ? 'all' : options[typeIndex + 1] === 'd' ? 'directory' : options[typeIndex + 1] === 'f' ? 'file' : null
+    if (!targetType || (typeIndex >= 0 && typeIndex !== options.length - 2)) throw new Error('Only -type d or -type f is supported in generated find commands.')
     const inner = tokens.slice(execIndex + 1, -2)
-    return parseBasicCommand([...inner, path], { path, recursive: true, crossFilesystem: !options.includes('-xdev') })
+    return { ...parseBasicCommand(inner, { path, recursive: true, crossFilesystem: !options.includes('-xdev') }), targetType }
   })
   const first = parsed[0]
   if (parsed.some((item) => item.path !== first.path || item.recursive !== first.recursive || item.crossFilesystem !== first.crossFilesystem)) {
     throw new Error('All commands must use the same target path and recursive scope.')
   }
   const result: SshAccessChangeInput = {
-    path: first.path, owner: null, group: null, permissions: null,
+    path: first.path, owner: null, group: null, permissions: null, directoryPermissions: null, filePermissions: null,
     recursive: first.recursive, crossFilesystem: first.crossFilesystem, acl: [],
   }
   for (const item of parsed) {
@@ -153,10 +166,17 @@ const parseAccessCommands = (source: string): SshAccessChangeInput => {
       result.group = item.group
     }
     if (item.permissions !== undefined) {
-      if (result.permissions !== null) throw new Error('Only one chmod operation is supported.')
-      result.permissions = item.permissions
+      const key = item.targetType === 'directory' ? 'directoryPermissions' : item.targetType === 'file' ? 'filePermissions' : 'permissions'
+      if (result[key] !== null) throw new Error(`Only one chmod operation per target type is supported.`)
+      result[key] = item.permissions
     }
     if (item.acl) result.acl.push(item.acl)
+  }
+  if (result.permissions && (result.directoryPermissions || result.filePermissions)) {
+    throw new Error('Do not mix a whole-tree chmod with separate folder/file chmod rules.')
+  }
+  if ((result.directoryPermissions || result.filePermissions) && !result.recursive) {
+    throw new Error('Separate folder/file chmod rules require recursive scope.')
   }
   return result
 }
@@ -175,6 +195,8 @@ export function SshAccessManager({ opened, onClose, connection, catalog, default
   const [owner, setOwner] = useState<string | null>(null)
   const [group, setGroup] = useState<string | null>(null)
   const [mode, setMode] = useState<string | null>(null)
+  const [directoryMode, setDirectoryMode] = useState<string | null>(null)
+  const [fileMode, setFileMode] = useState<string | null>(null)
   const [modeRows, setModeRows] = useState([7, 5, 5])
   const [recursive, setRecursive] = useState(false)
   const [crossFilesystem, setCrossFilesystem] = useState(false)
@@ -187,7 +209,8 @@ export function SshAccessManager({ opened, onClose, connection, catalog, default
   const [browser, setBrowser] = useState<SshDirectoryListing | null>(null)
   const [browserOpen, setBrowserOpen] = useState(false)
   const [browserLoading, setBrowserLoading] = useState(false)
-  const [editorMode, setEditorMode] = useState<'gui' | 'command'>('gui')
+  const [editorMode, setEditorMode] = useState<'simple' | 'gui' | 'command'>('simple')
+  const [selectedRecipe, setSelectedRecipe] = useState<'managed' | 'private' | 'shared' | null>(null)
   const [commandText, setCommandText] = useState('')
   const [commandError, setCommandError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
@@ -198,6 +221,8 @@ export function SshAccessManager({ opened, onClose, connection, catalog, default
     setOwner(null)
     setGroup(null)
     setMode(null)
+    setDirectoryMode(null)
+    setFileMode(null)
     setModeRows([7, 5, 5])
     setRecursive(false)
     setCrossFilesystem(false)
@@ -208,9 +233,11 @@ export function SshAccessManager({ opened, onClose, connection, catalog, default
     setSuccess(null)
     setBrowser(null)
     setBrowserOpen(false)
-    setEditorMode('gui')
+    setEditorMode('simple')
+    setSelectedRecipe(null)
     setCommandText(commandsFromInput({
       path: defaultPath, owner: null, group: null, permissions: null,
+      directoryPermissions: null, filePermissions: null,
       recursive: false, crossFilesystem: false, acl: [],
     }))
     setCommandError(null)
@@ -218,15 +245,16 @@ export function SshAccessManager({ opened, onClose, connection, catalog, default
   }, [opened, defaultPath, defaultUser])
 
   const input = useMemo<SshAccessChangeInput>(() => ({
-    path: path.trim(), owner, group, permissions: mode, recursive, crossFilesystem, acl,
-  }), [path, owner, group, mode, recursive, crossFilesystem, acl])
+    path: path.trim(), owner, group, permissions: mode, directoryPermissions: directoryMode,
+    filePermissions: fileMode, recursive, crossFilesystem, acl,
+  }), [path, owner, group, mode, directoryMode, fileMode, recursive, crossFilesystem, acl])
   useEffect(() => {
     setPreview(null)
     setConfirmation('')
     setSuccess(null)
   }, [input])
   useEffect(() => {
-    if (editorMode === 'gui') {
+    if (editorMode !== 'command') {
       setCommandText(commandsFromInput(input))
       setCommandError(null)
     }
@@ -249,6 +277,8 @@ export function SshAccessManager({ opened, onClose, connection, catalog, default
       setOwner(parsed.owner)
       setGroup(parsed.group)
       setMode(parsed.permissions)
+      setDirectoryMode(parsed.directoryPermissions)
+      setFileMode(parsed.filePermissions)
       if (parsed.permissions) setModeRows(rowsFromMode(parsed.permissions))
       setRecursive(parsed.recursive)
       setCrossFilesystem(parsed.crossFilesystem)
@@ -267,7 +297,7 @@ export function SshAccessManager({ opened, onClose, connection, catalog, default
       setEditorMode('command')
       return
     }
-    if (acceptCommands(commandText)) setEditorMode('gui')
+    if (acceptCommands(commandText)) setEditorMode(next as 'simple' | 'gui')
   }
   const copyCommands = async (): Promise<void> => {
     await navigator.clipboard.writeText(commandText)
@@ -323,6 +353,38 @@ export function SshAccessManager({ opened, onClose, connection, catalog, default
     setModeRows(next)
     setMode(modeFromRows(next))
   }
+  const permissionPolicy = directoryMode || fileMode ? 'split' : mode ? 'same' : 'keep'
+  const setPermissionPolicy = (policy: string): void => {
+    if (policy === 'keep') {
+      setMode(null); setDirectoryMode(null); setFileMode(null)
+    } else if (policy === 'same') {
+      setMode(mode ?? directoryMode ?? fileMode ?? modeFromRows(modeRows))
+      setDirectoryMode(null); setFileMode(null)
+    } else {
+      setMode(null)
+      setDirectoryMode(directoryMode ?? '0755')
+      setFileMode(fileMode ?? '0644')
+      setRecursive(true)
+    }
+  }
+  const applyPermissionPreset = (directory: string, file: string): void => {
+    setMode(null)
+    setDirectoryMode(directory)
+    setFileMode(file)
+    setRecursive(true)
+  }
+  const applyRecipe = (recipe: 'managed' | 'private' | 'shared'): void => {
+    const user = catalog.users.find((item) => item.username === defaultUser)
+    setSelectedRecipe(recipe)
+    setOwner(defaultUser)
+    setGroup(user?.primaryGroup ?? null)
+    setMode(null)
+    setDirectoryMode(recipe === 'private' ? '0700' : recipe === 'shared' ? '2775' : '0755')
+    setFileMode(recipe === 'private' ? '0600' : recipe === 'shared' ? '0664' : '0644')
+    setRecursive(true)
+    setCrossFilesystem(false)
+    setAcl([])
+  }
   const addAcl = (kind: 'user' | 'group'): void => {
     const name = kind === 'user' ? defaultUser : (catalog.users.find((user) => user.username === defaultUser)?.primaryGroup ?? catalog.groups[0]?.name ?? '')
     if (!name || acl.some((entry) => entry.kind === kind && entry.name === name && !entry.default)) return
@@ -367,10 +429,11 @@ export function SshAccessManager({ opened, onClose, connection, catalog, default
 
         <div className="ssh-access-editor-switch">
           <SegmentedControl size="xs" value={editorMode} onChange={changeEditorMode} data={[
-            { value: 'gui', label: <span><IconAdjustments size={13} /> GUI</span> },
+            { value: 'simple', label: <span><IconCheck size={13} /> Simple</span> },
+            { value: 'gui', label: <span><IconAdjustments size={13} /> Advanced</span> },
             { value: 'command', label: <span><IconCode size={13} /> Command</span> },
           ]} />
-          <span>Both views edit the same pending operation. Switching never executes a command.</span>
+          <span>Choose an outcome here. Advanced and Command show the same pending changes in more detail.</span>
         </div>
 
         {editorMode === 'command' ? (
@@ -400,6 +463,52 @@ export function SshAccessManager({ opened, onClose, connection, catalog, default
               <span><b>Execution</b> only through Preview and Apply; this editor never runs raw shell text</span>
             </div>
           </section>
+        ) : editorMode === 'simple' ? (
+          <section className="ssh-access-section ssh-access-simple">
+            <header><div><strong>What should this folder become?</strong><span>Choose the result you want. Nothing changes until you preview and apply.</span></div></header>
+            <div className="ssh-access-recipes">
+              <button type="button" data-active={selectedRecipe === 'managed' || undefined} onClick={() => applyRecipe('managed')}>
+                <IconUser size={20} /><strong>User-managed</strong>
+                <span>{defaultUser} can manage it; other users can read it.</span>
+                <small>Folders 0755 - Files 0644</small>
+              </button>
+              <button type="button" data-active={selectedRecipe === 'private' || undefined} onClick={() => applyRecipe('private')}>
+                <IconShieldLock size={20} /><strong>Private</strong>
+                <span>Only {defaultUser} can open or change its contents.</span>
+                <small>Folders 0700 - Files 0600</small>
+              </button>
+              <button type="button" data-active={selectedRecipe === 'shared' || undefined} onClick={() => applyRecipe('shared')}>
+                <IconUsersGroup size={20} /><strong>Shared website/team</strong>
+                <span>The owner and selected group can work together.</span>
+                <small>Folders 2775 - Files 0664</small>
+              </button>
+              <button type="button" onClick={() => setEditorMode('gui')}>
+                <IconAdjustments size={20} /><strong>Something else</strong>
+                <span>Build a custom ownership, permission and ACL policy.</span>
+                <small>Open advanced controls</small>
+              </button>
+            </div>
+            {selectedRecipe ? <div className="ssh-access-simple-config">
+              <div className="ssh-access-simple-fields">
+                <Select searchable label="Who manages it?" description="The owner of this folder and its current contents."
+                  data={catalog.users.map((user) => user.username)} value={owner} onChange={setOwner} />
+                <Select searchable label={selectedRecipe === 'shared' ? 'Which team can edit it?' : 'Primary group'}
+                  description={selectedRecipe === 'shared' ? 'Choose the web-server or project group.' : 'Used as the folder group.'}
+                  data={catalog.groups.map((item) => item.name)} value={group} onChange={setGroup} />
+                <Switch checked disabled label="Include everything already inside"
+                  description="Required so folders and ordinary files receive the correct permissions." />
+              </div>
+              <div className="ssh-access-simple-summary">
+                <strong>What Preview will check</strong>
+                <span><IconUser size={14} /><b>Owner</b><em>{owner ?? 'unchanged'}{group ? ` : ${group}` : ''}</em></span>
+                <span><IconFolder size={14} /><b>Folders</b><em>{directoryMode} - {selectedRecipe === 'private' ? 'owner only' : selectedRecipe === 'shared' ? 'owner and team can edit' : 'owner edits, others browse'}</em></span>
+                <span><IconCode size={14} /><b>Files</b><em>{fileMode} - {selectedRecipe === 'private' ? 'owner only' : selectedRecipe === 'shared' ? 'owner and team can edit' : 'owner edits, others read'}</em></span>
+                <span><IconRefresh size={14} /><b>Scope</b><em>this folder and all current contents</em></span>
+              </div>
+            </div> : <div className="ssh-access-simple-empty">
+              <IconChevronRight size={18} /><span>Select one of the outcomes above to continue.</span>
+            </div>}
+          </section>
         ) : <>
         <div className="ssh-access-columns">
           <section className="ssh-access-section">
@@ -413,9 +522,11 @@ export function SshAccessManager({ opened, onClose, connection, catalog, default
           </section>
 
           <section className="ssh-access-section">
-            <header><strong>Unix permissions</strong><Switch size="xs" label="Change mode" checked={mode !== null}
-              onChange={(event) => setMode(event.currentTarget.checked ? modeFromRows(modeRows) : null)} /></header>
-            <div className="ssh-access-mode" data-disabled={mode === null || undefined}>
+            <header><strong>Unix permissions</strong><span>Use one mode or treat folders and files correctly.</span></header>
+            <SegmentedControl fullWidth size="xs" value={permissionPolicy} onChange={setPermissionPolicy} data={[
+              { value: 'keep', label: 'Keep' }, { value: 'same', label: 'Same mode' }, { value: 'split', label: 'Folders / files' },
+            ]} />
+            {permissionPolicy === 'same' && <div className="ssh-access-mode">
               <div /><small>Read</small><small>Write</small><small>Execute</small><small>Sum</small>
               {['Owner', 'Group', 'Others'].map((label, row) => (
                 <div className="ssh-access-mode-row" key={label}>
@@ -431,7 +542,26 @@ export function SshAccessManager({ opened, onClose, connection, catalog, default
                   setMode(value)
                   if (/^[0-7]{3,4}$/.test(value)) setModeRows(rowsFromMode(value))
                 }} />
-            </div>
+            </div>}
+            {permissionPolicy === 'split' && <div className="ssh-access-split-modes">
+              <label><span><IconFolder size={14} /> Folders <small>Need execute to enter</small></span>
+                <TextInput size="xs" value={directoryMode ?? ''} aria-label="Folder permissions"
+                  onChange={(event) => setDirectoryMode(event.currentTarget.value)} /></label>
+              <label><span><IconCode size={14} /> Files <small>Usually not executable</small></span>
+                <TextInput size="xs" value={fileMode ?? ''} aria-label="File permissions"
+                  onChange={(event) => setFileMode(event.currentTarget.value)} /></label>
+            </div>}
+            {permissionPolicy === 'split' && <div className="ssh-access-presets">
+              {permissionPresets.map((preset) => <Tooltip key={preset.name} label={preset.hint}>
+                <button type="button" data-active={directoryMode === preset.directory && fileMode === preset.file || undefined}
+                  onClick={() => applyPermissionPreset(preset.directory, preset.file)}>
+                  <strong>{preset.name}</strong><span>{preset.directory} / {preset.file}</span>
+                </button>
+              </Tooltip>)}
+            </div>}
+            {permissionPolicy === 'keep' && <div className="ssh-access-permission-empty">
+              Existing modes stay unchanged. Ownership and ACL steps can still be composed below.
+            </div>}
           </section>
         </div>
 

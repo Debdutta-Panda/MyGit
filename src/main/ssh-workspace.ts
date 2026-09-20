@@ -460,11 +460,18 @@ const normalizedAccessInput = (input: SshAccessChangeInput): SshAccessChangeInpu
     if (keys.has(key)) throw new Error('The same ACL subject cannot appear more than once.')
     keys.add(key)
   }
+  const permissions = safeAccessMode(input.permissions)
+  const directoryPermissions = safeAccessMode(input.directoryPermissions)
+  const filePermissions = safeAccessMode(input.filePermissions)
+  if (permissions && (directoryPermissions || filePermissions)) throw new Error('Choose either one shared mode or separate folder/file modes.')
+  if ((directoryPermissions || filePermissions) && !input.recursive) throw new Error('Separate folder/file modes require descendant scope.')
   return {
     path: safeAccessPath(input.path),
     owner: input.owner ? safeAccountName(input.owner, 'Owner') : null,
     group: input.group ? safeAccountName(input.group, 'Group') : null,
-    permissions: safeAccessMode(input.permissions),
+    permissions,
+    directoryPermissions,
+    filePermissions,
     recursive: Boolean(input.recursive),
     crossFilesystem: Boolean(input.crossFilesystem),
     acl,
@@ -530,7 +537,7 @@ const accessRisk = (input: SshAccessChangeInput, snapshot: AccessSnapshot): Pick
   if (input.crossFilesystem) warnings.push('Traversal may cross mounted filesystems.')
   if (snapshot.type === 'link') warnings.push('The target is a symbolic link. Ownership applies to the link; chmod is unavailable.')
   if (input.acl.length && !snapshot.aclSupported) warnings.push('POSIX ACL tools are not installed on this server.')
-  if (!input.owner && !input.group && !input.permissions && !input.acl.length) warnings.push('No changes have been selected.')
+  if (!input.owner && !input.group && !input.permissions && !input.directoryPermissions && !input.filePermissions && !input.acl.length) warnings.push('No changes have been selected.')
   return {
     risk: blocked ? 'blocked' : dangerous ? 'dangerous' : input.recursive || input.acl.length ? 'elevated' : 'normal',
     warnings,
@@ -542,6 +549,8 @@ const accessOperations = (input: SshAccessChangeInput): string[] => {
   const operations: string[] = []
   if (input.owner || input.group) operations.push(`Change ownership ${scope} to ${input.owner ?? '(keep owner)'}:${input.group ?? '(keep group)'}`)
   if (input.permissions) operations.push(`Set mode ${input.permissions} ${scope}`)
+  if (input.directoryPermissions) operations.push(`Set directory mode ${input.directoryPermissions} recursively`)
+  if (input.filePermissions) operations.push(`Set file mode ${input.filePermissions} recursively`)
   for (const entry of input.acl) operations.push(`${entry.permissions === null ? 'Remove' : 'Set'} ${entry.default ? 'default ' : ''}${entry.kind} ACL for ${entry.name}${entry.permissions ? ` to ${entry.permissions}` : ''}`)
   return operations
 }
@@ -574,20 +583,22 @@ const applyAccess = async (
   const risk = accessRisk(input, snapshot)
   if (risk.risk === 'blocked') throw new Error(risk.warnings[0] || 'This path is protected.')
   if (risk.confirmationPhrase && confirmation !== risk.confirmationPhrase) throw new Error('The confirmation phrase does not match.')
-  if (!input.owner && !input.group && !input.permissions && !input.acl.length) throw new Error('No access changes were selected.')
+  if (!input.owner && !input.group && !input.permissions && !input.directoryPermissions && !input.filePermissions && !input.acl.length) throw new Error('No access changes were selected.')
   const privilege = await accountPrivilege(client)
   if (!privilege.canManage) throw new Error('Root or passwordless sudo is required for access changes.')
   const path = shellQuote(input.path)
   const findFlags = input.crossFilesystem ? '' : ' -xdev'
   const commands: string[] = []
-  const each = (command: string, directoriesOnly = false): string => input.recursive
-    ? `find ${path}${findFlags}${directoriesOnly ? ' -type d' : ''} -exec ${command} -- {} +`
+  const each = (command: string, targetType: 'directory' | 'file' | null = null): string => input.recursive
+    ? `find ${path}${findFlags}${targetType ? ` -type ${targetType === 'directory' ? 'd' : 'f'}` : ''} -exec ${command} -- {} +`
     : `${command} -- ${path}`
   if (input.owner || input.group) commands.push(each(`chown -h ${shellQuote(`${input.owner ?? ''}:${input.group ?? ''}`)}`))
   if (input.permissions) {
     if (snapshot.type === 'link') throw new Error('Symbolic-link permissions cannot be changed safely.')
     commands.push(each(`chmod ${input.permissions}`))
   }
+  if (input.directoryPermissions) commands.push(each(`chmod ${input.directoryPermissions}`, 'directory'))
+  if (input.filePermissions) commands.push(each(`chmod ${input.filePermissions}`, 'file'))
   for (const entry of input.acl) {
     if (!snapshot.aclSupported) throw new Error('POSIX ACL tools are not installed on this server.')
     if (entry.default && snapshot.type !== 'directory') throw new Error('Default ACLs can only be applied to directories.')
@@ -595,7 +606,7 @@ const applyAccess = async (
     const command = entry.permissions === null
       ? `setfacl -x ${shellQuote(`${entry.default ? 'd:' : ''}${subject}`)}`
       : `setfacl -m ${shellQuote(`${entry.default ? 'd:' : ''}${subject}:${entry.permissions}`)}`
-    commands.push(each(command, entry.default))
+    commands.push(each(command, entry.default ? 'directory' : null))
   }
   await privilegedAccountCommand(client, commands.join(' && '))
   return { path: input.path, affectedCount: snapshot.affectedCount, appliedAt: new Date().toISOString() }
