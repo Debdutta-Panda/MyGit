@@ -18,6 +18,8 @@ import {
   IconActivity,
   IconArrowsDownUp,
   IconArrowLeft,
+  IconChevronLeft,
+  IconChevronRight,
   IconCpu,
   IconCircleCheck,
   IconDatabase,
@@ -34,8 +36,9 @@ import type {
   SshServerOverview,
 } from '../../shared/desktop-api'
 import { SshRemoteFileManager } from './SshRemoteFileManager'
+import { SshUsersGroupsManager } from './SshUsersGroupsManager'
 
-type WorkspaceTab = 'overview' | 'files' | 'services' | 'databases' | 'logs'
+type WorkspaceTab = 'overview' | 'files' | 'accounts' | 'services' | 'databases' | 'logs'
 
 const formatBytes = (value: number | null): string => {
   if (value === null) return 'Unavailable'
@@ -96,6 +99,8 @@ export function SshServerWorkspace({
   const [error, setError] = useState<string | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [history, setHistory] = useState<MetricSample[]>([])
+  const tabsRef = useRef<HTMLElement>(null)
+  const [tabEdges, setTabEdges] = useState({ left: true, right: true })
   const overviewRequestRef = useRef(false)
   const hasOverviewRef = useRef(false)
 
@@ -176,8 +181,31 @@ export function SshServerWorkspace({
   const healthLevel = healthWarnings.some((warning) => warning.level === 'critical')
     ? 'critical' : healthWarnings.length ? 'warning' : 'healthy'
 
+  const updateTabEdges = useCallback((): void => {
+    const tabs = tabsRef.current
+    if (!tabs) return
+    setTabEdges({
+      left: tabs.scrollLeft <= 1,
+      right: tabs.scrollLeft + tabs.clientWidth >= tabs.scrollWidth - 1,
+    })
+  }, [])
+
+  useEffect(() => {
+    const tabs = tabsRef.current
+    if (!tabs) return
+    const observer = new ResizeObserver(updateTabEdges)
+    observer.observe(tabs)
+    updateTabEdges()
+    return () => observer.disconnect()
+  }, [updateTabEdges])
+
+  const scrollTabs = (direction: -1 | 1): void => {
+    tabsRef.current?.scrollBy({ left: direction * 240, behavior: 'smooth' })
+    window.setTimeout(updateTabEdges, 280)
+  }
+
   return (
-    <div className="ssh-workspace">
+    <div className="ssh-workspace" data-tab={tab}>
       <header className="ssh-workspace-header">
         <Group gap="sm" wrap="nowrap">
           <Tooltip label="Back to connections">
@@ -194,6 +222,34 @@ export function SshServerWorkspace({
             <Text size="xs" c="dimmed" truncate>{connection.username}@{connection.host}:{connection.port}</Text>
           </div>
         </Group>
+        <div className="ssh-workspace-tab-strip">
+          <Tooltip label="Earlier sections">
+            <ActionIcon size="sm" variant="subtle" color="gray" disabled={tabEdges.left}
+              onClick={() => scrollTabs(-1)} aria-label="Scroll server tabs left">
+              <IconChevronLeft size={15} />
+            </ActionIcon>
+          </Tooltip>
+          <nav ref={tabsRef} className="ssh-workspace-tabs" aria-label="Server tools" onScroll={updateTabEdges}>
+            {([
+              ['overview', 'Overview'],
+              ['files', 'Files'],
+              ['accounts', 'Users & Groups'],
+              ['services', 'Services'],
+              ['databases', 'Databases'],
+              ['logs', 'Logs'],
+            ] as Array<[WorkspaceTab, string]>).map(([value, label]) => (
+              <button type="button" key={value} data-active={tab === value || undefined} onClick={() => setTab(value)}>
+                {label}
+              </button>
+            ))}
+          </nav>
+          <Tooltip label="Later sections">
+            <ActionIcon size="sm" variant="subtle" color="gray" disabled={tabEdges.right}
+              onClick={() => scrollTabs(1)} aria-label="Scroll server tabs right">
+              <IconChevronRight size={15} />
+            </ActionIcon>
+          </Tooltip>
+        </div>
         <Group gap={6} wrap="nowrap">
           {overview && (
             <Text size="xs" c="dimmed" className="ssh-dashboard-updated">
@@ -219,20 +275,6 @@ export function SshServerWorkspace({
           </Button>
         </Group>
       </header>
-
-      <nav className="ssh-workspace-tabs" aria-label="Server tools">
-        {([
-          ['overview', 'Overview'],
-          ['files', 'Files'],
-          ['services', 'Services'],
-          ['databases', 'Databases'],
-          ['logs', 'Logs'],
-        ] as Array<[WorkspaceTab, string]>).map(([value, label]) => (
-          <button type="button" key={value} data-active={tab === value || undefined} onClick={() => setTab(value)}>
-            {label}
-          </button>
-        ))}
-      </nav>
 
       {error && (
         <Alert color="red" icon={<IconAlertCircle size={17} />} withCloseButton onClose={() => setError(null)}>
@@ -353,6 +395,10 @@ export function SshServerWorkspace({
 
       {tab === 'files' && (
         <SshRemoteFileManager connection={connection} />
+      )}
+
+      {tab === 'accounts' && (
+        <SshUsersGroupsManager connection={connection} />
       )}
 
       {(tab === 'services' || tab === 'databases' || tab === 'logs') && (

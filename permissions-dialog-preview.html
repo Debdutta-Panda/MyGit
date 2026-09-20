@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MyRepos - Permissions dialog concept</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --page: #090d11;
+      --panel: #161d24;
+      --panel-2: #111820;
+      --line: #2d3a47;
+      --muted: #8695a5;
+      --text: #e8eef3;
+      --teal: #12b886;
+      --teal-soft: rgba(18, 184, 134, .13);
+      --yellow: #fcc419;
+      --yellow-soft: rgba(252, 196, 25, .1);
+      --red: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at 50% 25%, rgba(21, 78, 64, .16), transparent 34%),
+        var(--page);
+      color: var(--text);
+      font: 13px/1.4 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    button, input { font: inherit; }
+    .modal {
+      width: min(520px, calc(100vw - 32px));
+      overflow: hidden;
+      border: 1px solid #344250;
+      border-radius: 12px;
+      background: var(--panel);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, .58);
+    }
+    .titlebar {
+      min-height: 52px;
+      padding: 0 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--line);
+    }
+    .titlebar strong { font-size: 15px; }
+    .close {
+      width: 30px;
+      height: 30px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 20px;
+    }
+    .close:hover { background: #222c36; color: var(--text); }
+    .content { padding: 16px; }
+    .path {
+      margin: -3px 0 14px;
+      overflow: hidden;
+      color: var(--muted);
+      font: 11.5px Consolas, monospace;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .section-label {
+      margin-bottom: 7px;
+      color: #b9c5cf;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+    .preset {
+      padding: 5px 9px;
+      border: 1px solid #354453;
+      border-radius: 999px;
+      background: #121920;
+      color: #bac6d0;
+      cursor: pointer;
+    }
+    .preset:hover, .preset.active {
+      border-color: var(--teal);
+      background: var(--teal-soft);
+      color: #8cf0d0;
+    }
+    .matrix {
+      display: grid;
+      grid-template-columns: minmax(120px, 1fr) repeat(3, 76px);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-2);
+    }
+    .cell {
+      min-height: 43px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-right: 1px solid #25313c;
+      border-bottom: 1px solid #25313c;
+    }
+    .cell:nth-child(4n) { border-right: 0; }
+    .cell:nth-last-child(-n + 4) { border-bottom: 0; }
+    .head {
+      min-height: 33px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 650;
+    }
+    .who {
+      padding: 0 12px;
+      justify-content: flex-start;
+      color: #d8e1e8;
+      font-weight: 650;
+    }
+    .who span { margin-left: 6px; color: #738293; font-size: 10.5px; font-weight: 400; }
+    .check { position: relative; width: 19px; height: 19px; cursor: pointer; }
+    .check input { position: absolute; opacity: 0; pointer-events: none; }
+    .check i {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      border: 1px solid #526170;
+      border-radius: 5px;
+      background: #0d1319;
+      color: transparent;
+      font-style: normal;
+      transition: 100ms ease;
+    }
+    .check input:focus-visible + i { outline: 2px solid rgba(18, 184, 134, .5); outline-offset: 2px; }
+    .check input:checked + i { border-color: var(--teal); background: var(--teal); color: #04130e; }
+    .advanced {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 104px;
+      gap: 12px;
+      align-items: end;
+    }
+    .summary {
+      min-height: 54px;
+      padding: 9px 11px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #10171e;
+      color: #aebbc7;
+      font-size: 11.5px;
+    }
+    .summary strong { color: #e7eef3; }
+    label.raw { display: grid; gap: 5px; color: #b8c4ce; font-size: 11px; font-weight: 650; }
+    .raw input {
+      width: 100%;
+      height: 36px;
+      padding: 0 10px;
+      border: 1px solid var(--teal);
+      border-radius: 7px;
+      outline: 0;
+      background: #111920;
+      color: #e9fff8;
+      font: 14px Consolas, monospace;
+      text-align: center;
+    }
+    .raw input.invalid { border-color: var(--red); }
+    .warning {
+      display: none;
+      margin-top: 11px;
+      padding: 9px 10px;
+      gap: 8px;
+      align-items: flex-start;
+      border: 1px solid rgba(252, 196, 25, .38);
+      border-radius: 7px;
+      background: var(--yellow-soft);
+      color: #f4d878;
+      font-size: 11.5px;
+    }
+    .warning.visible { display: flex; }
+    .footer {
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      border-top: 1px solid var(--line);
+      background: #131a21;
+    }
+    .btn {
+      min-height: 34px;
+      padding: 0 14px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: #c4ced7;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    .btn:hover { background: #222c35; }
+    .btn.primary { background: var(--teal); color: #032219; }
+    .btn.primary:hover { background: #20c997; }
+    .btn.primary:disabled { opacity: .45; cursor: not-allowed; }
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      padding: 8px 12px;
+      border: 1px solid #2d8068;
+      border-radius: 7px;
+      background: #123328;
+      color: #a5f3d8;
+      opacity: 0;
+      transform: translate(-50%, 8px);
+      transition: 160ms ease;
+    }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    @media (max-width: 520px) {
+      .matrix { grid-template-columns: minmax(100px, 1fr) repeat(3, 58px); }
+      .advanced { grid-template-columns: 1fr; }
+      .raw { width: 110px; }
+    }
+  </style>
+</head>
+<body>
+  <section class="modal" role="dialog" aria-labelledby="dialog-title">
+    <header class="titlebar">
+      <strong id="dialog-title">Permissions for test2</strong>
+      <button class="close" aria-label="Close">&times;</button>
+    </header>
+
+    <main class="content">
+      <div class="path">/var/www/myapp/test2</div>
+
+      <div class="section-label">Quick presets</div>
+      <div class="presets">
+        <button class="preset" data-mode="0644">Regular file <b>0644</b></button>
+        <button class="preset active" data-mode="0755">Public folder <b>0755</b></button>
+        <button class="preset" data-mode="0600">Private file <b>0600</b></button>
+        <button class="preset" data-mode="0700">Private folder <b>0700</b></button>
+      </div>
+
+      <div class="section-label">Access matrix</div>
+      <div class="matrix">
+        <div class="cell head"></div>
+        <div class="cell head">Read</div>
+        <div class="cell head">Write</div>
+        <div class="cell head">Execute</div>
+
+        <div class="cell who">Owner <span>you</span></div>
+        <div class="cell"><label class="check" title="Owner can read"><input type="checkbox" data-who="owner" value="4"><i>&#10003;</i></label></div>
+        <div class="cell"><label class="check" title="Owner can write"><input type="checkbox" data-who="owner" value="2"><i>&#10003;</i></label></div>
+        <div class="cell"><label class="check" title="Owner can execute"><input type="checkbox" data-who="owner" value="1"><i>&#10003;</i></label></div>
+
+        <div class="cell who">Group</div>
+        <div class="cell"><label class="check" title="Group can read"><input type="checkbox" data-who="group" value="4"><i>&#10003;</i></label></div>
+        <div class="cell"><label class="check" title="Group can write"><input type="checkbox" data-who="group" value="2"><i>&#10003;</i></label></div>
+        <div class="cell"><label class="check" title="Group can execute"><input type="checkbox" data-who="group" value="1"><i>&#10003;</i></label></div>
+
+        <div class="cell who">Others <span>everyone</span></div>
+        <div class="cell"><label class="check" title="Others can read"><input type="checkbox" data-who="others" value="4"><i>&#10003;</i></label></div>
+        <div class="cell"><label class="check" title="Others can write"><input type="checkbox" data-who="others" value="2"><i>&#10003;</i></label></div>
+        <div class="cell"><label class="check" title="Others can execute"><input type="checkbox" data-who="others" value="1"><i>&#10003;</i></label></div>
+      </div>
+
+      <div class="advanced">
+        <div class="summary" id="summary"></div>
+        <label class="raw">Octal value
+          <input id="octal" value="0755" maxlength="4" inputmode="numeric" aria-describedby="octal-help" autofocus />
+        </label>
+      </div>
+      <div class="warning" id="warning"><span>&#9888;</span><span id="warning-text"></span></div>
+    </main>
+
+    <footer class="footer">
+      <button class="btn">Cancel</button>
+      <button class="btn primary" id="apply">Apply permissions</button>
+    </footer>
+  </section>
+  <div class="toast" id="toast">Permissions updated to 0755</div>
+
+  <script>
+    const octal = document.querySelector('#octal');
+    const checks = [...document.querySelectorAll('.check input')];
+    const presets = [...document.querySelectorAll('.preset')];
+    const summary = document.querySelector('#summary');
+    const warning = document.querySelector('#warning');
+    const warningText = document.querySelector('#warning-text');
+    const apply = document.querySelector('#apply');
+    const toast = document.querySelector('#toast');
+
+    const labels = ['Owner', 'Group', 'Others'];
+    const words = digit => {
+      const value = Number(digit);
+      const result = [];
+      if (value & 4) result.push('read');
+      if (value & 2) result.push('write');
+      if (value & 1) result.push('execute');
+      return result.length ? result.join(', ') : 'no access';
+    };
+
+    function normalizedMode(value) {
+      if (!/^[0-7]{3,4}$/.test(value)) return null;
+      return value.length === 3 ? `0${value}` : value;
+    }
+
+    function render(mode, source) {
+      const valid = normalizedMode(mode);
+      octal.classList.toggle('invalid', !valid);
+      apply.disabled = !valid;
+      if (!valid) {
+        summary.innerHTML = '<strong>Invalid octal value.</strong><br>Use three or four digits from 0 to 7.';
+        warning.classList.remove('visible');
+        return;
+      }
+      const digits = valid.slice(-3).split('').map(Number);
+      if (source !== 'checks') {
+        ['owner', 'group', 'others'].forEach((who, index) => {
+          checks.filter(item => item.dataset.who === who).forEach(item => {
+            item.checked = Boolean(digits[index] & Number(item.value));
+          });
+        });
+      }
+      summary.innerHTML = labels.map((label, index) => `<strong>${label}:</strong> ${words(digits[index])}`).join('<br>');
+      presets.forEach(button => button.classList.toggle('active', button.dataset.mode === valid));
+
+      const worldWritable = Boolean(digits[2] & 2);
+      const groupWritable = Boolean(digits[1] & 2);
+      warning.classList.toggle('visible', worldWritable || groupWritable);
+      warningText.textContent = worldWritable
+        ? 'Everyone can modify this item. Use world-write only when absolutely required.'
+        : groupWritable
+          ? 'Members of the file group can modify this item.'
+          : '';
+    }
+
+    function modeFromChecks() {
+      const special = normalizedMode(octal.value)?.[0] ?? '0';
+      const digit = who => checks
+        .filter(item => item.dataset.who === who && item.checked)
+        .reduce((total, item) => total + Number(item.value), 0);
+      return `${special}${digit('owner')}${digit('group')}${digit('others')}`;
+    }
+
+    checks.forEach(item => item.addEventListener('change', () => {
+      octal.value = modeFromChecks();
+      render(octal.value, 'checks');
+    }));
+    presets.forEach(button => button.addEventListener('click', () => {
+      octal.value = button.dataset.mode;
+      render(octal.value, 'preset');
+      octal.focus();
+    }));
+    octal.addEventListener('input', () => render(octal.value.trim(), 'raw'));
+    apply.addEventListener('click', () => {
+      const mode = normalizedMode(octal.value.trim());
+      if (!mode) return;
+      toast.textContent = `Permissions updated to ${mode}`;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 1800);
+    });
+
+    render(octal.value, 'initial');
+    octal.select();
+  </script>
+</body>
+</html>

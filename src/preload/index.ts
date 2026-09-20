@@ -73,9 +73,29 @@ const desktopApi: DesktopApi = {
     choosePrivateKey: () => ipcRenderer.invoke('ssh:choose-private-key'),
     vaultStatus: () => ipcRenderer.invoke('ssh:vault-status'),
     serverOverview: (id) => ipcRenderer.invoke('ssh:server-overview', id),
+    accountCatalog: (id) => ipcRenderer.invoke('ssh:account-catalog', id),
+    authorizedKeys: (id, username) => ipcRenderer.invoke('ssh:authorized-keys', id, username),
+    manageAccounts: (id, operation) => ipcRenderer.invoke('ssh:manage-accounts', id, operation),
+    previewAccess: (id, input) => ipcRenderer.invoke('ssh:preview-access', id, input),
+    applyAccess: (id, input, token, confirmation) => ipcRenderer.invoke('ssh:apply-access', id, input, token, confirmation),
     listDirectory: (id, path = null) => ipcRenderer.invoke('ssh:list-directory', id, path),
     readFile: (id, path) => ipcRenderer.invoke('ssh:read-file', id, path),
     writeFile: (input) => ipcRenderer.invoke('ssh:write-file', input),
+    createEntry: (id, parentPath, name, type) =>
+      ipcRenderer.invoke('ssh:create-entry', id, parentPath, name, type),
+    renameEntry: (id, path, name) => ipcRenderer.invoke('ssh:rename-entry', id, path, name),
+    deleteEntry: (id, path) => ipcRenderer.invoke('ssh:delete-entry', id, path),
+    chmodEntry: (id, path, permissions) => ipcRenderer.invoke('ssh:chmod-entry', id, path, permissions),
+    copyEntry: (id, path, targetDirectory) => ipcRenderer.invoke('ssh:copy-entry', id, path, targetDirectory),
+    moveEntry: (id, path, targetDirectory) => ipcRenderer.invoke('ssh:move-entry', id, path, targetDirectory),
+    uploadFiles: (id, targetDirectory) => ipcRenderer.invoke('ssh:upload-files', id, targetDirectory),
+    downloadFile: (id, path) => ipcRenderer.invoke('ssh:download-file', id, path),
+    cancelTransfer: (id) => ipcRenderer.invoke('ssh:cancel-transfer', id),
+    onTransferProgress: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof callback>[0]): void => callback(progress)
+      ipcRenderer.on('ssh:transfer-progress', listener)
+      return () => ipcRenderer.removeListener('ssh:transfer-progress', listener)
+    },
   },
   github: {
     start: () => ipcRenderer.invoke('github:start'),

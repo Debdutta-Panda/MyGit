@@ -191,6 +191,7 @@ import type {
 import myReposIcon from './assets/myrepos-icon.png'
 import { SqlSchemaPreview } from './SqlSchemaPreview'
 import { RepositorySortMenu } from './RepositorySortMenu'
+import { useDialogAutofocus } from './useDialogAutofocus'
 import type { PortfolioAnalyticsRepository } from './RepositoryPortfolioAnalytics'
 
 const LazyReadOnlyMonaco = lazy(async () => ({
@@ -1039,6 +1040,7 @@ const mergeRepositoryDetails = (
 }
 
 export function App() {
+  useDialogAutofocus()
   const [terminalVisible, setTerminalVisible] = useState(false)
   const [terminalMounted, setTerminalMounted] = useState(false)
   const [terminalRequest, setTerminalRequest] = useState<
@@ -7707,9 +7709,10 @@ export function App() {
                     label="Automatically check for updates"
                     description="Checks shortly after launch and every six hours. Available updates download silently and wait for your restart."
                     onChange={(event) => {
+                      const automaticallyCheckForUpdates = event.currentTarget.checked
                       setSettings((current) => ({
                         ...current,
-                        automaticallyCheckForUpdates: event.currentTarget.checked,
+                        automaticallyCheckForUpdates,
                       }))
                       setSettingsSaved(false)
                     }}
@@ -7736,9 +7739,10 @@ export function App() {
                   disabled={settingsLoading || platform !== 'darwin'}
                   leftSection={<IconBrandVscode size={16} />}
                   onChange={(event) => {
+                    const vscodeApplicationName = event.currentTarget.value
                     setSettings((current) => ({
                       ...current,
-                      vscodeApplicationName: event.currentTarget.value,
+                      vscodeApplicationName,
                     }))
                     setSettingsError(null)
                     setSettingsSaved(false)
@@ -8397,10 +8401,10 @@ export function App() {
                         value={workingCopyLabels[copy.id] ?? copy.label}
                         maxLength={80}
                         disabled={Boolean(workingCopyAction)}
-                        onChange={(event) => setWorkingCopyLabels((current) => ({
-                          ...current,
-                          [copy.id]: event.currentTarget.value,
-                        }))}
+                        onChange={(event) => {
+                          const value = event.currentTarget.value
+                          setWorkingCopyLabels((current) => ({ ...current, [copy.id]: value }))
+                        }}
                       />
                       <Button
                         size="xs"
@@ -9337,10 +9341,10 @@ export function App() {
                     placeholder={`Create a ${section.kind}`}
                     value={newOrganizationNames[section.kind]}
                     disabled={organizationLoading || organizationSaving}
-                    onChange={(event) => setNewOrganizationNames((current) => ({
-                      ...current,
-                      [section.kind]: event.currentTarget.value,
-                    }))}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value
+                      setNewOrganizationNames((current) => ({ ...current, [section.kind]: value }))
+                    }}
                     onKeyDown={(event) => {
                       if (event.key === 'Enter') {
                         event.preventDefault()

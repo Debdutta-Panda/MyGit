@@ -232,6 +232,95 @@ export interface SshServerOverview {
   fetchedAt: string
 }
 
+export interface SshServerUser {
+  username: string
+  uid: number
+  gid: number
+  displayName: string
+  homeDirectory: string
+  shell: string
+  primaryGroup: string
+  groups: string[]
+  system: boolean
+  locked: boolean | null
+  administrator: boolean
+}
+
+export interface SshServerGroup {
+  name: string
+  gid: number
+  members: string[]
+  system: boolean
+  administrator: boolean
+}
+
+export interface SshAccountCatalog {
+  connectionId: string
+  currentUser: string
+  canManage: boolean
+  privilegeMessage: string
+  uidMinimum: number
+  administratorGroups: string[]
+  users: SshServerUser[]
+  groups: SshServerGroup[]
+  fetchedAt: string
+}
+
+export type SshAccountOperation =
+  | { kind: 'create-user'; username: string; displayName: string; homeDirectory: string; shell: string; primaryGroup: string; groups: string[]; password: string }
+  | { kind: 'update-user'; username: string; newUsername: string; displayName: string; homeDirectory: string; shell: string; primaryGroup: string; groups: string[]; moveHome: boolean }
+  | { kind: 'set-password'; username: string; password: string }
+  | { kind: 'set-locked'; username: string; locked: boolean }
+  | { kind: 'set-administrator'; username: string; administrator: boolean }
+  | { kind: 'set-authorized-keys'; username: string; content: string }
+  | { kind: 'delete-user'; username: string; removeHome: boolean }
+  | { kind: 'create-group'; group: string }
+  | { kind: 'rename-group'; group: string; newGroup: string }
+  | { kind: 'set-group-members'; group: string; members: string[] }
+  | { kind: 'delete-group'; group: string }
+
+export interface SshAccessAclEntry {
+  kind: 'user' | 'group'
+  name: string
+  permissions: string | null
+  default: boolean
+}
+
+export interface SshAccessChangeInput {
+  path: string
+  owner: string | null
+  group: string | null
+  permissions: string | null
+  recursive: boolean
+  crossFilesystem: boolean
+  acl: SshAccessAclEntry[]
+}
+
+export interface SshAccessPreview {
+  connectionId: string
+  resolvedPath: string
+  type: 'directory' | 'file' | 'link' | 'other'
+  symlinkTarget: string | null
+  owner: string
+  group: string
+  permissions: string
+  aclSupported: boolean
+  currentAcl: string[]
+  affectedCount: number
+  countTruncated: boolean
+  risk: 'normal' | 'elevated' | 'dangerous' | 'blocked'
+  warnings: string[]
+  operations: string[]
+  token: string
+  confirmationPhrase: string | null
+}
+
+export interface SshAccessApplyResult {
+  path: string
+  affectedCount: number
+  appliedAt: string
+}
+
 export interface SshDiskPartition {
   filesystem: string
   mountPoint: string
@@ -278,6 +367,27 @@ export interface SshRemoteFileWriteInput {
   content: string
   expectedModifiedAt: string
   expectedEtag: string
+}
+
+export interface SshRemoteEntryMutationResult {
+  connectionId: string
+  path: string
+  parentPath: string
+}
+
+export interface SshTransferProgress {
+  id: string
+  direction: 'upload' | 'download'
+  name: string
+  transferredBytes: number
+  totalBytes: number
+  status: 'running' | 'completed' | 'cancelled' | 'failed'
+  error: string | null
+}
+
+export interface SshTransferResult {
+  id: string
+  paths: string[]
 }
 
 export interface RepositoryGitStatus {
@@ -557,9 +667,29 @@ export interface DesktopApi {
     choosePrivateKey: () => Promise<string | null>
     vaultStatus: () => Promise<SshVaultStatus>
     serverOverview: (id: string) => Promise<SshServerOverview>
+    accountCatalog: (id: string) => Promise<SshAccountCatalog>
+    authorizedKeys: (id: string, username: string) => Promise<string>
+    manageAccounts: (id: string, operation: SshAccountOperation) => Promise<SshAccountCatalog>
+    previewAccess: (id: string, input: SshAccessChangeInput) => Promise<SshAccessPreview>
+    applyAccess: (id: string, input: SshAccessChangeInput, token: string, confirmation: string) => Promise<SshAccessApplyResult>
     listDirectory: (id: string, path?: string | null) => Promise<SshDirectoryListing>
     readFile: (id: string, path: string) => Promise<SshRemoteFileContent>
     writeFile: (input: SshRemoteFileWriteInput) => Promise<SshRemoteFileContent>
+    createEntry: (
+      id: string,
+      parentPath: string,
+      name: string,
+      type: 'file' | 'directory',
+    ) => Promise<SshRemoteEntryMutationResult>
+    renameEntry: (id: string, path: string, name: string) => Promise<SshRemoteEntryMutationResult>
+    deleteEntry: (id: string, path: string) => Promise<SshRemoteEntryMutationResult>
+    chmodEntry: (id: string, path: string, permissions: string) => Promise<SshRemoteEntryMutationResult>
+    copyEntry: (id: string, path: string, targetDirectory: string) => Promise<SshRemoteEntryMutationResult>
+    moveEntry: (id: string, path: string, targetDirectory: string) => Promise<SshRemoteEntryMutationResult>
+    uploadFiles: (id: string, targetDirectory: string) => Promise<SshTransferResult | null>
+    downloadFile: (id: string, path: string) => Promise<SshTransferResult | null>
+    cancelTransfer: (id: string) => Promise<void>
+    onTransferProgress: (callback: (progress: SshTransferProgress) => void) => () => void
   }
   github: {
     start: () => Promise<GitHubDeviceAuthorization>
