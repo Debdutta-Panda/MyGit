@@ -546,6 +546,46 @@
 .ssh-mysql-user-form > section > header strong { color: #cfdae0; font-size: 11.5px; }
 .ssh-mysql-user-form > section > header small { color: #7e909b; font-size: 9.5px; }
 .ssh-mysql-user-danger { border-color: #59343b !important; }
+.ssh-sql-workspace { flex: 1; min-height: 0; display: grid; grid-template-rows: auto auto minmax(190px, 1fr) minmax(160px, .8fr); overflow: hidden; background: #090f14; }
+.ssh-sql-toolbar { min-height: 44px; padding: 6px 9px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid #283640; background: #0d151c; }
+.ssh-sql-tabs { min-height: 34px; padding: 0 5px; display: flex; align-items: end; gap: 2px; overflow-x: auto; border-bottom: 1px solid #283640; background: #0b1218; }
+.ssh-sql-tabs > button { min-width: 105px; max-width: 190px; height: 30px; padding: 0 7px 0 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid transparent; border-bottom: 0; border-radius: 5px 5px 0 0; background: transparent; color: #7e909d; font: inherit; font-size: 10.5px; cursor: pointer; }
+.ssh-sql-tabs > button:hover { background: #111b22; color: #a9b8c1; }
+.ssh-sql-tabs > button[data-active] { border-color: #30414c; background: #101820; color: #d3dde3; }
+.ssh-sql-tabs > button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-sql-tabs > button svg { flex: 0 0 auto; opacity: .55; }
+.ssh-sql-tabs > button svg:hover { opacity: 1; color: #ef7684; }
+.ssh-sql-editor-pane { min-height: 0; overflow: hidden; border-bottom: 1px solid #30404b; }
+.ssh-sql-monaco { width: 100%; height: 100%; min-height: 180px; }
+.ssh-sql-results { min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: #0b1218; }
+.ssh-sql-results > header { min-height: 34px; padding: 5px 9px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid #27353f; background: #0f171e; }
+.ssh-sql-results > .mantine-Alert-root { margin: 8px; }
+.ssh-sql-result-tabs { min-height: 31px; display: flex; overflow-x: auto; border-bottom: 1px solid #26343e; }
+.ssh-sql-result-tabs button { min-width: max-content; padding: 4px 11px; display: flex; align-items: center; gap: 6px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #7c8e9a; font: inherit; font-size: 10px; cursor: pointer; }
+.ssh-sql-result-tabs button[data-active] { border-bottom-color: #20c997; color: #bcebdc; }
+.ssh-sql-result-tabs small { color: #627480; font-size: 8.5px; }
+.ssh-sql-grid { min-height: 0; position: relative; overflow: auto; }
+.ssh-sql-grid table { min-width: 100%; border-collapse: separate; border-spacing: 0; color: #b8c5cd; font-size: 10.5px; }
+.ssh-sql-grid th { min-width: 120px; max-width: 420px; padding: 7px 9px; position: sticky; top: 0; z-index: 1; overflow: hidden; resize: horizontal; border-right: 1px solid #293843; border-bottom: 1px solid #31414c; background: #111b22; color: #8fa1ad; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.ssh-sql-grid td { max-width: 480px; padding: 6px 9px; overflow: hidden; border-right: 1px solid #202d36; border-bottom: 1px solid #202c35; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
+.ssh-sql-grid tbody tr:hover td { background: #101a21; }
+.ssh-sql-grid td[data-null] { color: #687b88; font-style: italic; }
+.ssh-sql-truncated { position: sticky; bottom: 0; padding: 5px 9px; border-top: 1px solid #624b25; background: #241d12; color: #e0bb71; font-size: 9.5px; }
+.ssh-sql-query-summary,
+.ssh-sql-empty { min-height: 120px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 4px; color: #7b8e9a; }
+.ssh-sql-query-summary strong { color: #9edbc7; font-size: 12px; }
+.ssh-sql-query-summary span,
+.ssh-sql-empty span { font-size: 10.5px; }
+.ssh-sql-empty small { color: #5f717e; font-size: 9px; }
+.ssh-sql-confirm { display: grid; gap: 10px; }
+.ssh-sql-confirm pre { max-height: 320px; margin: 0; padding: 10px; overflow: auto; border: 1px solid #34434d; border-radius: 6px; background: #070c10; color: #d4b4a4; font: 10.5px/1.55 Consolas, "Cascadia Code", monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.ssh-sql-history { display: grid; gap: 7px; }
+.ssh-sql-history > button { padding: 9px; display: grid; gap: 6px; border: 1px solid #2d3c47; border-radius: 7px; background: #0e171e; color: #b7c5cd; text-align: left; cursor: pointer; }
+.ssh-sql-history > button:hover { border-color: #278b70; background: #102019; }
+.ssh-sql-history > button > span { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ssh-sql-history small { display: flex; align-items: center; gap: 3px; color: #71838f; font-size: 8.5px; }
+.ssh-sql-history code { max-height: 74px; overflow: hidden; color: #a9d9c9; font: 9.5px/1.45 Consolas, monospace; white-space: pre-wrap; }
+.ssh-sql-history em { overflow: hidden; color: #dc7f88; font-size: 9px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 
 @media (max-width: 1050px) {
   .ssh-database-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -572,6 +612,7 @@
   .ssh-mysql-privilege-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ssh-mysql-databases > header { align-items: flex-start; flex-direction: column; }
   .ssh-mysql-database-tools { grid-template-columns: 1fr; }
+  .ssh-sql-toolbar { align-items: stretch; flex-direction: column; }
 }
 
 .ssh-workspace-header {

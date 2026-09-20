@@ -327,6 +327,39 @@ export type SshMySqlUserOperation =
   | { kind: 'set-password'; username: string; host: string; password: string }
   | { kind: 'drop'; username: string; host: string; confirmation: string }
 
+export interface SshMySqlSchemaColumn {
+  database: string
+  table: string
+  name: string
+  dataType: string
+  nullable: boolean
+  key: string
+}
+
+export interface SshMySqlQueryInput {
+  database: string | null
+  sql: string
+  rowLimit: number
+  readOnly: boolean
+  destructiveConfirmation: string | null
+}
+
+export interface SshMySqlQueryResultSet {
+  columns: string[]
+  rows: Array<Array<string | number | boolean | null>>
+  affectedRows: number | null
+  insertId: string | number | null
+  warningCount: number | null
+  truncated: boolean
+}
+
+export interface SshMySqlQueryResult {
+  runId: string
+  durationMs: number
+  resultSets: SshMySqlQueryResultSet[]
+  executedAt: string
+}
+
 export interface SshServerUser {
   username: string
   uid: number
@@ -772,6 +805,9 @@ export interface DesktopApi {
     manageMysqlDatabase: (id: string, operation: SshMySqlDatabaseOperation) => Promise<SshMySqlDatabase[]>
     mysqlUsers: (id: string) => Promise<SshMySqlUser[]>
     manageMysqlUser: (id: string, operation: SshMySqlUserOperation) => Promise<SshMySqlUser[]>
+    mysqlSchema: (id: string, database: string | null) => Promise<SshMySqlSchemaColumn[]>
+    runMysqlQuery: (id: string, runId: string, input: SshMySqlQueryInput) => Promise<SshMySqlQueryResult>
+    cancelMysqlQuery: (runId: string) => Promise<void>
     accountCatalog: (id: string) => Promise<SshAccountCatalog>
     authorizedKeys: (id: string, username: string) => Promise<string>
     manageAccounts: (id: string, operation: SshAccountOperation) => Promise<SshAccountCatalog>

@@ -4,7 +4,7 @@ import { copyFile as localCopyFile, readFile, stat as localStat, unlink as local
 import { createHash, randomUUID } from 'node:crypto'
 import { basename as localBasename, posix } from 'node:path'
 import { Client, type ConnectConfig, type SFTPWrapper } from 'ssh2'
-import { createConnection as createMysqlConnection, type Connection as MySqlConnection, type RowDataPacket } from 'mysql2/promise'
+import { createConnection as createMysqlConnection, type Connection as MySqlConnection, type FieldPacket, type ResultSetHeader, type RowDataPacket } from 'mysql2/promise'
 import type {
   SshDirectoryListing,
   SshRemoteEntry,
@@ -18,6 +18,10 @@ import type {
   SshMySqlDatabaseOperation,
   SshMySqlUser,
   SshMySqlUserOperation,
+  SshMySqlSchemaColumn,
+  SshMySqlQueryInput,
+  SshMySqlQueryResult,
+  SshMySqlQueryResultSet,
   SshAccountCatalog,
   SshAccountOperation,
   SshAccessApplyResult,
@@ -35,6 +39,7 @@ const MAX_TEXT_FILE_BYTES = 5 * 1024 * 1024
 const MAX_PREVIEW_FILE_BYTES = 15 * 1024 * 1024
 const transferCancellers = new Map<string, () => void>()
 const commandRuns = new Map<string, { connectionId: string; cancelled: boolean; cancel: () => void }>()
+const mysqlQueryRuns = new Map<string, { connectionId: string; cancelled: boolean; cancel: () => void }>()
 const accessPreviewTokens = new Map<string, { connectionId: string; inputHash: string; signature: string; expiresAt: number }>()
 
 const connect = async (connection: SshRuntimeConnection): Promise<Client> => {
@@ -388,7 +393,11 @@ const mysqlPort = async (client: Client): Promise<number> => {
   return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 3306
 }
 
-const mysqlForward = async (client: Client, profile: MySqlRuntimeProfile): Promise<MySqlConnection> => {
+const mysqlForward = async (
+  client: Client,
+  profile: MySqlRuntimeProfile,
+  options: { database?: string; multipleStatements?: boolean } = {},
+): Promise<MySqlConnection> => {
   if (!profile.username || !profile.password) throw new Error('The saved MySQL username or password is missing.')
   const port = await mysqlPort(client)
   const stream = await new Promise<import('node:stream').Duplex>((resolve, reject) => {
@@ -398,10 +407,11 @@ const mysqlForward = async (client: Client, profile: MySqlRuntimeProfile): Promi
     return await createMysqlConnection({
       user: profile.username,
       password: profile.password,
-      database: 'information_schema',
+      database: options.database ?? 'information_schema',
       stream,
       connectTimeout: 12_000,
       enableKeepAlive: true,
+      multipleStatements: options.multipleStatements ?? false,
     })
   } catch (error) {
     stream.destroy()
@@ -644,6 +654,201 @@ const manageMysqlUser = async (id: string, operation: SshMySqlUserOperation): Pr
     }
     return await mysqlUserRows(client, profile)
   })
+
+const mysqlSchema = async (id: string, requestedDatabase: string | null): Promise<SshMySqlSchemaColumn[]> =>
+  await withClient(id, async (client) => {
+    const profile = mysqlProfileOrThrow(id)
+    const database = requestedDatabase?.trim() || null
+    if (database) mysqlIdentifier(database)
+    const where = database ? `WHERE TABLE_SCHEMA = ${mysqlStringLiteral(database)}` : "WHERE TABLE_SCHEMA NOT IN ('information_schema','mysql','performance_schema','sys')"
+    const rows = await mysqlTabular(client, profile, `
+      SELECT TABLE_SCHEMA AS database_name, TABLE_NAME AS table_name, COLUMN_NAME AS column_name,
+             DATA_TYPE AS data_type, IS_NULLABLE AS is_nullable, COLUMN_KEY AS column_key
+      FROM information_schema.COLUMNS ${where}
+      ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION
+    `.replace(/\s+/g, ' ').trim(), ['database_name', 'table_name', 'column_name', 'data_type', 'is_nullable', 'column_key'])
+    return rows.map((row) => ({
+      database: row.database_name,
+      table: row.table_name,
+      name: row.column_name,
+      dataType: row.data_type,
+      nullable: row.is_nullable === 'YES',
+      key: row.column_key,
+    }))
+  })
+
+const sqlWithoutComments = (sql: string): string => sql
+  .replace(/\/\*[\s\S]*?\*\//g, ' ')
+  .replace(/--[^\r\n]*/g, ' ')
+  .replace(/#[^\r\n]*/g, ' ')
+  .replace(/'(?:''|\\.|[^'])*'/g, "''")
+  .replace(/"(?:""|\\.|[^"])*"/g, '""')
+  .replace(/`(?:``|[^`])*`/g, '``')
+const mysqlWritePattern = /\b(INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP|TRUNCATE|RENAME|GRANT|REVOKE|LOCK|UNLOCK|SET\s+PASSWORD|CALL|LOAD\s+DATA|HANDLER)\b/i
+const mysqlDestructivePattern = /\b(UPDATE|DELETE|DROP|TRUNCATE|ALTER|RENAME|GRANT|REVOKE|SET\s+PASSWORD)\b/i
+const xmlDecode = (value: string): string => value
+  .replace(/&#x([0-9a-f]+);/gi, (_match, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+  .replace(/&#([0-9]+);/g, (_match, decimal: string) => String.fromCodePoint(Number(decimal)))
+  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&')
+
+const mysqlXmlResults = (xml: string, rowLimit: number): SshMySqlQueryResultSet[] => {
+  const results: SshMySqlQueryResultSet[] = []
+  for (const resultMatch of xml.matchAll(/<resultset\b[^>]*>([\s\S]*?)<\/resultset>/gi)) {
+    const body = resultMatch[1]
+    const parsedRows: Array<Record<string, string | null>> = []
+    const columns: string[] = []
+    for (const rowMatch of body.matchAll(/<row>([\s\S]*?)<\/row>/gi)) {
+      const row: Record<string, string | null> = {}
+      const fieldPattern = /<field\b([^>]*?)(?:\s*\/\s*>|>([\s\S]*?)<\/field>)/gi
+      for (const field of rowMatch[1].matchAll(fieldPattern)) {
+        const attributes = field[1]
+        const name = xmlDecode(attributes.match(/\bname="([^"]*)"/i)?.[1] ?? '')
+        if (!name) continue
+        if (!columns.includes(name)) columns.push(name)
+        row[name] = /\b(?:xsi:)?nil="true"/i.test(attributes) ? null : xmlDecode(field[2] ?? '')
+      }
+      parsedRows.push(row)
+    }
+    results.push({
+      columns,
+      rows: parsedRows.slice(0, rowLimit).map((row) => columns.map((column) => row[column] ?? null)),
+      affectedRows: null,
+      insertId: null,
+      warningCount: null,
+      truncated: parsedRows.length > rowLimit,
+    })
+  }
+  return results
+}
+
+const queryValue = (value: unknown): string | number | boolean | null => {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value
+  if (typeof value === 'bigint') return value.toString()
+  if (value instanceof Date) return value.toISOString()
+  if (Buffer.isBuffer(value)) return `0x${value.toString('hex')}`
+  return JSON.stringify(value)
+}
+
+const mysqlProtocolResult = (
+  item: RowDataPacket[] | RowDataPacket[][] | ResultSetHeader,
+  fields: FieldPacket[] | undefined,
+  rowLimit: number,
+): SshMySqlQueryResultSet => {
+  if (Array.isArray(item)) {
+    const columns = fields?.map((field) => field.name) ?? []
+    const rows = item as unknown[][]
+    return { columns, rows: rows.slice(0, rowLimit).map((row) => row.map(queryValue)), affectedRows: null, insertId: null, warningCount: null, truncated: rows.length > rowLimit }
+  }
+  return {
+    columns: [], rows: [], affectedRows: Number(item.affectedRows) || 0,
+    insertId: typeof item.insertId === 'bigint' ? item.insertId.toString() : item.insertId || null,
+    warningCount: Number(item.warningStatus) || 0, truncated: false,
+  }
+}
+
+const runSystemMysqlQuery = async (
+  client: Client,
+  connectionId: string,
+  runId: string,
+  database: string | null,
+  sql: string,
+  rowLimit: number,
+): Promise<SshMySqlQueryResultSet[]> => {
+  const privilege = await accountPrivilege(client)
+  if (!privilege.canManage) throw new Error('System administrator access requires root or passwordless sudo.')
+  const databaseArgument = database ? ` ${shellQuote(database)}` : ''
+  const base = `client=$(command -v mysql 2>/dev/null || command -v mariadb 2>/dev/null || true); [ -n "$client" ] || exit 127; exec "$client" --xml --raw --column-names${databaseArgument}`
+  const command = privilege.root ? base : `sudo -n sh -c ${shellQuote(base)}`
+  const output = await new Promise<string>((resolve, reject) => {
+    client.exec(command, (error, stream) => {
+      if (error) { reject(error); return }
+      let stdout = ''
+      let stderr = ''
+      let settled = false
+      const finish = (failure?: Error): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
+        if (failure) reject(failure)
+        else resolve(stdout)
+      }
+      const timeout = setTimeout(() => { stream.close(); finish(new Error('The SQL query timed out after five minutes.')) }, 300_000)
+      const pending = mysqlQueryRuns.get(runId)
+      if (pending?.cancelled) { stream.close(); finish(new Error('Query cancelled.')); return }
+      mysqlQueryRuns.set(runId, { connectionId, cancelled: false, cancel: () => stream.close() })
+      stream.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString('utf8')
+        if (stdout.length > 25 * 1024 * 1024) { stream.close(); finish(new Error('Query output exceeded 25 MB. Reduce the row limit.')) }
+      })
+      stream.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
+      stream.once('close', (code: number | null) => {
+        const run = mysqlQueryRuns.get(runId)
+        if (run?.cancelled) finish(new Error('Query cancelled.'))
+        else if (code && code !== 0) finish(new Error(stderr.trim() || `MySQL exited with code ${code}.`))
+        else finish()
+      })
+      stream.once('error', (streamError: Error) => finish(streamError))
+      stream.end(`SET SESSION SQL_SELECT_LIMIT = ${rowLimit + 1};\n${sql}\n`)
+    })
+  })
+  return mysqlXmlResults(output, rowLimit)
+}
+
+const runMysqlQuery = async (id: string, runId: string, input: SshMySqlQueryInput): Promise<SshMySqlQueryResult> => {
+  if (!runId || mysqlQueryRuns.has(runId)) throw new Error('Invalid or duplicate query run identifier.')
+  const sql = input.sql.trim()
+  if (!sql || sql.length > 1024 * 1024) throw new Error('Enter a query smaller than 1 MB.')
+  const cleaned = sqlWithoutComments(sql)
+  if (input.readOnly && mysqlWritePattern.test(cleaned)) throw new Error('Read-only mode blocked a statement that may change data or server state.')
+  if (mysqlDestructivePattern.test(cleaned) && input.destructiveConfirmation !== 'RUN DESTRUCTIVE QUERY') {
+    throw new Error('Destructive query confirmation is required.')
+  }
+  const rowLimit = Math.max(1, Math.min(10_000, Math.floor(input.rowLimit || 500)))
+  const selectedDatabase = input.database?.trim() || null
+  if (selectedDatabase) mysqlIdentifier(selectedDatabase)
+  const started = Date.now()
+  mysqlQueryRuns.set(runId, { connectionId: id, cancelled: false, cancel: () => undefined })
+  try {
+    const resultSets = await withClient(id, async (client) => {
+      if (mysqlQueryRuns.get(runId)?.cancelled) throw new Error('Query cancelled.')
+      const profile = mysqlProfileOrThrow(id)
+      if (profile.mode === 'system') return await runSystemMysqlQuery(client, id, runId, selectedDatabase, sql, rowLimit)
+      const database = await mysqlForward(client, profile, { database: selectedDatabase ?? 'information_schema', multipleStatements: true })
+      if (mysqlQueryRuns.get(runId)?.cancelled) { database.destroy(); throw new Error('Query cancelled.') }
+      mysqlQueryRuns.set(runId, { connectionId: id, cancelled: false, cancel: () => database.destroy() })
+      try {
+        await database.query(`SET SESSION SQL_SELECT_LIMIT = ${rowLimit + 1}`)
+        const [rawResults, rawFields] = await database.query({ sql, rowsAsArray: true })
+        const resultItems = Array.isArray(rawResults) ? rawResults as unknown[] : []
+        const fieldItems = Array.isArray(rawFields) ? rawFields as unknown[] : []
+        const multiple = fieldItems.some((item) => Array.isArray(item)) || resultItems.some((item) =>
+          Boolean(item && !Array.isArray(item) && typeof item === 'object' && 'affectedRows' in item))
+        if (multiple) {
+          const items = rawResults as unknown as Array<RowDataPacket[] | ResultSetHeader>
+          const fieldSets = rawFields as Array<FieldPacket[] | undefined>
+          return items.map((item, index) => mysqlProtocolResult(item, fieldSets[index], rowLimit))
+        }
+        return [mysqlProtocolResult(rawResults as RowDataPacket[] | ResultSetHeader, rawFields as FieldPacket[], rowLimit)]
+      } catch (error) {
+        if (mysqlQueryRuns.get(runId)?.cancelled) throw new Error('Query cancelled.')
+        throw error
+      } finally {
+        if (!mysqlQueryRuns.get(runId)?.cancelled) await database.end().catch(() => undefined)
+      }
+    })
+    return { runId, durationMs: Date.now() - started, resultSets, executedAt: new Date().toISOString() }
+  } finally {
+    mysqlQueryRuns.delete(runId)
+  }
+}
+
+const cancelMysqlQuery = (runId: string): void => {
+  const run = mysqlQueryRuns.get(runId)
+  if (!run) return
+  run.cancelled = true
+  run.cancel()
+}
 
 const accountCatalog = async (id: string): Promise<SshAccountCatalog> =>
   await withClient(id, async (client, connection) => {
@@ -1623,6 +1828,10 @@ export const registerSshWorkspaceHandlers = (): void => {
   ipcMain.handle('ssh:mysql-users', (_event, id: string) => mysqlUsers(id))
   ipcMain.handle('ssh:manage-mysql-user', (_event, id: string, operation: SshMySqlUserOperation) =>
     manageMysqlUser(id, operation))
+  ipcMain.handle('ssh:mysql-schema', (_event, id: string, database: string | null) => mysqlSchema(id, database))
+  ipcMain.handle('ssh:run-mysql-query', (_event, id: string, runId: string, input: SshMySqlQueryInput) =>
+    runMysqlQuery(id, runId, input))
+  ipcMain.handle('ssh:cancel-mysql-query', (_event, runId: string) => cancelMysqlQuery(runId))
   ipcMain.handle('ssh:account-catalog', (_event, id: string) => accountCatalog(id))
   ipcMain.handle('ssh:authorized-keys', (_event, id: string, username: string) => authorizedKeys(id, username))
   ipcMain.handle('ssh:manage-accounts', (_event, id: string, operation: SshAccountOperation) =>

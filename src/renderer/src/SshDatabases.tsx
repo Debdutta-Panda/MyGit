@@ -15,9 +15,10 @@ import type { SshAccountCatalog, SshConnection, SshMySqlOverview } from '../../s
 import { SshSnippetRunner } from './SshSnippetRunner'
 import { SshMySqlDatabases } from './SshMySqlDatabases'
 import { SshMySqlUsers } from './SshMySqlUsers'
+import { SshMySqlQuery } from './SshMySqlQuery'
 import type { SshSavedSnippet } from './ssh-snippets-store'
 
-type DatabaseTab = 'overview' | 'install' | 'databases' | 'users'
+type DatabaseTab = 'overview' | 'install' | 'databases' | 'users' | 'sql'
 type InstallFlavor = 'recommended' | 'mysql' | 'mariadb'
 
 interface InstallPlan {
@@ -221,7 +222,8 @@ export function SshDatabases({ connection }: { connection: SshConnection }) {
       <button type="button" data-active={activeTab === 'install' || undefined} onClick={openInstall}>Install</button>
       <button type="button" data-active={activeTab === 'databases' || undefined} disabled={!overview?.installed} onClick={() => setActiveTab('databases')}>Databases</button>
       <button type="button" data-active={activeTab === 'users' || undefined} disabled={!overview?.installed} onClick={() => setActiveTab('users')}>Users & Access</button>
-      {['SQL', 'Backup & Restore', 'Administration', 'Logs'].map((label) =>
+      <button type="button" data-active={activeTab === 'sql' || undefined} disabled={!overview?.installed} onClick={() => setActiveTab('sql')}>SQL</button>
+      {['Backup & Restore', 'Administration', 'Logs'].map((label) =>
         <Tooltip label="Available in a later implementation step" key={label}>
           <button type="button" disabled>{label}</button>
         </Tooltip>)}
@@ -289,6 +291,7 @@ export function SshDatabases({ connection }: { connection: SshConnection }) {
 
     {activeTab === 'databases' && overview?.installed && <SshMySqlDatabases connection={connection} overview={overview} />}
     {activeTab === 'users' && overview?.installed && <SshMySqlUsers connection={connection} onNeedAccess={() => setActiveTab('databases')} />}
+    {activeTab === 'sql' && overview?.installed && <SshMySqlQuery connection={connection} onNeedAccess={() => setActiveTab('databases')} />}
 
     {activeTab === 'overview' && (loading ? <div className="ssh-database-loading"><Loader size="sm" /><Text size="sm">Inspecting MySQL on the server...</Text></div>
       : overview && !overview.installed ? <div className="ssh-database-not-installed">
