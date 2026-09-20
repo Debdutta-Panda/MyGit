@@ -239,6 +239,14 @@ const createSchema = (db: DatabaseSync): void => {
     CREATE INDEX IF NOT EXISTS ssh_connections_name_idx
       ON ssh_connections(name);
 
+    CREATE TABLE IF NOT EXISTS ssh_mysql_profiles (
+      connection_id TEXT PRIMARY KEY REFERENCES ssh_connections(id) ON DELETE CASCADE,
+      access_mode TEXT NOT NULL CHECK (access_mode IN ('system', 'password')),
+      username TEXT NOT NULL DEFAULT '',
+      encrypted_password TEXT,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS repository_workspaces_workspace_idx
       ON repository_workspaces(workspace_id, position);
     CREATE INDEX IF NOT EXISTS repository_groups_group_idx
@@ -306,6 +314,8 @@ const createSchema = (db: DatabaseSync): void => {
       VALUES (9, datetime('now'));
     INSERT OR IGNORE INTO schema_migrations (version, applied_at)
       VALUES (10, datetime('now'));
+    INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+      VALUES (11, datetime('now'));
   `)
 
   db.exec(`

@@ -21,6 +21,7 @@ import {
   IconHome,
   IconLock,
   IconPencil,
+  IconPlayerPlay,
   IconRefresh,
   IconSearch,
   IconArrowsSort,
@@ -38,6 +39,8 @@ import type {
   SshRemoteFileContent,
   SshTransferProgress,
 } from '../../shared/desktop-api'
+import { SshSnippetRunner } from './SshSnippetRunner'
+import { readSshScripts, readSshSnippets, type SshSavedCommandTemplate } from './ssh-snippets-store'
 
 const RemoteMonaco = lazy(async () => ({
   default: (await import('./ReadOnlyMonaco')).ReadOnlyMonaco,
@@ -290,7 +293,10 @@ function TreeNode({
   )
 }
 
-export function SshRemoteFileManager({ connection }: { connection: SshConnection }) {
+export function SshRemoteFileManager({ connection, onOpenTerminal }: {
+  connection: SshConnection
+  onOpenTerminal: (command?: string) => void
+}) {
   const [listings, setListings] = useState(new Map<string, SshDirectoryListing>())
   const [rootPath, setRootPath] = useState<string | null>(null)
   const homePathRef = useRef<string | null>(null)
@@ -316,6 +322,9 @@ export function SshRemoteFileManager({ connection }: { connection: SshConnection
   const pickerRequestRef = useRef(0)
   const pickerCommittedPathRef = useRef<string | null>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry: SshRemoteEntry } | null>(null)
+  const [snippets, setSnippets] = useState<SshSavedCommandTemplate[]>(() => readSshSnippets(connection.id))
+  const [scripts, setScripts] = useState<SshSavedCommandTemplate[]>(() => readSshScripts(connection.id))
+  const [snippetRun, setSnippetRun] = useState<{ snippet: SshSavedCommandTemplate; path: string } | null>(null)
   const [mutation, setMutation] = useState<MutationDialog | null>(null)
   const [mutating, setMutating] = useState(false)
   const [clipboard, setClipboard] = useState<{ entry: SshRemoteEntry; mode: 'copy' | 'move' } | null>(null)
@@ -387,6 +396,11 @@ export function SshRemoteFileManager({ connection }: { connection: SshConnection
     setActiveFilePath(null)
     setHistory([])
     setHistoryIndex(-1)
+  }, [connection.id])
+
+  useEffect(() => {
+    setSnippets(readSshSnippets(connection.id))
+    setScripts(readSshScripts(connection.id))
   }, [connection.id])
 
   useEffect(() => {
@@ -607,7 +621,7 @@ export function SshRemoteFileManager({ connection }: { connection: SshConnection
     event.preventDefault()
     event.stopPropagation()
     setContextMenu({
-      x: Math.min(event.clientX, window.innerWidth - 190),
+      x: Math.min(event.clientX, window.innerWidth - 390),
       y: Math.min(event.clientY, window.innerHeight - 225),
       entry,
     })
@@ -1139,6 +1153,26 @@ export function SshRemoteFileManager({ connection }: { connection: SshConnection
             {contextMenu.entry.type === 'directory' ? <IconFolderOpen size={15} /> : <IconFile size={15} />}
             Open
           </button>
+          <div className="remote-context-submenu">
+            <button type="button" className="remote-context-submenu-trigger">
+              <IconPlayerPlay size={15} />Run<IconChevronRight size={14} />
+            </button>
+            <div className="remote-context-submenu-panel">
+              {snippets.length > 0 && <div className="remote-context-submenu-label">Snippets</div>}
+              {snippets.map((snippet) => <button type="button" key={snippet.id} onClick={() => {
+                const path = contextMenu.entry.path
+                setContextMenu(null)
+                setSnippetRun({ snippet, path })
+              }}><IconPlayerPlay size={14} /><span>{snippet.name}</span></button>)}
+              {scripts.length > 0 && <div className="remote-context-submenu-label">Scripts</div>}
+              {scripts.map((script) => <button type="button" key={script.id} onClick={() => {
+                const path = contextMenu.entry.path
+                setContextMenu(null)
+                setSnippetRun({ snippet: script, path })
+              }}><IconCode size={14} /><span>{script.name}</span></button>)}
+              {!snippets.length && !scripts.length && <div className="remote-context-submenu-empty">No snippets or scripts for this server</div>}
+            </div>
+          </div>
           {contextMenu.entry.type === 'directory' && (
             <>
               <button type="button" onClick={() => startMutation('create-file', contextMenu.entry)}><IconFilePlus size={15} />New file</button>
@@ -1182,6 +1216,11 @@ export function SshRemoteFileManager({ connection }: { connection: SshConnection
           <button type="button" className="danger" onClick={() => startMutation('delete', contextMenu.entry)}><IconTrash size={15} />Delete</button>
         </div>
       )}
+
+      <SshSnippetRunner connection={connection} snippet={snippetRun?.snippet ?? null}
+        contextValues={{ path: snippetRun?.path ?? '' }}
+        onClose={() => setSnippetRun(null)}
+        onOpenTerminal={(command) => onOpenTerminal(command)} />
 
       <Modal opened={pickerMode !== null} onClose={() => setPickerMode(null)}
         title={pickerMode === 'folder' ? 'Open remote folder' : 'Open remote file'} size="lg" centered>

@@ -247,6 +247,86 @@ export interface SshServerOverview {
   fetchedAt: string
 }
 
+export interface SshMySqlOverview {
+  connectionId: string
+  installed: boolean
+  engine: 'mysql' | 'mariadb' | 'unknown'
+  serverInstalled: boolean
+  clientInstalled: boolean
+  version: string | null
+  clientVersion: string | null
+  serverExecutable: string | null
+  clientExecutable: string | null
+  serviceName: string | null
+  serviceState: string
+  serviceEnabled: boolean | null
+  processId: number | null
+  activeSince: string | null
+  port: number | null
+  socket: string | null
+  bindAddress: string | null
+  dataDirectory: string | null
+  configFiles: string[]
+  packageManager: string | null
+  operatingSystem: string
+  diskTotalBytes: number | null
+  diskUsedBytes: number | null
+  diskAvailableBytes: number | null
+  clientTools: string[]
+  administrativeAccess: 'not-configured'
+  fetchedAt: string
+}
+
+export type SshMySqlAccessMode = 'system' | 'password'
+
+export interface SshMySqlAccessProfile {
+  connectionId: string
+  mode: SshMySqlAccessMode
+  username: string
+  hasPassword: boolean
+  updatedAt: string | null
+}
+
+export interface SshMySqlAccessInput {
+  mode: SshMySqlAccessMode
+  username: string
+  password: string
+}
+
+export interface SshMySqlDatabase {
+  name: string
+  characterSet: string
+  collation: string
+  tableCount: number
+  sizeBytes: number
+  system: boolean
+}
+
+export type SshMySqlDatabaseOperation =
+  | { kind: 'create'; name: string; characterSet: string; collation: string }
+  | { kind: 'drop'; name: string; confirmation: string }
+
+export interface SshMySqlDatabaseGrant {
+  database: string
+  privileges: string[]
+  grantable: boolean
+}
+
+export interface SshMySqlUser {
+  username: string
+  host: string
+  plugin: string
+  system: boolean
+  globalPrivileges: string[]
+  databaseGrants: SshMySqlDatabaseGrant[]
+}
+
+export type SshMySqlUserOperation =
+  | { kind: 'create'; username: string; host: string; password: string; database: string | null; privileges: string[] }
+  | { kind: 'set-database-access'; username: string; host: string; database: string; privileges: string[] }
+  | { kind: 'set-password'; username: string; host: string; password: string }
+  | { kind: 'drop'; username: string; host: string; confirmation: string }
+
 export interface SshServerUser {
   username: string
   uid: number
@@ -684,6 +764,14 @@ export interface DesktopApi {
     choosePrivateKey: () => Promise<string | null>
     vaultStatus: () => Promise<SshVaultStatus>
     serverOverview: (id: string) => Promise<SshServerOverview>
+    mysqlOverview: (id: string) => Promise<SshMySqlOverview>
+    mysqlAccessProfile: (id: string) => Promise<SshMySqlAccessProfile | null>
+    saveMysqlAccess: (id: string, input: SshMySqlAccessInput) => Promise<SshMySqlAccessProfile>
+    clearMysqlAccess: (id: string) => Promise<void>
+    mysqlDatabases: (id: string) => Promise<SshMySqlDatabase[]>
+    manageMysqlDatabase: (id: string, operation: SshMySqlDatabaseOperation) => Promise<SshMySqlDatabase[]>
+    mysqlUsers: (id: string) => Promise<SshMySqlUser[]>
+    manageMysqlUser: (id: string, operation: SshMySqlUserOperation) => Promise<SshMySqlUser[]>
     accountCatalog: (id: string) => Promise<SshAccountCatalog>
     authorizedKeys: (id: string, username: string) => Promise<string>
     manageAccounts: (id: string, operation: SshAccountOperation) => Promise<SshAccountCatalog>

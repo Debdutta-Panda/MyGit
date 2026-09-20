@@ -26,7 +26,7 @@ const inferTag = (name: string): CommandSnippetTag => {
   if (value === 'mode' || value.endsWith('_mode') || value.includes('permission')) return 'mode'
   return 'text'
 }
-const variablesFrom = (source: string, overrides: Record<string, CommandSnippetTag>): CommandSnippetVariable[] => {
+export const commandSnippetVariables = (source: string, overrides: Record<string, CommandSnippetTag> = {}): CommandSnippetVariable[] => {
   const found = new Map<string, CommandSnippetVariable>()
   pattern.lastIndex = 0
   for (const match of source.matchAll(pattern)) {
@@ -41,6 +41,13 @@ const variablesFrom = (source: string, overrides: Record<string, CommandSnippetT
     })
   }
   return [...found.values()]
+}
+export const commandSnippetVariableTags = (source: string, overrides: Record<string, CommandSnippetTag> = {}): CommandSnippetTag[] => {
+  try {
+    return commandSnippetVariables(source, overrides).map((variable) => variable.tag)
+  } catch {
+    return []
+  }
 }
 const validated = (variable: CommandSnippetVariable, raw: string): string => {
   const value = raw.trim()
@@ -59,7 +66,7 @@ const render = (
   overrides: Record<string, CommandSnippetTag>,
 ): CommandSnippetRenderResult & { variables: CommandSnippetVariable[] } => {
   try {
-    const variables = variablesFrom(source, overrides)
+    const variables = commandSnippetVariables(source, overrides)
     const missing = variables.filter((variable) => !values[variable.name]?.trim()).map((variable) => variable.name)
     if (missing.length) return { rendered: null, missing, error: null, variables }
     const byName = new Map(variables.map((variable) => [variable.name, variable]))
@@ -82,20 +89,23 @@ interface Props {
   users?: string[]
   groups?: string[]
   initialValues?: Record<string, string>
+  contextValues?: Partial<Record<CommandSnippetTag, string>>
+  variableTypes?: Record<string, CommandSnippetTag>
   onResult: (result: CommandSnippetRenderResult) => void
 }
 
-export function CommandSnippetTemplate({ template, users = [], groups = [], initialValues = {}, onResult }: Props) {
+export function CommandSnippetTemplate({ template, users = [], groups = [], initialValues = {}, contextValues = {}, variableTypes = {}, onResult }: Props) {
   const [values, setValues] = useState<Record<string, string>>(initialValues)
-  const [tags, setTags] = useState<Record<string, CommandSnippetTag>>({})
+  const [tags, setTags] = useState<Record<string, CommandSnippetTag>>(variableTypes)
   const [copied, setCopied] = useState(false)
-  const result = useMemo(() => render(template, values, tags), [template, values, tags])
+  const result = useMemo(() => render(template, values, { ...variableTypes, ...tags }), [template, values, tags, variableTypes])
 
   useEffect(() => {
     setValues((current) => {
       const next = { ...current }
       for (const variable of result.variables) {
-        if (!(variable.name in next) && initialValues[variable.name]) next[variable.name] = initialValues[variable.name]
+        const initial = initialValues[variable.name] ?? contextValues[variable.tag]
+        if (!(variable.name in next) && initial) next[variable.name] = initial
       }
       return next
     })
@@ -123,7 +133,8 @@ export function CommandSnippetTemplate({ template, users = [], groups = [], init
     <div className="command-snippet-fields">
       {result.variables.map((variable) => <div className="command-snippet-field" key={variable.name}>
         <label>{variable.name}</label>
-        <Select size="xs" value={tags[variable.name] ?? variable.tag} data={[
+        <Select size="xs" value={tags[variable.name] ?? variable.tag}
+          disabled={variable.explicit || Boolean(variableTypes[variable.name])} data={[
           { value: 'path', label: 'Path' }, { value: 'user', label: 'User' }, { value: 'group', label: 'Group' },
           { value: 'mode', label: 'Mode' }, { value: 'text', label: 'Text' },
         ]} onChange={(tag) => tag && setTags((current) => ({ ...current, [variable.name]: tag as CommandSnippetTag }))} />

@@ -4,6 +4,7 @@ import { copyFile as localCopyFile, readFile, stat as localStat, unlink as local
 import { createHash, randomUUID } from 'node:crypto'
 import { basename as localBasename, posix } from 'node:path'
 import { Client, type ConnectConfig, type SFTPWrapper } from 'ssh2'
+import { createConnection as createMysqlConnection, type Connection as MySqlConnection, type RowDataPacket } from 'mysql2/promise'
 import type {
   SshDirectoryListing,
   SshRemoteEntry,
@@ -11,6 +12,12 @@ import type {
   SshRemoteFileContent,
   SshRemoteFileWriteInput,
   SshServerOverview,
+  SshMySqlOverview,
+  SshMySqlAccessInput,
+  SshMySqlDatabase,
+  SshMySqlDatabaseOperation,
+  SshMySqlUser,
+  SshMySqlUserOperation,
   SshAccountCatalog,
   SshAccountOperation,
   SshAccessApplyResult,
@@ -21,6 +28,7 @@ import type {
   SshCommandResult,
 } from '../shared/desktop-api'
 import { getSshRuntimeConnection, type SshRuntimeConnection } from './ssh-connections'
+import { clearMysqlAccessProfile, getMysqlAccessProfile, getMysqlRuntimeProfile, saveMysqlAccessProfile, type MySqlRuntimeProfile } from './mysql-store'
 
 const MAX_COMMAND_OUTPUT = 2 * 1024 * 1024
 const MAX_TEXT_FILE_BYTES = 5 * 1024 * 1024
@@ -128,6 +136,38 @@ const exec = async (client: Client, command: string): Promise<string> =>
         else finish()
       })
       stream.once('error', (streamError: Error) => finish(streamError))
+    })
+  })
+
+const execInput = async (client: Client, command: string, input: string): Promise<string> =>
+  await new Promise<string>((resolve, reject) => {
+    client.exec(command, (error, stream) => {
+      if (error) { reject(error); return }
+      let stdout = ''
+      let stderr = ''
+      let settled = false
+      const finish = (failure?: Error): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
+        if (failure) reject(failure)
+        else resolve(stdout.trim())
+      }
+      const append = (current: string, chunk: Buffer): string => {
+        if (current.length + chunk.length > MAX_COMMAND_OUTPUT) {
+          finish(new Error('The server returned too much data.'))
+          stream.close()
+          return current
+        }
+        return current + chunk.toString('utf8')
+      }
+      const timeout = setTimeout(() => { stream.close(); finish(new Error('The server operation timed out.')) }, 20_000)
+      stream.on('data', (chunk: Buffer) => { stdout = append(stdout, chunk) })
+      stream.stderr.on('data', (chunk: Buffer) => { stderr = append(stderr, chunk) })
+      stream.once('close', (code: number | null) => code && code !== 0
+        ? finish(new Error(stderr.trim() || `Remote command failed (${code}).`)) : finish())
+      stream.once('error', (streamError: Error) => finish(streamError))
+      stream.end(input)
     })
   })
 
@@ -253,6 +293,356 @@ const serverOverview = async (id: string): Promise<SshServerOverview> =>
       partitions,
       fetchedAt: new Date().toISOString(),
     }
+  })
+
+const mysqlOverview = async (id: string): Promise<SshMySqlOverview> =>
+  await withClient(id, async (client, connection) => {
+    const output = await exec(client, [
+      "server_bin=$(command -v mysqld 2>/dev/null || command -v mariadbd 2>/dev/null || true)",
+      "client_bin=$(command -v mysql 2>/dev/null || command -v mariadb 2>/dev/null || true)",
+      "printf 'server_bin|%s\\nclient_bin|%s\\n' \"$server_bin\" \"$client_bin\"",
+      "server_version=''; [ -n \"$server_bin\" ] && server_version=$(\"$server_bin\" --version 2>/dev/null | head -n1 || true); printf 'server_version|%s\\n' \"$server_version\"",
+      "client_version=''; [ -n \"$client_bin\" ] && client_version=$(\"$client_bin\" --version 2>/dev/null | head -n1 || true); printf 'client_version|%s\\n' \"$client_version\"",
+      "case \"$server_version $client_version\" in *MariaDB*|*mariadb*) printf 'engine|mariadb\\n';; *MySQL*|*mysqld*) printf 'engine|mysql\\n';; *) printf 'engine|unknown\\n';; esac",
+      "svc=''; if command -v systemctl >/dev/null 2>&1; then for candidate in mysql mariadb mysqld; do load=$(systemctl show \"$candidate.service\" -p LoadState --value 2>/dev/null || true); if [ -n \"$load\" ] && [ \"$load\" != not-found ]; then svc=$candidate; break; fi; done; fi; printf 'service|%s\\n' \"$svc\"",
+      "if [ -n \"$svc\" ]; then printf 'service_state|%s\\n' \"$(systemctl is-active \"$svc.service\" 2>/dev/null || true)\"; enabled=$(systemctl is-enabled \"$svc.service\" 2>/dev/null || true); printf 'service_enabled|%s\\n' \"$enabled\"; printf 'pid|%s\\n' \"$(systemctl show \"$svc.service\" -p MainPID --value 2>/dev/null || true)\"; printf 'active_since|%s\\n' \"$(systemctl show \"$svc.service\" -p ActiveEnterTimestamp --value 2>/dev/null || true)\"; else printf 'service_state|not-found\\nservice_enabled|unknown\\npid|0\\nactive_since|\\n'; fi",
+      "defaults=''; if command -v my_print_defaults >/dev/null 2>&1; then defaults=$(my_print_defaults mysqld server 2>/dev/null || true); fi",
+      "setting(){ printf '%s\\n' \"$defaults\" | sed -n \"s/^--$1=//p\" | tail -n1; }",
+      "printf 'port|%s\\nsocket|%s\\nbind|%s\\ndatadir|%s\\n' \"$(setting port)\" \"$(setting socket)\" \"$(setting bind-address)\" \"$(setting datadir)\"",
+      "for file in /etc/my.cnf /etc/mysql/my.cnf /etc/mysql/mysql.conf.d/mysqld.cnf /etc/mysql/mariadb.conf.d/50-server.cnf /usr/local/etc/my.cnf; do [ -f \"$file\" ] && printf 'config|%s\\n' \"$file\"; done",
+      "pm=''; for candidate in apt-get dnf yum zypper pacman apk; do if command -v \"$candidate\" >/dev/null 2>&1; then pm=$candidate; break; fi; done; printf 'package_manager|%s\\n' \"$pm\"",
+      "printf 'os|%s\\n' \"$(awk -F= '$1==\"PRETTY_NAME\" {gsub(/^\"|\"$/,\"\",$2); print $2; exit}' /etc/os-release 2>/dev/null || uname -s 2>/dev/null || printf unknown)\"",
+      "tools=''; for tool in mysql mysqladmin mysqldump mysqlcheck mysqlimport mysqlshow my_print_defaults; do if command -v \"$tool\" >/dev/null 2>&1; then tools=\"${tools}${tools:+,}$tool\"; fi; done; printf 'tools|%s\\n' \"$tools\"",
+      "datadir=$(setting datadir); [ -z \"$datadir\" ] && [ -d /var/lib/mysql ] && datadir=/var/lib/mysql; if [ -n \"$datadir\" ]; then printf 'resolved_datadir|%s\\n' \"$datadir\"; df -PkP \"$datadir\" 2>/dev/null | awk 'NR==2 {printf \"disk|%.0f|%.0f|%.0f\\n\",$2*1024,$3*1024,$4*1024}'; fi",
+    ].join('; '))
+    const fields = new Map<string, string[]>()
+    const configFiles: string[] = []
+    for (const line of output.split(/\r?\n/)) {
+      const [key, ...values] = line.split('|')
+      if (key === 'config' && values[0]) configFiles.push(values.join('|'))
+      else if (key) fields.set(key, values)
+    }
+    const value = (key: string): string | null => fields.get(key)?.join('|').trim() || null
+    const disk = fields.get('disk') ?? []
+    const serverExecutable = value('server_bin')
+    const clientExecutable = value('client_bin')
+    const enabled = value('service_enabled')
+    return {
+      connectionId: connection.id,
+      installed: Boolean(serverExecutable),
+      engine: value('engine') === 'mariadb' ? 'mariadb' : value('engine') === 'mysql' ? 'mysql' : 'unknown',
+      serverInstalled: Boolean(serverExecutable),
+      clientInstalled: Boolean(clientExecutable),
+      version: value('server_version'),
+      clientVersion: value('client_version'),
+      serverExecutable,
+      clientExecutable,
+      serviceName: value('service'),
+      serviceState: value('service_state') ?? 'unknown',
+      serviceEnabled: enabled === 'enabled' ? true : enabled === 'disabled' ? false : null,
+      processId: numberOrNull(value('pid') ?? undefined),
+      activeSince: value('active_since'),
+      port: numberOrNull(value('port') ?? undefined),
+      socket: value('socket'),
+      bindAddress: value('bind'),
+      dataDirectory: value('resolved_datadir') ?? value('datadir'),
+      configFiles,
+      packageManager: value('package_manager'),
+      operatingSystem: value('os') ?? 'Unknown',
+      diskTotalBytes: numberOrNull(disk[0]),
+      diskUsedBytes: numberOrNull(disk[1]),
+      diskAvailableBytes: numberOrNull(disk[2]),
+      clientTools: (value('tools') ?? '').split(',').filter(Boolean),
+      administrativeAccess: 'not-configured',
+      fetchedAt: new Date().toISOString(),
+    }
+  })
+
+const mysqlSystemSchemas = new Set(['information_schema', 'mysql', 'performance_schema', 'sys'])
+const mysqlDatabaseNamePattern = /^[a-z0-9_$-]{1,64}$/i
+const mysqlCollations: Record<string, string[]> = {
+  utf8mb4: ['utf8mb4_unicode_ci', 'utf8mb4_general_ci'],
+  utf8: ['utf8_general_ci', 'utf8_unicode_ci'],
+  latin1: ['latin1_swedish_ci'],
+  ascii: ['ascii_general_ci'],
+}
+const mysqlDatabaseSql = `
+  SELECT s.SCHEMA_NAME AS schema_name, s.DEFAULT_CHARACTER_SET_NAME AS character_set,
+         s.DEFAULT_COLLATION_NAME AS collation_name, COUNT(t.TABLE_NAME) AS table_count,
+         COALESCE(SUM(COALESCE(t.DATA_LENGTH, 0) + COALESCE(t.INDEX_LENGTH, 0)), 0) AS size_bytes
+  FROM information_schema.SCHEMATA s
+  LEFT JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = s.SCHEMA_NAME
+  GROUP BY s.SCHEMA_NAME, s.DEFAULT_CHARACTER_SET_NAME, s.DEFAULT_COLLATION_NAME
+  ORDER BY s.SCHEMA_NAME
+`.replace(/\s+/g, ' ').trim()
+
+const mysqlIdentifier = (value: string): string => {
+  const name = value.trim()
+  if (!mysqlDatabaseNamePattern.test(name)) throw new Error('Database names may contain letters, numbers, _, $, and - and must be 1-64 characters.')
+  return `\`${name.replace(/`/g, '``')}\``
+}
+
+const mysqlPort = async (client: Client): Promise<number> => {
+  const output = await exec(client, "if command -v my_print_defaults >/dev/null 2>&1; then my_print_defaults mysqld server 2>/dev/null | sed -n 's/^--port=//p' | tail -n1; fi")
+  const port = Number(output)
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 3306
+}
+
+const mysqlForward = async (client: Client, profile: MySqlRuntimeProfile): Promise<MySqlConnection> => {
+  if (!profile.username || !profile.password) throw new Error('The saved MySQL username or password is missing.')
+  const port = await mysqlPort(client)
+  const stream = await new Promise<import('node:stream').Duplex>((resolve, reject) => {
+    client.forwardOut('127.0.0.1', 0, '127.0.0.1', port, (error, channel) => error ? reject(error) : resolve(channel))
+  })
+  try {
+    return await createMysqlConnection({
+      user: profile.username,
+      password: profile.password,
+      database: 'information_schema',
+      stream,
+      connectTimeout: 12_000,
+      enableKeepAlive: true,
+    })
+  } catch (error) {
+    stream.destroy()
+    throw error
+  }
+}
+
+const mysqlSystemQuery = async (client: Client, sql: string): Promise<string> => {
+  const privilege = await accountPrivilege(client)
+  if (!privilege.canManage) throw new Error('System administrator access requires root or passwordless sudo.')
+  const command = "client=$(command -v mysql 2>/dev/null || command -v mariadb 2>/dev/null || true); [ -n \"$client\" ] || { echo 'MySQL client was not found.' >&2; exit 1; }; exec \"$client\" --batch --raw --skip-column-names"
+  return await execInput(client, privilege.root ? command : `sudo -n sh -c ${shellQuote(command)}`, `${sql};\n`)
+}
+
+const mysqlProfileOrThrow = (connectionId: string): MySqlRuntimeProfile => {
+  const profile = getMysqlRuntimeProfile(connectionId)
+  if (!profile) throw new Error('Configure database access before managing databases.')
+  return profile
+}
+
+const mysqlRows = async (client: Client, profile: MySqlRuntimeProfile): Promise<SshMySqlDatabase[]> => {
+  let rows: Array<{ name: string; characterSet: string; collation: string; tableCount: number; sizeBytes: number }>
+  if (profile.mode === 'system') {
+    const output = await mysqlSystemQuery(client, mysqlDatabaseSql)
+    rows = output.split(/\r?\n/).filter(Boolean).map((line) => {
+      const [name = '', characterSet = '', collation = '', tables = '0', size = '0'] = line.split('\t')
+      return { name, characterSet, collation, tableCount: Number(tables) || 0, sizeBytes: Number(size) || 0 }
+    })
+  } else {
+    const database = await mysqlForward(client, profile)
+    try {
+      const [result] = await database.query<RowDataPacket[]>(mysqlDatabaseSql)
+      rows = result.map((row) => ({
+        name: String(row.schema_name ?? ''),
+        characterSet: String(row.character_set ?? ''),
+        collation: String(row.collation_name ?? ''),
+        tableCount: Number(row.table_count) || 0,
+        sizeBytes: Number(row.size_bytes) || 0,
+      }))
+    } finally {
+      await database.end()
+    }
+  }
+  return rows.map((row) => ({ ...row, system: mysqlSystemSchemas.has(row.name) }))
+}
+
+const verifyMysqlProfile = async (client: Client, profile: MySqlRuntimeProfile): Promise<void> => {
+  if (profile.mode === 'system') {
+    await mysqlSystemQuery(client, 'SELECT 1')
+    return
+  }
+  const database = await mysqlForward(client, profile)
+  try {
+    await database.query('SELECT 1')
+  } finally {
+    await database.end()
+  }
+}
+
+const saveMysqlAccess = async (id: string, input: SshMySqlAccessInput) => {
+  const existing = getMysqlRuntimeProfile(id)
+  const candidate: MySqlRuntimeProfile = {
+    connectionId: id,
+    mode: input.mode,
+    username: input.mode === 'system' ? '' : input.username.trim(),
+    hasPassword: input.mode === 'password' && Boolean(input.password || existing?.password),
+    password: input.mode === 'password' ? input.password || existing?.password || null : null,
+    updatedAt: existing?.updatedAt ?? null,
+  }
+  if (candidate.mode === 'password' && (!candidate.username || !candidate.password)) throw new Error('Enter the MySQL username and password.')
+  await withClient(id, async (client) => verifyMysqlProfile(client, candidate))
+  return saveMysqlAccessProfile(id, input)
+}
+
+const mysqlDatabases = async (id: string): Promise<SshMySqlDatabase[]> =>
+  await withClient(id, async (client) => mysqlRows(client, mysqlProfileOrThrow(id)))
+
+const manageMysqlDatabase = async (id: string, operation: SshMySqlDatabaseOperation): Promise<SshMySqlDatabase[]> =>
+  await withClient(id, async (client) => {
+    const profile = mysqlProfileOrThrow(id)
+    const identifier = mysqlIdentifier(operation.name)
+    let sql = ''
+    if (operation.kind === 'create') {
+      const collations = mysqlCollations[operation.characterSet]
+      if (!collations?.includes(operation.collation)) throw new Error('Choose a supported character set and collation.')
+      sql = `CREATE DATABASE ${identifier} CHARACTER SET ${operation.characterSet} COLLATE ${operation.collation}`
+    } else {
+      const name = operation.name.trim()
+      if (mysqlSystemSchemas.has(name)) throw new Error('System databases cannot be deleted.')
+      if (operation.confirmation !== name) throw new Error('Type the exact database name to confirm deletion.')
+      sql = `DROP DATABASE ${identifier}`
+    }
+    if (profile.mode === 'system') await mysqlSystemQuery(client, sql)
+    else {
+      const database = await mysqlForward(client, profile)
+      try {
+        await database.query(sql)
+      } finally {
+        await database.end()
+      }
+    }
+    return await mysqlRows(client, profile)
+  })
+
+const mysqlUserNamePattern = /^[a-z0-9_.$-]{1,32}$/i
+const mysqlHostPattern = /^[a-z0-9_.:%-]{1,255}$/i
+const mysqlUserPrivileges = new Set([
+  'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER', 'INDEX', 'DROP',
+  'EXECUTE', 'CREATE VIEW', 'SHOW VIEW', 'TRIGGER', 'REFERENCES',
+])
+const mysqlProtectedUsers = new Set(['root', 'mysql.sys', 'mysql.session', 'mysql.infoschema', 'mariadb.sys'])
+
+const mysqlStringLiteral = (value: string): string => {
+  if (value.length > 1024 || /[\r\n\0]/.test(value)) throw new Error('The value is empty, too long, or contains an unsupported line break.')
+  return `'${value.replace(/'/g, "''")}'`
+}
+const mysqlAccount = (username: string, host: string): string => {
+  const user = username.trim()
+  const source = host.trim()
+  if (!mysqlUserNamePattern.test(user)) throw new Error('MySQL usernames may contain letters, numbers, _, ., $, and - and must be 1-32 characters.')
+  if (!mysqlHostPattern.test(source)) throw new Error('Enter a valid MySQL account host such as localhost, %, an IP address, or a hostname.')
+  return `${mysqlStringLiteral(user)}@${mysqlStringLiteral(source)}`
+}
+const checkedMysqlPrivileges = (values: string[]): string[] => {
+  const result = Array.from(new Set(values.map((value) => value.trim().toUpperCase())))
+  if (result.some((value) => !mysqlUserPrivileges.has(value))) throw new Error('One or more database privileges are unsupported.')
+  return result
+}
+
+const mysqlTabular = async (
+  client: Client,
+  profile: MySqlRuntimeProfile,
+  sql: string,
+  columns: string[],
+): Promise<Record<string, string>[]> => {
+  if (profile.mode === 'system') {
+    const output = await mysqlSystemQuery(client, sql)
+    return output.split(/\r?\n/).filter(Boolean).map((line) => {
+      const values = line.split('\t')
+      return Object.fromEntries(columns.map((column, index) => [column, values[index] ?? '']))
+    })
+  }
+  const database = await mysqlForward(client, profile)
+  try {
+    const [rows] = await database.query<RowDataPacket[]>(sql)
+    return rows.map((row) => Object.fromEntries(columns.map((column) => [column, String(row[column] ?? '')])))
+  } finally {
+    await database.end()
+  }
+}
+
+const mysqlExecute = async (client: Client, profile: MySqlRuntimeProfile, sql: string): Promise<void> => {
+  if (profile.mode === 'system') {
+    await mysqlSystemQuery(client, sql)
+    return
+  }
+  const database = await mysqlForward(client, profile)
+  try {
+    await database.query(sql)
+  } finally {
+    await database.end()
+  }
+}
+
+const mysqlUserRows = async (client: Client, profile: MySqlRuntimeProfile): Promise<SshMySqlUser[]> => {
+  const users = await mysqlTabular(client, profile,
+    'SELECT User AS username, Host AS host, COALESCE(plugin, \'\') AS plugin FROM mysql.user ORDER BY User, Host',
+    ['username', 'host', 'plugin'])
+  const schemaPrivileges = await mysqlTabular(client, profile, `
+    SELECT u.User AS username, u.Host AS host, p.TABLE_SCHEMA AS database_name,
+           p.PRIVILEGE_TYPE AS privilege_type, p.IS_GRANTABLE AS grantable
+    FROM mysql.user u JOIN information_schema.SCHEMA_PRIVILEGES p
+      ON p.GRANTEE = CONCAT(QUOTE(u.User), '@', QUOTE(u.Host))
+    ORDER BY u.User, u.Host, p.TABLE_SCHEMA, p.PRIVILEGE_TYPE
+  `.replace(/\s+/g, ' ').trim(), ['username', 'host', 'database_name', 'privilege_type', 'grantable'])
+  const globalPrivileges = await mysqlTabular(client, profile, `
+    SELECT u.User AS username, u.Host AS host, p.PRIVILEGE_TYPE AS privilege_type
+    FROM mysql.user u JOIN information_schema.USER_PRIVILEGES p
+      ON p.GRANTEE = CONCAT(QUOTE(u.User), '@', QUOTE(u.Host))
+    ORDER BY u.User, u.Host, p.PRIVILEGE_TYPE
+  `.replace(/\s+/g, ' ').trim(), ['username', 'host', 'privilege_type'])
+  return users.map((row) => {
+    const keyMatch = (candidate: Record<string, string>): boolean => candidate.username === row.username && candidate.host === row.host
+    const grants = new Map<string, { privileges: string[]; grantable: boolean }>()
+    for (const privilege of schemaPrivileges.filter(keyMatch)) {
+      const entry = grants.get(privilege.database_name) ?? { privileges: [], grantable: false }
+      entry.privileges.push(privilege.privilege_type)
+      entry.grantable ||= privilege.grantable === 'YES'
+      grants.set(privilege.database_name, entry)
+    }
+    return {
+      username: row.username,
+      host: row.host,
+      plugin: row.plugin,
+      system: mysqlProtectedUsers.has(row.username),
+      globalPrivileges: globalPrivileges.filter(keyMatch).map((privilege) => privilege.privilege_type),
+      databaseGrants: Array.from(grants, ([database, grant]) => ({ database, ...grant })),
+    }
+  })
+}
+
+const mysqlUsers = async (id: string): Promise<SshMySqlUser[]> =>
+  await withClient(id, async (client) => mysqlUserRows(client, mysqlProfileOrThrow(id)))
+
+const manageMysqlUser = async (id: string, operation: SshMySqlUserOperation): Promise<SshMySqlUser[]> =>
+  await withClient(id, async (client) => {
+    const profile = mysqlProfileOrThrow(id)
+    const account = mysqlAccount(operation.username, operation.host)
+    if (operation.kind === 'create') {
+      if (!operation.password || /[\r\n\0]/.test(operation.password) || operation.password.length > 1024) throw new Error('Enter a valid initial password.')
+      const privileges = checkedMysqlPrivileges(operation.privileges)
+      if (operation.database) mysqlIdentifier(operation.database)
+      await mysqlExecute(client, profile, `CREATE USER ${account} IDENTIFIED BY ${mysqlStringLiteral(operation.password)}`)
+      if (operation.database && privileges.length) {
+        await mysqlExecute(client, profile, `GRANT ${privileges.join(', ')} ON ${mysqlIdentifier(operation.database)}.* TO ${account}`)
+      }
+    } else if (operation.kind === 'set-password') {
+      if (mysqlProtectedUsers.has(operation.username)) throw new Error('Protected system-account passwords cannot be changed here.')
+      if (profile.mode === 'password' && profile.username === operation.username) throw new Error('This account currently authenticates MyRepos. Change it from Database administration access so the saved credential can be updated safely.')
+      if (!operation.password || /[\r\n\0]/.test(operation.password) || operation.password.length > 1024) throw new Error('Enter a valid new password.')
+      await mysqlExecute(client, profile, `ALTER USER ${account} IDENTIFIED BY ${mysqlStringLiteral(operation.password)}`)
+    } else if (operation.kind === 'set-database-access') {
+      const database = operation.database.trim()
+      mysqlIdentifier(database)
+      const requested = checkedMysqlPrivileges(operation.privileges)
+      const currentUsers = await mysqlUserRows(client, profile)
+      const currentUser = currentUsers.find((user) => user.username === operation.username && user.host === operation.host)
+      if (!currentUser) throw new Error('The MySQL account no longer exists.')
+      const existing = currentUser.databaseGrants.find((grant) => grant.database === database)?.privileges.map((value) => value.toUpperCase()) ?? []
+      const revoke = existing.filter((value) => mysqlUserPrivileges.has(value) && !requested.includes(value))
+      const grant = requested.filter((value) => !existing.includes(value))
+      if (revoke.length) await mysqlExecute(client, profile, `REVOKE ${revoke.join(', ')} ON ${mysqlIdentifier(database)}.* FROM ${account}`)
+      if (grant.length) await mysqlExecute(client, profile, `GRANT ${grant.join(', ')} ON ${mysqlIdentifier(database)}.* TO ${account}`)
+    } else {
+      const label = `${operation.username}@${operation.host}`
+      if (mysqlProtectedUsers.has(operation.username)) throw new Error('Protected system accounts cannot be deleted.')
+      if (profile.mode === 'password' && profile.username === operation.username) throw new Error('This account currently authenticates MyRepos and cannot be deleted while in use.')
+      if (operation.confirmation !== label) throw new Error('Type the exact account name to confirm deletion.')
+      await mysqlExecute(client, profile, `DROP USER ${account}`)
+    }
+    return await mysqlUserRows(client, profile)
   })
 
 const accountCatalog = async (id: string): Promise<SshAccountCatalog> =>
@@ -1223,6 +1613,16 @@ const downloadFile = async (
 
 export const registerSshWorkspaceHandlers = (): void => {
   ipcMain.handle('ssh:server-overview', (_event, id: string) => serverOverview(id))
+  ipcMain.handle('ssh:mysql-overview', (_event, id: string) => mysqlOverview(id))
+  ipcMain.handle('ssh:mysql-access-profile', (_event, id: string) => getMysqlAccessProfile(id))
+  ipcMain.handle('ssh:save-mysql-access', (_event, id: string, input: SshMySqlAccessInput) => saveMysqlAccess(id, input))
+  ipcMain.handle('ssh:clear-mysql-access', (_event, id: string) => { clearMysqlAccessProfile(id) })
+  ipcMain.handle('ssh:mysql-databases', (_event, id: string) => mysqlDatabases(id))
+  ipcMain.handle('ssh:manage-mysql-database', (_event, id: string, operation: SshMySqlDatabaseOperation) =>
+    manageMysqlDatabase(id, operation))
+  ipcMain.handle('ssh:mysql-users', (_event, id: string) => mysqlUsers(id))
+  ipcMain.handle('ssh:manage-mysql-user', (_event, id: string, operation: SshMySqlUserOperation) =>
+    manageMysqlUser(id, operation))
   ipcMain.handle('ssh:account-catalog', (_event, id: string) => accountCatalog(id))
   ipcMain.handle('ssh:authorized-keys', (_event, id: string, username: string) => authorizedKeys(id, username))
   ipcMain.handle('ssh:manage-accounts', (_event, id: string, operation: SshAccountOperation) =>

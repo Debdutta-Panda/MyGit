@@ -38,8 +38,10 @@ import type {
 import { SshRemoteFileManager } from './SshRemoteFileManager'
 import { SshUsersGroupsManager } from './SshUsersGroupsManager'
 import { SshCommandSnippets } from './SshCommandSnippets'
+import { SshScripts } from './SshScripts'
+import { SshDatabases } from './SshDatabases'
 
-type WorkspaceTab = 'overview' | 'files' | 'accounts' | 'snippets' | 'services' | 'databases' | 'logs'
+type WorkspaceTab = 'overview' | 'files' | 'accounts' | 'snippets' | 'scripts' | 'services' | 'databases' | 'logs'
 
 const formatBytes = (value: number | null): string => {
   if (value === null) return 'Unavailable'
@@ -236,6 +238,7 @@ export function SshServerWorkspace({
               ['files', 'Files'],
               ['accounts', 'Users & Groups'],
               ['snippets', 'Snippets'],
+              ['scripts', 'Scripts'],
               ['services', 'Services'],
               ['databases', 'Databases'],
               ['logs', 'Logs'],
@@ -396,7 +399,7 @@ export function SshServerWorkspace({
       )}
 
       {tab === 'files' && (
-        <SshRemoteFileManager connection={connection} />
+        <SshRemoteFileManager connection={connection} onOpenTerminal={onOpenTerminal} />
       )}
 
       {tab === 'accounts' && (
@@ -407,7 +410,15 @@ export function SshServerWorkspace({
         <SshCommandSnippets connection={connection} onOpenTerminal={onOpenTerminal} />
       )}
 
-      {(tab === 'services' || tab === 'databases' || tab === 'logs') && (
+      {tab === 'scripts' && (
+        <SshScripts connection={connection} onOpenTerminal={onOpenTerminal} />
+      )}
+
+      {tab === 'databases' && (
+        <SshDatabases connection={connection} />
+      )}
+
+      {(tab === 'services' || tab === 'logs') && (
         <section className="ssh-module-skeleton">
           <ThemeIcon size={52} radius="xl" variant="light" color="teal"><IconListDetails size={25} /></ThemeIcon>
           <Text fw={720} fz={18}>{tab[0].toUpperCase() + tab.slice(1)}</Text>
