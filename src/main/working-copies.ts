@@ -5,6 +5,8 @@ import { access, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, relative, resolve } from 'node:path'
 import { getDatabase } from './database'
 import { scheduleConfigurationSync } from './configuration-sync'
+import { autoPushPolicyChanged } from './repository-auto-push'
+import { refreshRepositoryStatus } from './repository-monitor'
 import {
   cloneRepository,
   locateRepository,
@@ -18,6 +20,7 @@ import {
   registerWorkingCopy,
   setPreferredWorkingCopy,
   updateWorkingCopyLabel,
+  updateWorkingCopyAutoPush,
   updateWorkingCopyPath,
 } from './working-copy-store'
 import type {
@@ -452,6 +455,21 @@ export const registerWorkingCopyHandlers = (): void => {
     if (typeof id !== 'string' || typeof label !== 'string') throw new Error('Invalid working copy details.')
     const copy = await updateWorkingCopyLabel(id, label)
     scheduleConfigurationSync()
+    return copy
+  })
+  ipcMain.handle('working-copies:set-auto-push', async (_event, id, mode) => {
+    if (typeof id !== 'string' || (mode !== 'off' && mode !== 'idle')) {
+      throw new Error('Invalid auto-push preference.')
+    }
+    const copy = await updateWorkingCopyAutoPush(id, mode)
+    autoPushPolicyChanged({
+      id: copy.id,
+      account_id: copy.accountId,
+      full_name: copy.fullName,
+      local_path: copy.path,
+      auto_push_mode: copy.autoPushMode,
+    })
+    if (copy.autoPushMode === 'idle') void refreshRepositoryStatus(copy.path)
     return copy
   })
   ipcMain.handle('working-copies:clone', async (event, accountId, fullName, options) => {

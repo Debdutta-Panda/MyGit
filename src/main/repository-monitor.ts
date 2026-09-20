@@ -2,6 +2,8 @@ import { BrowserWindow } from 'electron'
 import { spawn } from 'node:child_process'
 import { watch, type FSWatcher } from 'node:fs'
 import type { RepositoryGitStatus } from '../shared/desktop-api'
+import { getDatabase } from './database'
+import { reconsiderAutoPush, stopAllAutoPush } from './repository-auto-push'
 
 const watchers = new Map<string, FSWatcher>()
 const refreshTimers = new Map<string, NodeJS.Timeout>()
@@ -108,6 +110,34 @@ const broadcastStatus = (status: RepositoryGitStatus): void => {
   for (const window of BrowserWindow.getAllWindows()) {
     if (!window.isDestroyed()) window.webContents.send('repositories:status-changed', status)
   }
+  reconsiderAutoPush(status, readRepositoryStatus, broadcastStatus)
+}
+
+let autoPushScanTimer: NodeJS.Timeout | null = null
+let autoPushInitialTimer: NodeJS.Timeout | null = null
+
+export const startAutoPushMonitoring = (): void => {
+  if (autoPushScanTimer) return
+  const scan = (): void => {
+    const rows = getDatabase().prepare(`
+      SELECT local_path FROM working_copies WHERE auto_push_mode = 'idle'
+    `).all() as unknown as Array<{ local_path: string }>
+    for (const row of rows) void readRepositoryStatus(row.local_path).then(broadcastStatus)
+  }
+  autoPushInitialTimer = setTimeout(() => {
+    autoPushInitialTimer = null
+    scan()
+  }, 2_000)
+  autoPushScanTimer = setInterval(scan, 30_000)
+  autoPushScanTimer.unref()
+}
+
+export const stopAutoPushMonitoring = (): void => {
+  if (autoPushInitialTimer) clearTimeout(autoPushInitialTimer)
+  autoPushInitialTimer = null
+  if (autoPushScanTimer) clearInterval(autoPushScanTimer)
+  autoPushScanTimer = null
+  stopAllAutoPush()
 }
 
 const scheduleRefresh = (repositoryPath: string): void => {

@@ -14,6 +14,7 @@ import { registerUpdateHandlers, startAutomaticUpdateChecks } from './app-update
 import { closeAllTerminals, registerTerminalHandlers } from './terminal-service'
 import { registerSshConnectionHandlers } from './ssh-connections'
 import { registerSshWorkspaceHandlers } from './ssh-workspace'
+import { startAutoPushMonitoring, stopAutoPushMonitoring } from './repository-monitor'
 
 // Squirrel invokes the application briefly while installing, updating, and uninstalling. Its
 // startup helper creates/removes shortcuts and exits before normal application initialization.
@@ -116,6 +117,7 @@ app.whenReady().then(async () => {
   registerWindowHandlers()
   createWindow()
   startAutomaticUpdateChecks()
+  startAutoPushMonitoring()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -126,6 +128,7 @@ app.whenReady().then(async () => {
 })
 
 app.on('before-quit', () => {
+  stopAutoPushMonitoring()
   closeAllTerminals()
   closeDatabase()
 })

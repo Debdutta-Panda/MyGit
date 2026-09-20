@@ -291,6 +291,16 @@ const createSchema = (db: DatabaseSync): void => {
         ADD COLUMN automatically_download_updates INTEGER NOT NULL DEFAULT 1;
     `)
   }
+  const workingCopyColumns = db.prepare('PRAGMA table_info(working_copies)').all() as unknown as
+    Array<{ name: string }>
+  if (!workingCopyColumns.some((column) => column.name === 'auto_push_mode')) {
+    db.exec(`ALTER TABLE working_copies
+      ADD COLUMN auto_push_mode TEXT NOT NULL DEFAULT 'off'
+      CHECK (auto_push_mode IN ('off', 'idle'));`)
+  }
+  if (!workingCopyColumns.some((column) => column.name === 'auto_push_updated_at')) {
+    db.exec('ALTER TABLE working_copies ADD COLUMN auto_push_updated_at TEXT;')
+  }
 
   const workspaceColumns = db.prepare('PRAGMA table_info(repository_workspaces)').all() as unknown as
     Array<{ name: string }>

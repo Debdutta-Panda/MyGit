@@ -180,6 +180,7 @@ import type {
   RepositoryGitStatus,
   RepositoryOrganization,
   RepositoryOrganizationEntry,
+  RepositoryAutoPushState,
   RepositoryWorkingCopy,
   RepositoryWorkingTreeFile,
   ProjectInsightsResult,
@@ -1133,6 +1134,7 @@ export function App() {
   const [workingCopyFolderDraft, setWorkingCopyFolderDraft] = useState('')
   const [workingCopyAction, setWorkingCopyAction] = useState<string | null>(null)
   const [workingCopyError, setWorkingCopyError] = useState<string | null>(null)
+  const [autoPushStates, setAutoPushStates] = useState<Record<string, RepositoryAutoPushState>>({})
   const [worktreeBranch, setWorktreeBranch] = useState('')
   const [worktreeCreateBranch, setWorktreeCreateBranch] = useState(true)
   const [workspaceWorkingCopySelections, setWorkspaceWorkingCopySelections] =
@@ -1550,6 +1552,13 @@ export function App() {
       }
     }
   }, [filesPanelTab, gitRepository?.localPath])
+
+  useEffect(() => {
+    if (!window.desktop) return
+    return window.desktop.workingCopies.onAutoPushState((state) => {
+      setAutoPushStates((current) => ({ ...current, [state.workingCopyId]: state }))
+    })
+  }, [])
 
   useEffect(() => {
     if (!window.desktop) return
@@ -2983,6 +2992,39 @@ export function App() {
     setBulkGitResults([])
     setBulkGitOpen(true)
     void runBulkGitOperation(targets, 'push')
+  }
+
+  const setWorkingCopyAutoPush = async (
+    copy: RepositoryWorkingCopy,
+    enabled: boolean,
+  ): Promise<void> => {
+    if (!window.desktop) return
+    setWorkingCopyAction(`auto-push:${copy.id}`)
+    setWorkingCopyError(null)
+    try {
+      const updated = await window.desktop.workingCopies.setAutoPush(
+        copy.id,
+        enabled ? 'idle' : 'off',
+      )
+      setWorkingCopies((current) => current.map((item) => item.id === updated.id ? updated : item))
+      if (!enabled) {
+        setAutoPushStates((current) => ({
+          ...current,
+          [copy.id]: {
+            workingCopyId: copy.id,
+            path: copy.path,
+            mode: 'off',
+            phase: 'off',
+            dueAt: null,
+            message: 'Safe auto-push is off.',
+          },
+        }))
+      }
+    } catch (error) {
+      setWorkingCopyError(errorMessage(error))
+    } finally {
+      setWorkingCopyAction(null)
+    }
   }
 
   const pullListedRepositories = (): void => {
@@ -8363,6 +8405,7 @@ export function App() {
                 const selectedForWorkspace = selectedWorkspaceId &&
                   workspaceWorkingCopySelections[repositoryKey] === copy.id
                 const copyStatus = gitStatuses[copy.path]
+                const autoPushState = autoPushStates[copy.id]
                 return (
                   <Paper
                     className="working-copy-card"
@@ -8379,6 +8422,16 @@ export function App() {
                           {copy.preferred && <Badge size="xs" color="teal">Preferred</Badge>}
                           {!copy.available && <Badge size="xs" color="red">Missing</Badge>}
                           {selectedForWorkspace && <Badge size="xs" color="blue">Workspace copy</Badge>}
+                          {copy.autoPushMode === 'idle' && (
+                            <Badge
+                              size="xs"
+                              color={autoPushState?.phase === 'paused'
+                                ? 'yellow'
+                                : autoPushState?.phase === 'pushing' ? 'blue' : 'teal'}
+                            >
+                              Safe auto-push · {autoPushState?.phase ?? 'watching'}
+                            </Badge>
+                          )}
                         </Group>
                         <Text size="xs" c="dimmed" mt={7} title={copy.path}>{copy.path}</Text>
                         {copy.available && copyStatus && !copyStatus.error && (
@@ -8392,6 +8445,12 @@ export function App() {
                             {copyStatus.ahead > 0 && <Text size="xs" c="teal.4">↑ {copyStatus.ahead}</Text>}
                             {copyStatus.behind > 0 && <Text size="xs" c="yellow.4">↓ {copyStatus.behind}</Text>}
                           </Group>
+                        )}
+                        {copy.autoPushMode === 'idle' && (
+                          <Text size="xs" c={autoPushState?.phase === 'paused' ? 'yellow.4' : 'dimmed'} mt={5}>
+                            {autoPushState?.message ??
+                              'Watching this device. Pushes only a clean, tracked branch after a 15-second delay.'}
+                          </Text>
                         )}
                       </div>
                       <Group gap={5} wrap="nowrap">
@@ -8430,6 +8489,14 @@ export function App() {
                       </Group>
                     </Group>
                     <Group gap="xs" mt="sm" align="flex-end" wrap="wrap">
+                      <Switch
+                        size="sm"
+                        label="Safe auto-push"
+                        description="Clean tracked branch only · this device"
+                        checked={copy.autoPushMode === 'idle'}
+                        disabled={Boolean(workingCopyAction) || !copy.available}
+                        onChange={(event) => void setWorkingCopyAutoPush(copy, event.currentTarget.checked)}
+                      />
                       <TextInput
                         className="working-copy-label-input"
                         label="Label"

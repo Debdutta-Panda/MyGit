@@ -43,6 +43,16 @@ export interface CloneResult {
 }
 
 export type RepositoryWorkingCopyType = 'clone' | 'worktree' | 'local'
+export type RepositoryAutoPushMode = 'off' | 'idle'
+
+export interface RepositoryAutoPushState {
+  workingCopyId: string
+  path: string
+  mode: RepositoryAutoPushMode
+  phase: 'off' | 'watching' | 'countdown' | 'pushing' | 'pushed' | 'paused'
+  dueAt: string | null
+  message: string
+}
 
 export interface RepositoryWorkingCopy {
   id: string
@@ -58,6 +68,7 @@ export interface RepositoryWorkingCopy {
   lastSyncedAt: string | null
   lastOpenedAt: string | null
   lastSeenAt: string | null
+  autoPushMode: RepositoryAutoPushMode
 }
 
 export interface WorkspaceProvisionResult {
@@ -1142,6 +1153,7 @@ export interface DesktopApi {
       label?: string,
     ) => Promise<RepositoryWorkingCopy | null>
     updateLabel: (id: string, label: string) => Promise<RepositoryWorkingCopy>
+    setAutoPush: (id: string, mode: RepositoryAutoPushMode) => Promise<RepositoryWorkingCopy>
     setPreferred: (id: string) => Promise<RepositoryWorkingCopy[]>
     relocate: (id: string) => Promise<RepositoryWorkingCopy | null>
     detach: (id: string) => Promise<void>
@@ -1160,6 +1172,7 @@ export interface DesktopApi {
     ) => Promise<WorkspaceProvisionResult | null>
     cloneBatch: (repositoryKeys: string[]) => Promise<WorkspaceProvisionResult | null>
     generateCodeWorkspace: (workspaceId: string) => Promise<WorkspaceLaunchTarget>
+    onAutoPushState: (callback: (state: RepositoryAutoPushState) => void) => () => void
   }
   organization: {
     list: () => Promise<OrganizationCatalog>

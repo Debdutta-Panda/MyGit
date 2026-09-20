@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { realpath, stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { getDatabase } from './database'
-import type { RepositoryWorkingCopy, RepositoryWorkingCopyType } from '../shared/desktop-api'
+import type { RepositoryAutoPushMode, RepositoryWorkingCopy, RepositoryWorkingCopyType } from '../shared/desktop-api'
 
 interface WorkingCopyRow {
   id: string
@@ -17,6 +17,7 @@ interface WorkingCopyRow {
   last_synced_at: string | null
   last_opened_at: string | null
   last_seen_at: string | null
+  auto_push_mode: RepositoryAutoPushMode
 }
 
 const rowToWorkingCopy = async (row: WorkingCopyRow): Promise<RepositoryWorkingCopy> => {
@@ -43,13 +44,15 @@ const rowToWorkingCopy = async (row: WorkingCopyRow): Promise<RepositoryWorkingC
     lastSyncedAt: row.last_synced_at,
     lastOpenedAt: row.last_opened_at,
     lastSeenAt: row.last_seen_at,
+    autoPushMode: row.auto_push_mode,
   }
 }
 
 const workingCopyRow = (id: string): WorkingCopyRow | undefined =>
   getDatabase().prepare(`
     SELECT id, provider, account_id, full_name, local_path, label, copy_type,
-           is_preferred, created_at, last_synced_at, last_opened_at, last_seen_at
+           is_preferred, created_at, last_synced_at, last_opened_at, last_seen_at,
+           auto_push_mode
     FROM working_copies WHERE id = ?
   `).get(id) as unknown as WorkingCopyRow | undefined
 
@@ -78,7 +81,8 @@ export const listWorkingCopies = async (
   }
   const rows = getDatabase().prepare(`
     SELECT id, provider, account_id, full_name, local_path, label, copy_type,
-           is_preferred, created_at, last_synced_at, last_opened_at, last_seen_at
+           is_preferred, created_at, last_synced_at, last_opened_at, last_seen_at,
+           auto_push_mode
     FROM working_copies
     ${clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''}
     ORDER BY is_preferred DESC, label COLLATE NOCASE, created_at
@@ -194,6 +198,19 @@ export const updateWorkingCopyLabel = async (id: string, value: string): Promise
   const label = value.trim()
   if (!label || label.length > 80) throw new Error('Enter a label up to 80 characters.')
   if (getDatabase().prepare('UPDATE working_copies SET label = ? WHERE id = ?').run(label, id).changes === 0) {
+    throw new Error('The selected working copy no longer exists.')
+  }
+  return await getWorkingCopy(id)
+}
+
+export const updateWorkingCopyAutoPush = async (
+  id: string,
+  mode: RepositoryAutoPushMode,
+): Promise<RepositoryWorkingCopy> => {
+  if (mode !== 'off' && mode !== 'idle') throw new Error('Choose a supported auto-push mode.')
+  if (getDatabase().prepare(`
+    UPDATE working_copies SET auto_push_mode = ?, auto_push_updated_at = ? WHERE id = ?
+  `).run(mode, new Date().toISOString(), id).changes === 0) {
     throw new Error('The selected working copy no longer exists.')
   }
   return await getWorkingCopy(id)

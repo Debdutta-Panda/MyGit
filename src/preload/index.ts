@@ -223,6 +223,7 @@ const desktopApi: DesktopApi = {
     locate: (accountId, fullName, label) =>
       ipcRenderer.invoke('working-copies:locate', accountId, fullName, label),
     updateLabel: (id, label) => ipcRenderer.invoke('working-copies:update-label', id, label),
+    setAutoPush: (id, mode) => ipcRenderer.invoke('working-copies:set-auto-push', id, mode),
     setPreferred: (id) => ipcRenderer.invoke('working-copies:set-preferred', id),
     relocate: (id) => ipcRenderer.invoke('working-copies:relocate', id),
     detach: (id) => ipcRenderer.invoke('working-copies:detach', id),
@@ -239,6 +240,11 @@ const desktopApi: DesktopApi = {
       ipcRenderer.invoke('working-copies:clone-batch', repositoryKeys),
     generateCodeWorkspace: (workspaceId) =>
       ipcRenderer.invoke('working-copies:generate-code-workspace', workspaceId),
+    onAutoPushState: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: Parameters<typeof callback>[0]): void => callback(state)
+      ipcRenderer.on('working-copies:auto-push-state', listener)
+      return () => ipcRenderer.removeListener('working-copies:auto-push-state', listener)
+    },
   },
   organization: {
     list: () => ipcRenderer.invoke('organization:list'),
