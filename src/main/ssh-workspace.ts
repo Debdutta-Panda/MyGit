@@ -22,6 +22,9 @@ import type {
   SshMySqlQueryInput,
   SshMySqlQueryResult,
   SshMySqlQueryResultSet,
+  SshMySqlTable,
+  SshMySqlTableDetails,
+  SshMySqlTableOperation,
   SshAccountCatalog,
   SshAccountOperation,
   SshAccessApplyResult,
@@ -675,6 +678,107 @@ const mysqlSchema = async (id: string, requestedDatabase: string | null): Promis
       nullable: row.is_nullable === 'YES',
       key: row.column_key,
     }))
+  })
+
+const mysqlTableRows = async (client: Client, profile: MySqlRuntimeProfile, database: string): Promise<SshMySqlTable[]> => {
+  mysqlIdentifier(database)
+  const rows = await mysqlTabular(client, profile, `
+    SELECT TABLE_SCHEMA AS database_name, TABLE_NAME AS table_name, TABLE_TYPE AS table_type,
+           COALESCE(ENGINE, '') AS engine_name, COALESCE(TABLE_ROWS, 0) AS row_count,
+           COALESCE(DATA_LENGTH, 0) AS data_bytes, COALESCE(INDEX_LENGTH, 0) AS index_bytes,
+           COALESCE(TABLE_COLLATION, '') AS table_collation, COALESCE(CREATE_TIME, '') AS created_at,
+           COALESCE(UPDATE_TIME, '') AS updated_at, COALESCE(TABLE_COMMENT, '') AS table_comment
+    FROM information_schema.TABLES WHERE TABLE_SCHEMA = ${mysqlStringLiteral(database)} ORDER BY TABLE_NAME
+  `.replace(/\s+/g, ' ').trim(), ['database_name', 'table_name', 'table_type', 'engine_name', 'row_count', 'data_bytes', 'index_bytes', 'table_collation', 'created_at', 'updated_at', 'table_comment'])
+  return rows.map((row) => ({
+    database: row.database_name, name: row.table_name, type: row.table_type === 'VIEW' ? 'view' : 'table',
+    engine: row.engine_name || null, rows: row.row_count === '' ? null : Number(row.row_count) || 0,
+    dataBytes: Number(row.data_bytes) || 0, indexBytes: Number(row.index_bytes) || 0,
+    collation: row.table_collation || null, createdAt: row.created_at || null, updatedAt: row.updated_at || null,
+    comment: row.table_comment,
+  }))
+}
+
+const mysqlTables = async (id: string, database: string): Promise<SshMySqlTable[]> =>
+  await withClient(id, async (client) => mysqlTableRows(client, mysqlProfileOrThrow(id), database.trim()))
+
+const mysqlTableDetailsFor = async (client: Client, profile: MySqlRuntimeProfile, database: string, tableName: string): Promise<SshMySqlTableDetails> => {
+  mysqlIdentifier(database); mysqlIdentifier(tableName)
+  const table = (await mysqlTableRows(client, profile, database)).find((item) => item.name === tableName)
+  if (!table) throw new Error('The selected table or view no longer exists.')
+  const [columnRows, indexRows, relationRows, triggerRows] = await Promise.all([
+    mysqlTabular(client, profile, `SELECT COLUMN_NAME AS column_name, ORDINAL_POSITION AS ordinal_position, DATA_TYPE AS data_type, COLUMN_TYPE AS column_type, IS_NULLABLE AS is_nullable, COALESCE(COLUMN_DEFAULT, '') AS default_value, COLUMN_KEY AS column_key, EXTRA AS extra_value, COALESCE(COLLATION_NAME, '') AS collation_name, COALESCE(COLUMN_COMMENT, '') AS column_comment FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${mysqlStringLiteral(database)} AND TABLE_NAME = ${mysqlStringLiteral(tableName)} ORDER BY ORDINAL_POSITION`, ['column_name', 'ordinal_position', 'data_type', 'column_type', 'is_nullable', 'default_value', 'column_key', 'extra_value', 'collation_name', 'column_comment']),
+    mysqlTabular(client, profile, `SELECT INDEX_NAME AS index_name, NON_UNIQUE AS non_unique, INDEX_TYPE AS index_type, COLUMN_NAME AS column_name, SEQ_IN_INDEX AS sequence_number FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ${mysqlStringLiteral(database)} AND TABLE_NAME = ${mysqlStringLiteral(tableName)} ORDER BY INDEX_NAME, SEQ_IN_INDEX`, ['index_name', 'non_unique', 'index_type', 'column_name', 'sequence_number']),
+    mysqlTabular(client, profile, `SELECT k.CONSTRAINT_NAME AS constraint_name, k.COLUMN_NAME AS column_name, k.REFERENCED_TABLE_SCHEMA AS referenced_database, k.REFERENCED_TABLE_NAME AS referenced_table, k.REFERENCED_COLUMN_NAME AS referenced_column, r.UPDATE_RULE AS update_rule, r.DELETE_RULE AS delete_rule FROM information_schema.KEY_COLUMN_USAGE k JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME WHERE k.TABLE_SCHEMA = ${mysqlStringLiteral(database)} AND k.TABLE_NAME = ${mysqlStringLiteral(tableName)} AND k.REFERENCED_TABLE_NAME IS NOT NULL ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION`, ['constraint_name', 'column_name', 'referenced_database', 'referenced_table', 'referenced_column', 'update_rule', 'delete_rule']),
+    mysqlTabular(client, profile, `SELECT TRIGGER_NAME AS trigger_name, ACTION_TIMING AS action_timing, EVENT_MANIPULATION AS event_name, ACTION_STATEMENT AS action_statement, COALESCE(CREATED, '') AS created_at FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = ${mysqlStringLiteral(database)} AND EVENT_OBJECT_TABLE = ${mysqlStringLiteral(tableName)} ORDER BY TRIGGER_NAME`, ['trigger_name', 'action_timing', 'event_name', 'action_statement', 'created_at']),
+  ])
+  const indexes = new Map<string, { name: string; unique: boolean; type: string; columns: string[] }>()
+  for (const row of indexRows) {
+    const entry = indexes.get(row.index_name) ?? { name: row.index_name, unique: row.non_unique === '0', type: row.index_type, columns: [] }
+    entry.columns.push(row.column_name); indexes.set(row.index_name, entry)
+  }
+  return {
+    table,
+    columns: columnRows.map((row) => ({ name: row.column_name, ordinal: Number(row.ordinal_position) || 0, dataType: row.data_type, columnType: row.column_type, nullable: row.is_nullable === 'YES', defaultValue: row.default_value === '' ? null : row.default_value, key: row.column_key, extra: row.extra_value, collation: row.collation_name || null, comment: row.column_comment })),
+    indexes: Array.from(indexes.values()),
+    foreignKeys: relationRows.map((row) => ({ name: row.constraint_name, column: row.column_name, referencedDatabase: row.referenced_database, referencedTable: row.referenced_table, referencedColumn: row.referenced_column, updateRule: row.update_rule, deleteRule: row.delete_rule })),
+    triggers: triggerRows.map((row) => ({ name: row.trigger_name, timing: row.action_timing, event: row.event_name, statement: row.action_statement, createdAt: row.created_at || null })),
+  }
+}
+
+const mysqlTableDetails = async (id: string, database: string, table: string): Promise<SshMySqlTableDetails> =>
+  await withClient(id, async (client) => mysqlTableDetailsFor(client, mysqlProfileOrThrow(id), database.trim(), table.trim()))
+
+const allowedMysqlColumnTypes = new Set(['INT', 'BIGINT', 'BOOLEAN', 'VARCHAR(255)', 'VARCHAR(100)', 'VARCHAR(50)', 'DECIMAL(10,2)', 'TEXT', 'LONGTEXT', 'DATE', 'DATETIME', 'TIMESTAMP', 'JSON'])
+const mysqlColumnDefinition = (
+  operation: Extract<SshMySqlTableOperation, { kind: 'add-column' | 'alter-column' }>,
+  current?: SshMySqlTableDetails['columns'][number],
+): string => {
+  const columnType = operation.columnType.toUpperCase()
+  if (!allowedMysqlColumnTypes.has(columnType)) throw new Error('Choose a supported column type.')
+  if (operation.autoIncrement && columnType !== 'INT' && columnType !== 'BIGINT') throw new Error('Auto increment is only supported for INT and BIGINT columns.')
+  if (operation.defaultMode === 'null' && !operation.nullable) throw new Error('A NOT NULL column cannot default to NULL.')
+  if (operation.defaultMode === 'current-timestamp' && columnType !== 'DATETIME' && columnType !== 'TIMESTAMP') throw new Error('CURRENT_TIMESTAMP requires DATETIME or TIMESTAMP.')
+  const preservedDefault = operation.defaultMode === 'none' && current?.defaultValue !== null && current?.defaultValue !== undefined
+    ? ` DEFAULT ${mysqlStringLiteral(current.defaultValue)}` : ''
+  const defaultSql = operation.defaultMode === 'null' ? ' DEFAULT NULL' : operation.defaultMode === 'current-timestamp' ? ' DEFAULT CURRENT_TIMESTAMP' : preservedDefault
+  const collationSql = current?.collation && /^[a-z0-9_]+$/i.test(current.collation) && /CHAR|TEXT/i.test(columnType) ? ` COLLATE ${current.collation}` : ''
+  const onUpdateSql = current?.extra.toLowerCase().includes('on update current_timestamp') ? ' ON UPDATE CURRENT_TIMESTAMP' : ''
+  const commentSql = current?.comment ? ` COMMENT ${mysqlStringLiteral(current.comment)}` : ''
+  return `${mysqlIdentifier(operation.name)} ${columnType}${collationSql} ${operation.nullable ? 'NULL' : 'NOT NULL'}${defaultSql}${onUpdateSql}${operation.autoIncrement ? ' AUTO_INCREMENT' : ''}${commentSql}`
+}
+
+const manageMysqlTable = async (id: string, operation: SshMySqlTableOperation): Promise<SshMySqlTableDetails> =>
+  await withClient(id, async (client) => {
+    const profile = mysqlProfileOrThrow(id)
+    const database = operation.database.trim(); const table = operation.table.trim()
+    const target = `${mysqlIdentifier(database)}.${mysqlIdentifier(table)}`
+    const current = await mysqlTableDetailsFor(client, profile, database, table)
+    if (current.table.type === 'view') throw new Error('Structured column and index changes are not available for views.')
+    let sql = ''
+    if (operation.kind === 'add-column') {
+      if (current.columns.some((column) => column.name === operation.name.trim())) throw new Error('A column with this name already exists.')
+      const position = operation.after ? ` AFTER ${mysqlIdentifier(operation.after)}` : ''
+      sql = `ALTER TABLE ${target} ADD COLUMN ${mysqlColumnDefinition(operation)}${position}`
+    } else if (operation.kind === 'alter-column') {
+      const currentColumn = current.columns.find((column) => column.name === operation.oldName)
+      if (!currentColumn) throw new Error('The selected column no longer exists.')
+      if (/generated/i.test(currentColumn.extra)) throw new Error('Generated columns must be changed from the SQL workspace so their expression remains explicit.')
+      sql = `ALTER TABLE ${target} CHANGE COLUMN ${mysqlIdentifier(operation.oldName)} ${mysqlColumnDefinition(operation, currentColumn)}`
+    } else if (operation.kind === 'drop-column') {
+      if (operation.confirmation !== `${table}.${operation.name}`) throw new Error('Type the exact table and column name to confirm deletion.')
+      sql = `ALTER TABLE ${target} DROP COLUMN ${mysqlIdentifier(operation.name)}`
+    } else if (operation.kind === 'create-index') {
+      if (!operation.columns.length || operation.columns.some((name) => !current.columns.some((column) => column.name === name))) throw new Error('Choose one or more valid columns.')
+      if (current.indexes.some((index) => index.name === operation.name.trim())) throw new Error('An index with this name already exists.')
+      sql = `CREATE ${operation.unique ? 'UNIQUE ' : ''}INDEX ${mysqlIdentifier(operation.name)} ON ${target} (${operation.columns.map(mysqlIdentifier).join(', ')})`
+    } else {
+      if (operation.name === 'PRIMARY') throw new Error('The primary key cannot be removed from this screen.')
+      if (operation.confirmation !== `${table}.${operation.name}`) throw new Error('Type the exact table and index name to confirm deletion.')
+      sql = `DROP INDEX ${mysqlIdentifier(operation.name)} ON ${target}`
+    }
+    await mysqlExecute(client, profile, sql)
+    return await mysqlTableDetailsFor(client, profile, database, table)
   })
 
 const sqlWithoutComments = (sql: string): string => sql
@@ -1832,6 +1936,11 @@ export const registerSshWorkspaceHandlers = (): void => {
   ipcMain.handle('ssh:run-mysql-query', (_event, id: string, runId: string, input: SshMySqlQueryInput) =>
     runMysqlQuery(id, runId, input))
   ipcMain.handle('ssh:cancel-mysql-query', (_event, runId: string) => cancelMysqlQuery(runId))
+  ipcMain.handle('ssh:mysql-tables', (_event, id: string, database: string) => mysqlTables(id, database))
+  ipcMain.handle('ssh:mysql-table-details', (_event, id: string, database: string, table: string) =>
+    mysqlTableDetails(id, database, table))
+  ipcMain.handle('ssh:manage-mysql-table', (_event, id: string, operation: SshMySqlTableOperation) =>
+    manageMysqlTable(id, operation))
   ipcMain.handle('ssh:account-catalog', (_event, id: string) => accountCatalog(id))
   ipcMain.handle('ssh:authorized-keys', (_event, id: string, username: string) => authorizedKeys(id, username))
   ipcMain.handle('ssh:manage-accounts', (_event, id: string, operation: SshAccountOperation) =>

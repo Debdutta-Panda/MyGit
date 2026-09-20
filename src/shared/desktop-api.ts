@@ -360,6 +360,73 @@ export interface SshMySqlQueryResult {
   executedAt: string
 }
 
+export interface SshMySqlTable {
+  database: string
+  name: string
+  type: 'table' | 'view'
+  engine: string | null
+  rows: number | null
+  dataBytes: number
+  indexBytes: number
+  collation: string | null
+  createdAt: string | null
+  updatedAt: string | null
+  comment: string
+}
+
+export interface SshMySqlTableColumn {
+  name: string
+  ordinal: number
+  dataType: string
+  columnType: string
+  nullable: boolean
+  defaultValue: string | null
+  key: string
+  extra: string
+  collation: string | null
+  comment: string
+}
+
+export interface SshMySqlTableIndex {
+  name: string
+  unique: boolean
+  type: string
+  columns: string[]
+}
+
+export interface SshMySqlForeignKey {
+  name: string
+  column: string
+  referencedDatabase: string
+  referencedTable: string
+  referencedColumn: string
+  updateRule: string
+  deleteRule: string
+}
+
+export interface SshMySqlTrigger {
+  name: string
+  timing: string
+  event: string
+  statement: string
+  createdAt: string | null
+}
+
+export interface SshMySqlTableDetails {
+  table: SshMySqlTable
+  columns: SshMySqlTableColumn[]
+  indexes: SshMySqlTableIndex[]
+  foreignKeys: SshMySqlForeignKey[]
+  triggers: SshMySqlTrigger[]
+}
+
+export type SshMySqlTableOperation =
+  | { kind: 'add-column'; database: string; table: string; name: string; columnType: string; nullable: boolean; defaultMode: 'none' | 'null' | 'current-timestamp'; autoIncrement: boolean; after: string | null }
+  | { kind: 'alter-column'; database: string; table: string; oldName: string; name: string; columnType: string; nullable: boolean; defaultMode: 'none' | 'null' | 'current-timestamp'; autoIncrement: boolean }
+  | { kind: 'drop-column'; database: string; table: string; name: string; confirmation: string }
+  | { kind: 'create-index'; database: string; table: string; name: string; columns: string[]; unique: boolean }
+  | { kind: 'drop-index'; database: string; table: string; name: string; confirmation: string }
+
 export interface SshServerUser {
   username: string
   uid: number
@@ -808,6 +875,9 @@ export interface DesktopApi {
     mysqlSchema: (id: string, database: string | null) => Promise<SshMySqlSchemaColumn[]>
     runMysqlQuery: (id: string, runId: string, input: SshMySqlQueryInput) => Promise<SshMySqlQueryResult>
     cancelMysqlQuery: (runId: string) => Promise<void>
+    mysqlTables: (id: string, database: string) => Promise<SshMySqlTable[]>
+    mysqlTableDetails: (id: string, database: string, table: string) => Promise<SshMySqlTableDetails>
+    manageMysqlTable: (id: string, operation: SshMySqlTableOperation) => Promise<SshMySqlTableDetails>
     accountCatalog: (id: string) => Promise<SshAccountCatalog>
     authorizedKeys: (id: string, username: string) => Promise<string>
     manageAccounts: (id: string, operation: SshAccountOperation) => Promise<SshAccountCatalog>
