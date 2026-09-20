@@ -84,7 +84,7 @@ const authenticationLabel: Record<SshAuthenticationType, string> = {
 export function SshConnectionsPage({
   onOpenTerminal,
 }: {
-  onOpenTerminal: (connection: SshConnection) => void
+  onOpenTerminal: (connection: SshConnection, command?: string) => void
 }) {
   const [connections, setConnections] = useState<SshConnection[]>([])
   const [vault, setVault] = useState<SshVaultStatus | null>(null)
@@ -240,7 +240,7 @@ export function SshConnectionsPage({
       <SshServerWorkspace
         connection={workspaceConnection}
         onBack={() => setWorkspaceConnection(null)}
-        onOpenTerminal={() => onOpenTerminal(workspaceConnection)}
+        onOpenTerminal={(command) => onOpenTerminal(workspaceConnection, command)}
       />
     )
   }

@@ -260,8 +260,8 @@ export function SshAccessManager({ opened, onClose, connection, catalog, default
     }
   }, [input, editorMode])
 
-  const acceptCommands = (source: string): boolean => {
-    setCommandText(source)
+  const acceptCommands = (source: string, updateEditor = true): boolean => {
+    if (updateEditor) setCommandText(source)
     setCopied(false)
     try {
       const parsed = parseAccessCommands(source)
@@ -450,7 +450,12 @@ export function SshAccessManager({ opened, onClose, connection, catalog, default
             </header>
             <Textarea autosize minRows={7} maxRows={15} value={commandText}
               classNames={{ input: 'ssh-access-command-input' }}
-              onChange={(event) => acceptCommands(event.currentTarget.value)}
+              onChange={(event) => {
+                const value = event.currentTarget.value
+                setCommandText(value)
+                setCopied(false)
+                acceptCommands(value, false)
+              }}
               error={commandError ?? undefined}
               description="Supported: chmod, chown, chgrp, setfacl, and the safe find -exec form generated here." />
             <div className="ssh-access-command-status" data-valid={!commandError || undefined}>

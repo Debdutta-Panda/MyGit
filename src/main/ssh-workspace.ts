@@ -18,6 +18,7 @@ import type {
   SshAccessPreview,
   SshTransferProgress,
   SshTransferResult,
+  SshCommandResult,
 } from '../shared/desktop-api'
 import { getSshRuntimeConnection, type SshRuntimeConnection } from './ssh-connections'
 
@@ -25,6 +26,7 @@ const MAX_COMMAND_OUTPUT = 2 * 1024 * 1024
 const MAX_TEXT_FILE_BYTES = 5 * 1024 * 1024
 const MAX_PREVIEW_FILE_BYTES = 15 * 1024 * 1024
 const transferCancellers = new Map<string, () => void>()
+const commandRuns = new Map<string, { connectionId: string; cancelled: boolean; cancel: () => void }>()
 const accessPreviewTokens = new Map<string, { connectionId: string; inputHash: string; signature: string; expiresAt: number }>()
 
 const connect = async (connection: SshRuntimeConnection): Promise<Client> => {
@@ -992,6 +994,83 @@ const emitTransfer = (
   if (!event.sender.isDestroyed()) event.sender.send('ssh:transfer-progress', progress)
 }
 
+const runCommand = async (
+  event: IpcMainInvokeEvent,
+  connectionId: string,
+  runId: string,
+  command: string,
+): Promise<SshCommandResult> => {
+  if (!/^[a-z0-9-]{12,80}$/i.test(runId)) throw new Error('Invalid command run identifier.')
+  if (!command.trim()) throw new Error('The command is empty.')
+  if (command.includes('\0')) throw new Error('Commands cannot contain null bytes.')
+  if (Buffer.byteLength(command, 'utf8') > 64 * 1024) throw new Error('The command is too large to run.')
+  if (commandRuns.has(runId)) throw new Error('This command run already exists.')
+
+  const startedAt = new Date().toISOString()
+  const run = { connectionId, cancelled: false, cancel: (): void => undefined }
+  commandRuns.set(runId, run)
+  let client: Client | null = null
+  try {
+    client = await connect(getSshRuntimeConnection(connectionId))
+    if (run.cancelled) {
+      return { id: runId, exitCode: null, signal: null, cancelled: true, startedAt, finishedAt: new Date().toISOString() }
+    }
+    return await new Promise<SshCommandResult>((resolve, reject) => {
+      client!.exec(command, (error, stream) => {
+        if (error) {
+          reject(error)
+          return
+        }
+        let settled = false
+        let receivedBytes = 0
+        const finish = (exitCode: number | null, signal: string | null, failure?: Error): void => {
+          if (settled) return
+          settled = true
+          if (failure && !run.cancelled) reject(failure)
+          else resolve({
+            id: runId,
+            exitCode,
+            signal,
+            cancelled: run.cancelled,
+            startedAt,
+            finishedAt: new Date().toISOString(),
+          })
+        }
+        run.cancel = () => {
+          run.cancelled = true
+          stream.close()
+        }
+        const emit = (channel: 'stdout' | 'stderr', chunk: Buffer): void => {
+          receivedBytes += chunk.length
+          if (receivedBytes > 5 * 1024 * 1024) {
+            finish(null, null, new Error('Command output exceeded the 5 MB display limit.'))
+            stream.close()
+            return
+          }
+          if (!event.sender.isDestroyed()) {
+            event.sender.send('ssh:command-output', { id: runId, stream: channel, data: chunk.toString('utf8') })
+          }
+        }
+        stream.on('data', (chunk: Buffer) => emit('stdout', chunk))
+        stream.stderr.on('data', (chunk: Buffer) => emit('stderr', chunk))
+        stream.once('close', (code: number | null, signal: string | null) => finish(code, signal))
+        stream.once('error', (streamError: Error) => finish(null, null, streamError))
+        if (run.cancelled) run.cancel()
+      })
+    })
+  } finally {
+    commandRuns.delete(runId)
+    client?.end()
+  }
+}
+
+const cancelCommand = (runId: string): void => {
+  const run = commandRuns.get(runId)
+  if (!run) return
+  run.cancelled = true
+  run.cancel()
+}
+
 const uploadFiles = async (
   event: IpcMainInvokeEvent,
   id: string,
@@ -1171,4 +1250,7 @@ export const registerSshWorkspaceHandlers = (): void => {
     uploadFiles(event, id, targetDirectory))
   ipcMain.handle('ssh:download-file', (event, id: string, path: string) => downloadFile(event, id, path))
   ipcMain.handle('ssh:cancel-transfer', (_event, id: string) => { transferCancellers.get(id)?.() })
+  ipcMain.handle('ssh:run-command', (event, connectionId: string, runId: string, command: string) =>
+    runCommand(event, connectionId, runId, command))
+  ipcMain.handle('ssh:cancel-command', (_event, runId: string) => cancelCommand(runId))
 }

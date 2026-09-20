@@ -7271,13 +7271,14 @@ export function App() {
               </div>
             </div>
           ) : activeView === 'ssh' ? (
-            <SshConnectionsPage onOpenTerminal={(connection) => {
+            <SshConnectionsPage onOpenTerminal={(connection, initialInput) => {
               setTerminalMounted(true)
               setTerminalVisible(true)
               setTerminalRequest({
                 id: Date.now(),
                 kind: 'ssh',
                 sshConnectionId: connection.id,
+                initialInput,
               })
             }} />
           ) : activeOrganizationKind && activeOrganizationCopy ? (

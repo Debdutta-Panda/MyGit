@@ -37,8 +37,9 @@ import type {
 } from '../../shared/desktop-api'
 import { SshRemoteFileManager } from './SshRemoteFileManager'
 import { SshUsersGroupsManager } from './SshUsersGroupsManager'
+import { SshCommandSnippets } from './SshCommandSnippets'
 
-type WorkspaceTab = 'overview' | 'files' | 'accounts' | 'services' | 'databases' | 'logs'
+type WorkspaceTab = 'overview' | 'files' | 'accounts' | 'snippets' | 'services' | 'databases' | 'logs'
 
 const formatBytes = (value: number | null): string => {
   if (value === null) return 'Unavailable'
@@ -90,7 +91,7 @@ export function SshServerWorkspace({
 }: {
   connection: SshConnection
   onBack: () => void
-  onOpenTerminal: () => void
+  onOpenTerminal: (command?: string) => void
 }) {
   const [tab, setTab] = useState<WorkspaceTab>('overview')
   const [overview, setOverview] = useState<SshServerOverview | null>(null)
@@ -234,6 +235,7 @@ export function SshServerWorkspace({
               ['overview', 'Overview'],
               ['files', 'Files'],
               ['accounts', 'Users & Groups'],
+              ['snippets', 'Snippets'],
               ['services', 'Services'],
               ['databases', 'Databases'],
               ['logs', 'Logs'],
@@ -270,7 +272,7 @@ export function SshServerWorkspace({
               <IconRefresh size={17} />
             </ActionIcon>
           </Tooltip>
-          <Button size="xs" variant="light" leftSection={<IconTerminal2 size={15} />} onClick={onOpenTerminal}>
+          <Button size="xs" variant="light" leftSection={<IconTerminal2 size={15} />} onClick={() => onOpenTerminal()}>
             Terminal
           </Button>
         </Group>
@@ -399,6 +401,10 @@ export function SshServerWorkspace({
 
       {tab === 'accounts' && (
         <SshUsersGroupsManager connection={connection} />
+      )}
+
+      {tab === 'snippets' && (
+        <SshCommandSnippets connection={connection} onOpenTerminal={onOpenTerminal} />
       )}
 
       {(tab === 'services' || tab === 'databases' || tab === 'logs') && (

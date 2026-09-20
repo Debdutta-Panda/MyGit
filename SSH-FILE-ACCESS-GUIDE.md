@@ -1037,3 +1037,33 @@ These control different security layers and must not be translated into chmod va
 | getfacl/setfacl backup flows | Bulk ACL backup and restore |
 
 Preview reduces mistakes, but it is not a substitute for a server backup.
+
+## 23. Generic command snippet templates
+
+A terminal command can contain automatically detected variables:
+
+~~~bash
+find '{{path}}' -xdev -exec chown -h '{{owner}}:{{group}}' -- '{}' +
+~~~
+
+MyRepos generates fields for path, owner, and group. A variable can also carry an explicit tag after a colon:
+
+~~~bash
+find '{{target:path}}' -type d -exec chmod {{folder_mode:mode}} -- '{}' +
+~~~
+
+Supported tags:
+
+| Tag | Form assistance |
+|---|---|
+| path | Absolute-path validation |
+| user | User validation and dropdown when accounts are available |
+| group | Group validation and dropdown when groups are available |
+| mode | Three/four digit octal validation |
+| text | General text input |
+
+The same variable name can appear repeatedly and is filled once.
+
+Manage templates from **SSH > open a server > Snippets**. The server-level Snippets tab detects variables, builds the input form, saves templates for that server, and can copy the rendered command or open it in a new SSH terminal. **Open in Terminal** inserts the text without pressing Enter, so execution remains under the user's control.
+
+Specialized screens can add stronger rules. Filesystem Access, for example, also passes the rendered command through its strict access-command parser and Preview process.

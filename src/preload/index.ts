@@ -96,6 +96,13 @@ const desktopApi: DesktopApi = {
       ipcRenderer.on('ssh:transfer-progress', listener)
       return () => ipcRenderer.removeListener('ssh:transfer-progress', listener)
     },
+    runCommand: (connectionId, runId, command) => ipcRenderer.invoke('ssh:run-command', connectionId, runId, command),
+    cancelCommand: (runId) => ipcRenderer.invoke('ssh:cancel-command', runId),
+    onCommandOutput: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, output: Parameters<typeof callback>[0]): void => callback(output)
+      ipcRenderer.on('ssh:command-output', listener)
+      return () => ipcRenderer.removeListener('ssh:command-output', listener)
+    },
   },
   github: {
     start: () => ipcRenderer.invoke('github:start'),

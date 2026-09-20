@@ -201,6 +201,21 @@ export interface SshVaultStatus {
   label: string
 }
 
+export interface SshCommandOutput {
+  id: string
+  stream: 'stdout' | 'stderr'
+  data: string
+}
+
+export interface SshCommandResult {
+  id: string
+  exitCode: number | null
+  signal: string | null
+  cancelled: boolean
+  startedAt: string
+  finishedAt: string
+}
+
 export interface SshServerOverview {
   connectionId: string
   hostname: string
@@ -692,6 +707,9 @@ export interface DesktopApi {
     downloadFile: (id: string, path: string) => Promise<SshTransferResult | null>
     cancelTransfer: (id: string) => Promise<void>
     onTransferProgress: (callback: (progress: SshTransferProgress) => void) => () => void
+    runCommand: (connectionId: string, runId: string, command: string) => Promise<SshCommandResult>
+    cancelCommand: (runId: string) => Promise<void>
+    onCommandOutput: (callback: (output: SshCommandOutput) => void) => () => void
   }
   github: {
     start: () => Promise<GitHubDeviceAuthorization>

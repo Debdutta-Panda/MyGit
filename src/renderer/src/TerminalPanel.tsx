@@ -30,7 +30,7 @@ import type { TerminalProfile, TerminalSessionInfo } from '../../shared/desktop-
 
 export type TerminalOpenRequest =
   | { id: number; kind: 'local'; cwd: string }
-  | { id: number; kind: 'ssh'; sshConnectionId: string }
+  | { id: number; kind: 'ssh'; sshConnectionId: string; initialInput?: string }
 
 interface TerminalController {
   fit: () => void
@@ -313,7 +313,9 @@ export function TerminalPanel({
   useEffect(() => {
     if (!visible || !request || creatingRef.current) return
     if (request.kind === 'ssh') {
-      void createSession(null, null, request.sshConnectionId).finally(onRequestHandled)
+      void createSession(null, null, request.sshConnectionId).then(async (session) => {
+        if (session && request.initialInput) await window.desktop?.terminals.write(session.id, request.initialInput)
+      }).finally(onRequestHandled)
       return
     }
     if (profiles.length === 0) return
