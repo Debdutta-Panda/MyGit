@@ -15,6 +15,9 @@ import type {
   SshMySqlOverview,
   SshMySqlAccessInput,
   SshMySqlDatabase,
+  SshMySqlDatabaseDetails,
+  SshMySqlDatabaseMaintenanceMessage,
+  SshMySqlDatabaseMaintenanceOperation,
   SshMySqlDatabaseOperation,
   SshMySqlUser,
   SshMySqlUserOperation,
@@ -497,10 +500,15 @@ const manageMysqlDatabase = async (id: string, operation: SshMySqlDatabaseOperat
     const profile = mysqlProfileOrThrow(id)
     const identifier = mysqlIdentifier(operation.name)
     let sql = ''
-    if (operation.kind === 'create') {
+    if (operation.kind === 'create' || operation.kind === 'alter-defaults') {
       const collations = mysqlCollations[operation.characterSet]
       if (!collations?.includes(operation.collation)) throw new Error('Choose a supported character set and collation.')
-      sql = `CREATE DATABASE ${identifier} CHARACTER SET ${operation.characterSet} COLLATE ${operation.collation}`
+      if (operation.kind === 'create') sql = `CREATE DATABASE ${identifier} CHARACTER SET ${operation.characterSet} COLLATE ${operation.collation}`
+      else {
+        if (mysqlSystemSchemas.has(operation.name.trim())) throw new Error('System database defaults cannot be changed here.')
+        if (operation.confirmation !== operation.name.trim()) throw new Error('Type the exact database name to confirm the default change.')
+        sql = `ALTER DATABASE ${identifier} CHARACTER SET ${operation.characterSet} COLLATE ${operation.collation}`
+      }
     } else {
       const name = operation.name.trim()
       if (mysqlSystemSchemas.has(name)) throw new Error('System databases cannot be deleted.')
@@ -702,6 +710,84 @@ const mysqlTableRows = async (client: Client, profile: MySqlRuntimeProfile, data
 const mysqlTables = async (id: string, database: string): Promise<SshMySqlTable[]> =>
   await withClient(id, async (client) => mysqlTableRows(client, mysqlProfileOrThrow(id), database.trim()))
 
+const mysqlDatabaseDetailsFor = async (client: Client, profile: MySqlRuntimeProfile, requestedDatabase: string): Promise<SshMySqlDatabaseDetails> => {
+  const database = requestedDatabase.trim()
+  mysqlIdentifier(database)
+  const catalog = (await mysqlRows(client, profile)).find((item) => item.name === database)
+  if (!catalog) throw new Error('The selected database no longer exists.')
+  const [tables, accountRows, routineRows, eventRows, ddlRows, primaryKeyRows, freeRows] = await Promise.all([
+    mysqlTableRows(client, profile, database),
+    mysqlTabular(client, profile, `SELECT GRANTEE AS grantee_name, PRIVILEGE_TYPE AS privilege_type, IS_GRANTABLE AS grantable FROM information_schema.SCHEMA_PRIVILEGES WHERE TABLE_SCHEMA = ${mysqlStringLiteral(database)} ORDER BY GRANTEE, PRIVILEGE_TYPE`, ['grantee_name', 'privilege_type', 'grantable']),
+    mysqlTabular(client, profile, `SELECT ROUTINE_NAME AS routine_name, ROUTINE_TYPE AS routine_type, DEFINER AS definer_name, SECURITY_TYPE AS security_type, COALESCE(CREATED, '') AS created_at FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = ${mysqlStringLiteral(database)} ORDER BY ROUTINE_TYPE, ROUTINE_NAME`, ['routine_name', 'routine_type', 'definer_name', 'security_type', 'created_at']),
+    mysqlTabular(client, profile, `SELECT EVENT_NAME AS event_name, STATUS AS event_status, COALESCE(CONCAT(INTERVAL_VALUE, ' ', INTERVAL_FIELD), EVENT_TYPE) AS event_schedule, DEFINER AS definer_name, COALESCE(LAST_EXECUTED, '') AS last_executed FROM information_schema.EVENTS WHERE EVENT_SCHEMA = ${mysqlStringLiteral(database)} ORDER BY EVENT_NAME`, ['event_name', 'event_status', 'event_schedule', 'definer_name', 'last_executed']),
+    mysqlTabular(client, profile, `SELECT CONCAT('CREATE DATABASE ', CHAR(96), SCHEMA_NAME, CHAR(96), ' /*!40100 DEFAULT CHARACTER SET ', DEFAULT_CHARACTER_SET_NAME, ' COLLATE ', DEFAULT_COLLATION_NAME, ' */') AS create_sql FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ${mysqlStringLiteral(database)}`, ['create_sql']),
+    mysqlTabular(client, profile, `SELECT t.TABLE_NAME AS table_name FROM information_schema.TABLES t LEFT JOIN information_schema.TABLE_CONSTRAINTS c ON c.TABLE_SCHEMA = t.TABLE_SCHEMA AND c.TABLE_NAME = t.TABLE_NAME AND c.CONSTRAINT_TYPE = 'PRIMARY KEY' WHERE t.TABLE_SCHEMA = ${mysqlStringLiteral(database)} AND t.TABLE_TYPE = 'BASE TABLE' AND c.CONSTRAINT_NAME IS NULL ORDER BY t.TABLE_NAME`, ['table_name']),
+    mysqlTabular(client, profile, `SELECT COALESCE(SUM(DATA_FREE), 0) AS free_bytes FROM information_schema.TABLES WHERE TABLE_SCHEMA = ${mysqlStringLiteral(database)}`, ['free_bytes']),
+  ])
+  const accountMap = new Map<string, { username: string; host: string; privileges: string[]; grantable: boolean }>()
+  for (const row of accountRows) {
+    const match = row.grantee_name.match(/^'(.*)'@'(.*)'$/)
+    const username = match?.[1] ?? row.grantee_name
+    const host = match?.[2] ?? ''
+    const key = `${username}\0${host}`
+    const account = accountMap.get(key) ?? { username, host, privileges: [], grantable: false }
+    account.privileges.push(row.privilege_type); account.grantable ||= row.grantable === 'YES'; accountMap.set(key, account)
+  }
+  const baseTables = tables.filter((table) => table.type === 'table')
+  const engines = new Map<string, { name: string; tableCount: number; rows: number; sizeBytes: number }>()
+  for (const table of baseTables) {
+    const name = table.engine || 'Unknown'
+    const engine = engines.get(name) ?? { name, tableCount: 0, rows: 0, sizeBytes: 0 }
+    engine.tableCount += 1; engine.rows += table.rows ?? 0; engine.sizeBytes += table.dataBytes + table.indexBytes; engines.set(name, engine)
+  }
+  const freeBytes = Number(freeRows[0]?.free_bytes) || 0
+  const missingPrimaryKeys = primaryKeyRows.map((row) => row.table_name)
+  const health: SshMySqlDatabaseDetails['health'] = []
+  if (!tables.length) health.push({ severity: 'info', code: 'empty-database', title: 'Empty database', detail: 'No tables or views exist yet.', tables: [] })
+  if (missingPrimaryKeys.length) health.push({ severity: 'warning', code: 'missing-primary-key', title: `${missingPrimaryKeys.length} table${missingPrimaryKeys.length === 1 ? '' : 's'} without a primary key`, detail: 'Primary keys improve row identity, replication safety, and many update patterns.', tables: missingPrimaryKeys })
+  if (freeBytes > 0) health.push({ severity: 'info', code: 'free-space', title: `${freeBytes} bytes reported reusable`, detail: 'MySQL reports reusable or allocated free space. Review before optimizing large tables.', tables: [] })
+  if (engines.size > 1) health.push({ severity: 'info', code: 'mixed-engines', title: 'Multiple storage engines', detail: 'This may be intentional; transaction and locking behavior can differ by engine.', tables: [] })
+  const dateValues = tables.map((table) => table.updatedAt).filter((value): value is string => Boolean(value)).sort()
+  return {
+    database: catalog,
+    tableCount: baseTables.length,
+    viewCount: tables.filter((table) => table.type === 'view').length,
+    estimatedRows: baseTables.reduce((sum, table) => sum + (table.rows ?? 0), 0),
+    dataBytes: tables.reduce((sum, table) => sum + table.dataBytes, 0),
+    indexBytes: tables.reduce((sum, table) => sum + table.indexBytes, 0),
+    freeBytes,
+    lastUpdatedAt: dateValues.at(-1) ?? null,
+    engines: Array.from(engines.values()).sort((a, b) => b.sizeBytes - a.sizeBytes),
+    tables: [...tables].sort((a, b) => a.name.localeCompare(b.name)),
+    largestTables: [...tables].sort((a, b) => (b.dataBytes + b.indexBytes) - (a.dataBytes + a.indexBytes)).slice(0, 12),
+    accounts: Array.from(accountMap.values()),
+    routines: routineRows.map((row) => ({ name: row.routine_name, type: row.routine_type === 'FUNCTION' ? 'function' : 'procedure', definer: row.definer_name, securityType: row.security_type, createdAt: row.created_at || null })),
+    events: eventRows.map((row) => ({ name: row.event_name, status: row.event_status, schedule: row.event_schedule, definer: row.definer_name, lastExecutedAt: row.last_executed || null })),
+    health,
+    ddl: ddlRows[0]?.create_sql || `CREATE DATABASE ${mysqlIdentifier(database)}`,
+    fetchedAt: new Date().toISOString(),
+  }
+}
+
+const mysqlDatabaseDetails = async (id: string, database: string): Promise<SshMySqlDatabaseDetails> =>
+  await withClient(id, async (client) => mysqlDatabaseDetailsFor(client, mysqlProfileOrThrow(id), database))
+
+const maintainMysqlDatabase = async (id: string, operation: SshMySqlDatabaseMaintenanceOperation): Promise<SshMySqlDatabaseMaintenanceMessage[]> =>
+  await withClient(id, async (client) => {
+    const profile = mysqlProfileOrThrow(id)
+    const database = operation.database.trim(); mysqlIdentifier(database)
+    if (!['check', 'analyze', 'optimize'].includes(operation.kind)) throw new Error('Unsupported maintenance operation.')
+    if (operation.confirmation !== database) throw new Error('Type the exact database name to confirm maintenance.')
+    const existing = (await mysqlTableRows(client, profile, database)).filter((table) => table.type === 'table')
+    const names = Array.from(new Set(operation.tables.map((name) => name.trim())))
+    if (!names.length) throw new Error('Choose at least one table.')
+    if (names.some((name) => !existing.some((table) => table.name === name))) throw new Error('One or more selected tables no longer exist.')
+    const verb = operation.kind.toUpperCase()
+    const targets = names.map((name) => `${mysqlIdentifier(database)}.${mysqlIdentifier(name)}`).join(', ')
+    const rows = await mysqlTabular(client, profile, `${verb} TABLE ${targets}`, ['Table', 'Op', 'Msg_type', 'Msg_text'])
+    return rows.map((row) => ({ table: row.Table, operation: row.Op, messageType: row.Msg_type, message: row.Msg_text }))
+  })
+
 const mysqlTableDetailsFor = async (client: Client, profile: MySqlRuntimeProfile, database: string, tableName: string): Promise<SshMySqlTableDetails> => {
   mysqlIdentifier(database); mysqlIdentifier(tableName)
   const table = (await mysqlTableRows(client, profile, database)).find((item) => item.name === tableName)
@@ -788,8 +874,14 @@ const sqlWithoutComments = (sql: string): string => sql
   .replace(/'(?:''|\\.|[^'])*'/g, "''")
   .replace(/"(?:""|\\.|[^"])*"/g, '""')
   .replace(/`(?:``|[^`])*`/g, '``')
-const mysqlWritePattern = /\b(INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP|TRUNCATE|RENAME|GRANT|REVOKE|LOCK|UNLOCK|SET\s+PASSWORD|CALL|LOAD\s+DATA|HANDLER)\b/i
 const mysqlDestructivePattern = /\b(UPDATE|DELETE|DROP|TRUNCATE|ALTER|RENAME|GRANT|REVOKE|SET\s+PASSWORD)\b/i
+const mysqlMayWrite = (cleanedSql: string): boolean => cleanedSql.split(';').some((part) => {
+  const statement = part.trim()
+  if (!statement) return false
+  if (/^(SELECT|SHOW|DESCRIBE|DESC|EXPLAIN)\b/i.test(statement)) return false
+  if (/^WITH\b/i.test(statement)) return /\b(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(statement)
+  return true
+})
 const xmlDecode = (value: string): string => value
   .replace(/&#x([0-9a-f]+);/gi, (_match, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
   .replace(/&#([0-9]+);/g, (_match, decimal: string) => String.fromCodePoint(Number(decimal)))
@@ -904,7 +996,7 @@ const runMysqlQuery = async (id: string, runId: string, input: SshMySqlQueryInpu
   const sql = input.sql.trim()
   if (!sql || sql.length > 1024 * 1024) throw new Error('Enter a query smaller than 1 MB.')
   const cleaned = sqlWithoutComments(sql)
-  if (input.readOnly && mysqlWritePattern.test(cleaned)) throw new Error('Read-only mode blocked a statement that may change data or server state.')
+  if (input.readOnly && mysqlMayWrite(cleaned)) throw new Error('Read-only mode blocked a statement that may change data or server state.')
   if (mysqlDestructivePattern.test(cleaned) && input.destructiveConfirmation !== 'RUN DESTRUCTIVE QUERY') {
     throw new Error('Destructive query confirmation is required.')
   }
@@ -1929,6 +2021,9 @@ export const registerSshWorkspaceHandlers = (): void => {
   ipcMain.handle('ssh:mysql-databases', (_event, id: string) => mysqlDatabases(id))
   ipcMain.handle('ssh:manage-mysql-database', (_event, id: string, operation: SshMySqlDatabaseOperation) =>
     manageMysqlDatabase(id, operation))
+  ipcMain.handle('ssh:mysql-database-details', (_event, id: string, database: string) => mysqlDatabaseDetails(id, database))
+  ipcMain.handle('ssh:maintain-mysql-database', (_event, id: string, operation: SshMySqlDatabaseMaintenanceOperation) =>
+    maintainMysqlDatabase(id, operation))
   ipcMain.handle('ssh:mysql-users', (_event, id: string) => mysqlUsers(id))
   ipcMain.handle('ssh:manage-mysql-user', (_event, id: string, operation: SshMySqlUserOperation) =>
     manageMysqlUser(id, operation))

@@ -519,6 +519,91 @@
 .ssh-mysql-database-table-head { min-height: 32px; position: sticky; top: 0; z-index: 1; background: #111a21; color: #738592; font-size: 9px; font-weight: 700; text-transform: uppercase; }
 .ssh-mysql-database-empty { min-height: 180px; display: grid; place-items: center; color: #768995; font-size: 11px; }
 .ssh-mysql-database-form > div:has(> .mantine-Select-root) { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.ssh-db-global-error { margin: 7px 9px 0; flex: 0 0 auto; }
+.ssh-db-workspace { min-height: 0; flex: 1; display: flex; overflow: hidden; background: #091117; }
+.ssh-db-sidebar { width: 280px; min-width: 220px; max-width: 42%; min-height: 0; flex: 0 0 auto; display: flex; flex-direction: column; resize: horizontal; overflow: hidden; border-right: 1px solid #30404b; background: #0c141b; }
+.ssh-db-sidebar-tools { min-height: 45px; padding: 6px 7px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; border-bottom: 1px solid #27353f; }
+.ssh-db-list { min-height: 0; flex: 1; overflow: auto; }
+.ssh-db-list > button { width: 100%; min-height: 49px; padding: 7px 9px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; border: 0; border-left: 2px solid transparent; border-bottom: 1px solid #202c35; background: transparent; color: #94a4ae; text-align: left; cursor: pointer; }
+.ssh-db-list > button:hover { background: #111b22; color: #c9d4da; }
+.ssh-db-list > button[data-selected] { border-left-color: #20c997; background: #11251f; color: #c4ebde; }
+.ssh-db-list > button > svg { color: #42cfa6; }
+.ssh-db-list > button > span { min-width: 0; display: grid; gap: 2px; }
+.ssh-db-list strong, .ssh-db-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-db-list strong { font-size: 10.5px; }
+.ssh-db-list small { color: #71838f; font-size: 8.5px; }
+.ssh-db-sidebar > footer { min-height: 29px; padding: 7px 9px; border-top: 1px solid #26343e; color: #657883; font-size: 9px; }
+.ssh-db-detail { min-width: 0; min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.ssh-db-detail-header { min-height: 52px; padding: 7px 10px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid #293842; background: #0e171e; }
+.ssh-db-detail-header > div:first-child { min-width: 0; }
+.ssh-db-detail-header small { display: block; margin-top: 2px; overflow: hidden; color: #72848f; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-db-detail-tabs { min-height: 37px; display: flex; overflow-x: auto; overscroll-behavior-inline: contain; border-bottom: 1px solid #2a3943; background: #0c141a; scrollbar-width: thin; }
+.ssh-db-detail-tabs button { min-width: max-content; padding: 0 10px; display: flex; align-items: center; gap: 5px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #7d8f9a; font: inherit; font-size: 9.5px; font-weight: 650; cursor: pointer; }
+.ssh-db-detail-tabs button:hover { color: #c3ced4; }
+.ssh-db-detail-tabs button[data-active] { border-bottom-color: #20c997; color: #bcebdd; }
+.ssh-db-detail-body { min-height: 0; flex: 1; overflow: hidden; }
+.ssh-db-detail-body > * { height: 100%; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
+.ssh-db-overview { padding: 9px; display: grid; align-content: start; gap: 9px; }
+.ssh-db-metrics { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 7px; }
+.ssh-db-metrics > article { min-height: 76px; padding: 9px; display: flex; align-items: center; gap: 9px; border: 1px solid #2c3c47; border-radius: 7px; background: #0e171e; }
+.ssh-db-metrics > article > svg { flex: 0 0 auto; color: #3dd0a4; }
+.ssh-db-metrics > article > div { min-width: 0; display: grid; gap: 1px; }
+.ssh-db-metrics small, .ssh-db-metrics span { overflow: hidden; color: #738591; font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-db-metrics strong { color: #d1dce1; font-size: 14px; }
+.ssh-db-overview > section { min-width: 0; border: 1px solid #2b3a45; border-radius: 7px; overflow: hidden; background: #0d151c; }
+.ssh-db-overview > section > header, .ssh-db-panel > header { min-height: 42px; padding: 7px 9px; display: flex; align-items: center; justify-content: space-between; gap: 9px; border-bottom: 1px solid #27353f; }
+.ssh-db-overview > section > header small, .ssh-db-panel > header small { display: block; margin-top: 1px; color: #71838f; font-size: 8.5px; }
+.ssh-db-engine-grid { padding: 7px; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px; }
+.ssh-db-engine-grid article { min-width: 0; padding: 7px 8px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 8px; border: 1px solid #273640; border-radius: 6px; color: #7f929d; font-size: 9px; }
+.ssh-db-engine-grid article strong { color: #bde8da; }
+.ssh-db-object-head, .ssh-db-object-rows > div:not(.ssh-db-empty-inline) { min-width: 800px; display: grid; grid-template-columns: minmax(190px, 1.6fr) 90px 110px 100px 100px 100px; align-items: center; }
+.ssh-db-object-head { min-height: 30px; position: sticky; top: 0; z-index: 2; border-bottom: 1px solid #2a3943; background: #111a21; color: #70828e; font-size: 8.5px; font-weight: 700; text-transform: uppercase; }
+.ssh-db-object-head span, .ssh-db-object-rows > div > span { min-width: 0; padding: 6px 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-db-object-rows { min-width: 0; overflow-x: auto; }
+.ssh-db-object-rows > div:not(.ssh-db-empty-inline) { min-height: 39px; border-bottom: 1px solid #202d36; color: #91a2ac; font-size: 9.5px; }
+.ssh-db-object-rows > div:not(.ssh-db-empty-inline):hover { background: #101a22; }
+.ssh-db-object-rows > div > span:first-child { display: flex; align-items: center; gap: 6px; color: #c7d3d9; }
+.ssh-db-object-rows > div > span:first-child > svg { color: #42cfa6; flex: 0 0 auto; }
+.ssh-db-panel { display: flex; flex-direction: column; }
+.ssh-db-panel > header { position: sticky; top: 0; z-index: 3; background: #0d151c; }
+.ssh-db-card-list { padding: 8px; display: grid; align-content: start; gap: 6px; }
+.ssh-db-card-list article { min-height: 53px; padding: 8px 9px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; border: 1px solid #2c3c47; border-radius: 7px; background: #0e171e; }
+.ssh-db-card-list article > svg { color: #41cda5; }
+.ssh-db-card-list article > div { min-width: 0; display: grid; gap: 2px; }
+.ssh-db-card-list article strong { color: #cbd6dc; font-size: 10.5px; }
+.ssh-db-card-list article small { overflow: hidden; color: #758793; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-db-empty-inline { min-height: 72px; padding: 18px; display: grid; place-items: center; color: #71838e; font-size: 10px; text-align: center; }
+.ssh-db-section-label { padding: 8px 9px 3px; color: #78909c; font-size: 8.5px; font-weight: 700; text-transform: uppercase; }
+.ssh-db-health { padding: 8px; display: grid; align-content: start; gap: 7px; }
+.ssh-db-health article { padding: 10px; display: flex; align-items: flex-start; gap: 9px; border: 1px solid #2d3c47; border-radius: 7px; background: #0e171e; }
+.ssh-db-health article[data-level="warning"] { border-color: #665425; background: #211d12; }
+.ssh-db-health article[data-level="ok"] { border-color: #1e5b4b; background: #10231e; }
+.ssh-db-health svg { flex: 0 0 auto; color: #d5a93d; }
+.ssh-db-health article[data-level="ok"] svg { color: #33c79d; }
+.ssh-db-health p { margin: 3px 0; color: #80919b; font-size: 9.5px; }
+.ssh-db-health code { display: block; margin-top: 6px; color: #c3a861; font-size: 9px; white-space: normal; }
+.ssh-db-settings-grid { padding: 8px; display: grid; grid-template-columns: repeat(4, minmax(140px, 1fr)); gap: 7px; }
+.ssh-db-settings-grid article { min-width: 0; padding: 9px; display: grid; gap: 4px; border: 1px solid #2b3b46; border-radius: 7px; background: #0e171e; }
+.ssh-db-settings-grid small { color: #738591; font-size: 8.5px; text-transform: uppercase; }
+.ssh-db-settings-grid strong, .ssh-db-settings-grid code { overflow: hidden; color: #bfe5d9; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-db-ddl { margin: 0 8px 8px; border: 1px solid #2b3b46; border-radius: 7px; overflow: hidden; }
+.ssh-db-ddl > header { min-height: 35px; padding: 5px 8px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #27353f; font-size: 9px; }
+.ssh-db-ddl pre { margin: 0; padding: 11px; overflow: auto; background: #080e13; color: #a9d8c8; font: 10px/1.5 Consolas, monospace; white-space: pre; user-select: text; }
+.ssh-db-danger { margin: 0 8px 8px; padding: 9px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid #6c3037; border-radius: 7px; background: #211317; }
+.ssh-db-danger > div { display: grid; gap: 2px; }
+.ssh-db-danger small { color: #9b7478; font-size: 9px; }
+.ssh-db-maintenance { padding: 9px; display: grid; align-content: start; gap: 9px; }
+.ssh-db-maintenance-kinds { display: grid; grid-template-columns: repeat(3, minmax(150px, 1fr)); gap: 7px; }
+.ssh-db-maintenance-kinds button { padding: 9px; display: grid; gap: 3px; border: 1px solid #2d3d48; border-radius: 7px; background: #0e171e; color: #c4d0d6; text-align: left; cursor: pointer; }
+.ssh-db-maintenance-kinds button[data-selected] { border-color: #1fad87; background: #10251f; }
+.ssh-db-maintenance-kinds small { color: #758793; font-size: 8.5px; }
+.ssh-db-maintenance-select { border: 1px solid #2c3b46; border-radius: 7px; overflow: hidden; }
+.ssh-db-maintenance-select > header { min-height: 36px; padding: 5px 8px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #26343e; }
+.ssh-db-maintenance-select > div { max-height: 220px; padding: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 7px; overflow: auto; }
+.ssh-db-maintenance-result { border: 1px solid #2c3b46; border-radius: 7px; overflow: hidden; }
+.ssh-db-maintenance-result > header { padding: 7px 9px; display: flex; justify-content: space-between; border-bottom: 1px solid #26343e; }
+.ssh-db-maintenance-result > div { min-height: 38px; padding: 6px 9px; display: grid; grid-template-columns: minmax(140px, 1fr) 80px auto minmax(180px, 2fr); align-items: center; gap: 8px; border-bottom: 1px solid #202d36; font-size: 9px; }
+.ssh-db-maintenance-result p { margin: 0; color: #899aa4; }
 .ssh-mysql-users { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .ssh-mysql-users > header { min-height: 57px; padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid #293741; background: #0d151c; }
 .ssh-mysql-user-grid { min-height: 0; padding: 9px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); align-content: start; gap: 7px; overflow: auto; }
@@ -609,7 +694,9 @@
 .ssh-table-detail-tabs { min-height: 35px; display: flex; overflow-x: auto; border-bottom: 1px solid #2a3943; background: #0c141a; }
 .ssh-table-detail-tabs button { min-width: max-content; padding: 0 11px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #7b8e9a; font: inherit; font-size: 10px; font-weight: 650; cursor: pointer; }
 .ssh-table-detail-tabs button[data-active] { border-bottom-color: #20c997; color: #b9e8d9; }
-.ssh-table-detail-body { min-height: 0; flex: 1; overflow: auto; }
+.ssh-table-detail-body { min-height: 0; flex: 1; overflow: hidden; }
+.ssh-table-detail-body > .ssh-table-overview,
+.ssh-table-detail-body > .ssh-table-panel { height: 100%; min-height: 0; overflow: auto; }
 .ssh-table-overview { padding: 10px; display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 7px; }
 .ssh-table-overview article { min-height: 65px; padding: 9px; display: grid; align-content: center; gap: 3px; border: 1px solid #2d3c47; border-radius: 7px; background: #0e171e; }
 .ssh-table-overview article small { color: #728490; font-size: 9px; text-transform: uppercase; }
@@ -632,15 +719,20 @@
 .ssh-table-card-list article strong { color: #cbd6dc; font-size: 10.5px; }
 .ssh-table-card-list article small { overflow: hidden; color: #778a96; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .ssh-table-card-list article code { max-height: 54px; overflow: hidden; color: #95bcae; font-size: 9px; white-space: pre-wrap; }
-.ssh-table-data { overflow: hidden; }
-.ssh-table-data > .ssh-sql-grid { min-height: 0; flex: 1; }
-.ssh-table-ddl pre { margin: 0; padding: 12px; min-height: 0; flex: 1; overflow: auto; background: #080e13; color: #a9d8c8; font: 10.5px/1.55 Consolas, "Cascadia Code", monospace; white-space: pre; user-select: text; }
+.ssh-table-detail-body > .ssh-table-data { overflow: hidden; }
+.ssh-table-data > .ssh-sql-grid { width: 100%; min-height: 0; flex: 1; overflow: auto; scrollbar-gutter: stable; }
+.ssh-table-data .ssh-sql-grid table { width: max-content; min-width: 100%; }
+.ssh-table-data .ssh-sql-grid thead { position: sticky; top: 0; z-index: 3; }
+.ssh-table-data .ssh-sql-grid th { top: 0; z-index: 4; }
+.ssh-table-detail-body > .ssh-table-ddl { overflow: hidden; }
+.ssh-table-ddl pre { margin: 0; padding: 12px; min-height: 0; flex: 1; overflow: auto; scrollbar-gutter: stable; background: #080e13; color: #a9d8c8; font: 10.5px/1.55 Consolas, "Cascadia Code", monospace; white-space: pre; user-select: text; }
 .ssh-table-form { display: grid; gap: 11px; }
 .ssh-table-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
 
 @media (max-width: 1050px) {
   .ssh-database-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ssh-database-install-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ssh-db-metrics, .ssh-db-settings-grid { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
 }
 
 @media (max-width: 760px) {
@@ -663,6 +755,9 @@
   .ssh-mysql-privilege-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ssh-mysql-databases > header { align-items: flex-start; flex-direction: column; }
   .ssh-mysql-database-tools { grid-template-columns: 1fr; }
+  .ssh-db-sidebar { width: 220px; min-width: 180px; }
+  .ssh-db-sidebar-tools { grid-template-columns: 1fr; }
+  .ssh-db-maintenance-kinds { grid-template-columns: 1fr; }
   .ssh-sql-toolbar { align-items: stretch; flex-direction: column; }
   .ssh-table-sidebar { width: 230px; min-width: 190px; }
   .ssh-table-overview { grid-template-columns: repeat(2, minmax(120px, 1fr)); }

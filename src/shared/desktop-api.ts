@@ -304,7 +304,80 @@ export interface SshMySqlDatabase {
 
 export type SshMySqlDatabaseOperation =
   | { kind: 'create'; name: string; characterSet: string; collation: string }
+  | { kind: 'alter-defaults'; name: string; characterSet: string; collation: string; confirmation: string }
   | { kind: 'drop'; name: string; confirmation: string }
+
+export interface SshMySqlDatabaseEngineSummary {
+  name: string
+  tableCount: number
+  rows: number
+  sizeBytes: number
+}
+
+export interface SshMySqlDatabaseAccount {
+  username: string
+  host: string
+  privileges: string[]
+  grantable: boolean
+}
+
+export interface SshMySqlDatabaseRoutine {
+  name: string
+  type: 'procedure' | 'function'
+  definer: string
+  securityType: string
+  createdAt: string | null
+}
+
+export interface SshMySqlDatabaseEvent {
+  name: string
+  status: string
+  schedule: string
+  definer: string
+  lastExecutedAt: string | null
+}
+
+export interface SshMySqlDatabaseHealthFinding {
+  severity: 'warning' | 'info'
+  code: 'missing-primary-key' | 'free-space' | 'mixed-engines' | 'empty-database'
+  title: string
+  detail: string
+  tables: string[]
+}
+
+export interface SshMySqlDatabaseDetails {
+  database: SshMySqlDatabase
+  tableCount: number
+  viewCount: number
+  estimatedRows: number
+  dataBytes: number
+  indexBytes: number
+  freeBytes: number
+  lastUpdatedAt: string | null
+  engines: SshMySqlDatabaseEngineSummary[]
+  tables: SshMySqlTable[]
+  largestTables: SshMySqlTable[]
+  accounts: SshMySqlDatabaseAccount[]
+  routines: SshMySqlDatabaseRoutine[]
+  events: SshMySqlDatabaseEvent[]
+  health: SshMySqlDatabaseHealthFinding[]
+  ddl: string
+  fetchedAt: string
+}
+
+export type SshMySqlDatabaseMaintenanceOperation = {
+  database: string
+  kind: 'check' | 'analyze' | 'optimize'
+  tables: string[]
+  confirmation: string
+}
+
+export interface SshMySqlDatabaseMaintenanceMessage {
+  table: string
+  operation: string
+  messageType: string
+  message: string
+}
 
 export interface SshMySqlDatabaseGrant {
   database: string
@@ -870,6 +943,8 @@ export interface DesktopApi {
     clearMysqlAccess: (id: string) => Promise<void>
     mysqlDatabases: (id: string) => Promise<SshMySqlDatabase[]>
     manageMysqlDatabase: (id: string, operation: SshMySqlDatabaseOperation) => Promise<SshMySqlDatabase[]>
+    mysqlDatabaseDetails: (id: string, database: string) => Promise<SshMySqlDatabaseDetails>
+    maintainMysqlDatabase: (id: string, operation: SshMySqlDatabaseMaintenanceOperation) => Promise<SshMySqlDatabaseMaintenanceMessage[]>
     mysqlUsers: (id: string) => Promise<SshMySqlUser[]>
     manageMysqlUser: (id: string, operation: SshMySqlUserOperation) => Promise<SshMySqlUser[]>
     mysqlSchema: (id: string, database: string | null) => Promise<SshMySqlSchemaColumn[]>
