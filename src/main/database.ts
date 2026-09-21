@@ -248,6 +248,7 @@ const createSchema = (db: DatabaseSync): void => {
       username TEXT,
       sftp_source TEXT CHECK (sftp_source IS NULL OR sftp_source IN ('ssh', 'standalone')),
       ssh_connection_id TEXT REFERENCES ssh_connections(id) ON DELETE SET NULL,
+      parent_ssh_connection_id TEXT REFERENCES ssh_connections(id) ON DELETE CASCADE,
       authentication_type TEXT CHECK (authentication_type IS NULL OR authentication_type IN ('password', 'private-key', 'agent')),
       private_key_path TEXT,
       agent_socket TEXT,
@@ -301,6 +302,17 @@ const createSchema = (db: DatabaseSync): void => {
     INSERT OR IGNORE INTO schema_migrations (version, applied_at)
       VALUES (2, datetime('now'));
   `)
+
+  const remoteConnectionColumns = db.prepare('PRAGMA table_info(remote_connections)').all() as unknown as
+    Array<{ name: string }>
+  if (!remoteConnectionColumns.some((column) => column.name === 'parent_ssh_connection_id')) {
+    db.exec(`ALTER TABLE remote_connections
+      ADD COLUMN parent_ssh_connection_id TEXT REFERENCES ssh_connections(id) ON DELETE CASCADE;`)
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS remote_connections_parent_ssh_idx
+    ON remote_connections(parent_ssh_connection_id);`)
+  db.exec(`INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+    VALUES (14, datetime('now'));`)
 
   const appSettingsColumns = db.prepare('PRAGMA table_info(app_settings)').all() as unknown as
     Array<{ name: string }>

@@ -77,6 +77,7 @@ interface PortableRemoteConnection {
   username: string | null
   sftpSource: 'ssh' | 'standalone' | null
   sshConnectionId: string | null
+  parentSshConnectionId?: string | null
   authenticationType: 'password' | 'private-key' | 'agent' | null
   tlsMode: 'explicit' | 'implicit' | null
   rejectUnauthorized: boolean
@@ -282,13 +283,14 @@ const exportConfiguration = (): PortableConfiguration => {
     updated_at: string
   }>
   const remoteConnections = db.prepare(`
-    SELECT id, name, protocol, host, port, username, sftp_source, ssh_connection_id,
+    SELECT id, name, protocol, host, port, username, sftp_source, ssh_connection_id, parent_ssh_connection_id,
            authentication_type, tls_mode, reject_unauthorized, host_fingerprint, created_at, updated_at
     FROM remote_connections ORDER BY name COLLATE NOCASE
   `).all() as unknown as Array<{
     id: string; name: string; protocol: PortableRemoteConnection['protocol']; host: string | null
     port: number | null; username: string | null; sftp_source: PortableRemoteConnection['sftpSource']
-    ssh_connection_id: string | null; authentication_type: PortableRemoteConnection['authenticationType']
+    ssh_connection_id: string | null; parent_ssh_connection_id: string | null
+    authentication_type: PortableRemoteConnection['authenticationType']
     tls_mode: PortableRemoteConnection['tlsMode']; reject_unauthorized: number
     host_fingerprint: string | null; created_at: string; updated_at: string
   }>
@@ -359,6 +361,7 @@ const exportConfiguration = (): PortableConfiguration => {
       username: connection.username,
       sftpSource: connection.sftp_source,
       sshConnectionId: connection.ssh_connection_id,
+      parentSshConnectionId: connection.parent_ssh_connection_id,
       authenticationType: connection.authentication_type,
       tlsMode: connection.tls_mode,
       rejectUnauthorized: connection.reject_unauthorized !== 0,
@@ -702,17 +705,22 @@ const importConfiguration = (config: PortableConfiguration): void => {
       const linkedSftp = connection.protocol === 'sftp' && connection.sftpSource === 'ssh'
       if (linkedSftp && (!connection.sshConnectionId ||
         !db.prepare('SELECT 1 FROM ssh_connections WHERE id = ?').get(connection.sshConnectionId))) continue
+      const parentSshConnectionId = typeof connection.parentSshConnectionId === 'string' &&
+        db.prepare('SELECT 1 FROM ssh_connections WHERE id = ?').get(connection.parentSshConnectionId)
+        ? connection.parentSshConnectionId : linkedSftp ? connection.sshConnectionId : null
       db.prepare(`
         INSERT INTO remote_connections (
           id, name, protocol, host, port, username, sftp_source, ssh_connection_id,
-          authentication_type, private_key_path, agent_socket, encrypted_password,
+          parent_ssh_connection_id, authentication_type, private_key_path, agent_socket, encrypted_password,
           encrypted_passphrase, tls_mode, reject_unauthorized, host_fingerprint,
           created_at, updated_at, last_connected_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, NULL)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, NULL)
         ON CONFLICT(id) DO UPDATE SET
           name=excluded.name, protocol=excluded.protocol, host=excluded.host, port=excluded.port,
           username=excluded.username, sftp_source=excluded.sftp_source,
-          ssh_connection_id=excluded.ssh_connection_id, authentication_type=excluded.authentication_type,
+          ssh_connection_id=excluded.ssh_connection_id,
+          parent_ssh_connection_id=excluded.parent_ssh_connection_id,
+          authentication_type=excluded.authentication_type,
           private_key_path=CASE WHEN excluded.authentication_type='private-key' AND
             remote_connections.authentication_type='private-key' THEN remote_connections.private_key_path ELSE NULL END,
           agent_socket=CASE WHEN excluded.authentication_type='agent' AND
@@ -727,7 +735,7 @@ const importConfiguration = (config: PortableConfiguration): void => {
           host_fingerprint=excluded.host_fingerprint, updated_at=excluded.updated_at
       `).run(
         connection.id, connection.name.trim(), connection.protocol, connection.host, connection.port,
-        connection.username, connection.sftpSource, connection.sshConnectionId,
+        connection.username, connection.sftpSource, connection.sshConnectionId, parentSshConnectionId,
         connection.authenticationType, connection.tlsMode, connection.rejectUnauthorized ? 1 : 0,
         connection.hostFingerprint, connection.createdAt, connection.updatedAt,
       )

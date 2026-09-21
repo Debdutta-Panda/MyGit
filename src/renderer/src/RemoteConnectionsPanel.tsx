@@ -21,6 +21,7 @@ interface Draft {
   username: string
   sftpSource: RemoteSftpSource
   sshConnectionId: string | null
+  parentSshConnectionId: string | null
   authenticationType: RemoteAuthenticationType
   privateKeyPath: string
   agentSocket: string
@@ -35,6 +36,7 @@ interface Draft {
 const blank = (): Draft => ({
   name: '', protocol: 'sftp', host: '', port: 22, username: '', sftpSource: 'ssh',
   sshConnectionId: null, authenticationType: 'password', privateKeyPath: '', agentSocket: '',
+  parentSshConnectionId: null,
   password: '', passphrase: '', hasPassword: false, hasPassphrase: false,
   tlsMode: 'explicit', rejectUnauthorized: true,
 })
@@ -46,10 +48,12 @@ export function RemoteConnectionsPanel({
   sshConnections,
   onAddSsh,
   children,
+  serverConnection,
 }: {
   sshConnections: SshConnection[]
-  onAddSsh: () => void
-  children: ReactNode
+  onAddSsh?: () => void
+  children?: ReactNode
+  serverConnection?: SshConnection
 }) {
   const [connections, setConnections] = useState<RemoteConnection[]>([])
   const [draft, setDraft] = useState<Draft>(blank)
@@ -67,6 +71,11 @@ export function RemoteConnectionsPanel({
   }
   useEffect(() => { void load() }, [])
 
+  const visibleConnections = serverConnection
+    ? connections.filter((item) => item.parentSshConnectionId === serverConnection.id ||
+      (item.protocol === 'sftp' && item.sftpSource === 'ssh' && item.sshConnectionId === serverConnection.id))
+    : connections
+
   const open = (connection?: RemoteConnection, protocol?: RemoteConnectionProtocol): void => {
     setError(null)
     setDraft(connection ? {
@@ -74,6 +83,7 @@ export function RemoteConnectionsPanel({
       host: connection.host ?? '', port: connection.port ?? (connection.protocol === 'sftp' ? 22 : 21),
       username: connection.username ?? '', sftpSource: connection.sftpSource ?? 'ssh',
       sshConnectionId: connection.sshConnectionId,
+      parentSshConnectionId: connection.parentSshConnectionId,
       authenticationType: connection.authenticationType ?? 'password',
       privateKeyPath: connection.privateKeyPath ?? '', agentSocket: connection.agentSocket ?? '',
       password: '', passphrase: '', hasPassword: connection.hasPassword,
@@ -81,10 +91,14 @@ export function RemoteConnectionsPanel({
       rejectUnauthorized: connection.rejectUnauthorized,
     } : {
       ...blank(),
+      name: serverConnection && protocol ? `${serverConnection.name} ${protocol.toUpperCase()}` : '',
       protocol: protocol ?? 'sftp',
       port: protocol === 'ftp' || protocol === 'ftps' ? 21 : 22,
       sftpSource: protocol === 'sftp' ? 'ssh' : 'standalone',
-      sshConnectionId: sshConnections[0]?.id ?? null,
+      host: serverConnection?.host ?? '',
+      username: serverConnection?.username ?? '',
+      sshConnectionId: serverConnection?.id ?? sshConnections[0]?.id ?? null,
+      parentSshConnectionId: serverConnection?.id ?? null,
     })
     setOpened(true)
   }
@@ -94,7 +108,11 @@ export function RemoteConnectionsPanel({
   const save = async (): Promise<void> => {
     setSaving(true); setError(null)
     try {
-      const input: RemoteConnectionInput = { ...draft, id: draft.id }
+      const input: RemoteConnectionInput = {
+        ...draft,
+        id: draft.id,
+        parentSshConnectionId: serverConnection?.id ?? draft.parentSshConnectionId,
+      }
       setConnections(await window.desktop.remoteConnections.save(input))
       setOpened(false)
     } catch (reason) { setError(message(reason)) }
@@ -128,15 +146,19 @@ export function RemoteConnectionsPanel({
     <Stack gap="sm">
       <Group justify="space-between">
         <div>
-          <Text fz={22} fw={720} className="page-title">Connections</Text>
-          <Text size="xs" c="dimmed">SSH, FTP, FTPS and SFTP</Text>
+          <Text fz={serverConnection ? 17 : 22} fw={720} className="page-title">
+            {serverConnection ? 'File transfer connections' : 'Connections'}
+          </Text>
+          <Text size="xs" c="dimmed">
+            {serverConnection ? `Managed for ${serverConnection.host}` : 'SSH, FTP, FTPS and SFTP'}
+          </Text>
         </div>
         <Menu position="bottom-end" withinPortal>
           <Menu.Target>
             <Button size="sm" leftSection={<IconPlus size={16} />}>Add connection</Button>
           </Menu.Target>
           <Menu.Dropdown>
-            <Menu.Item onClick={onAddSsh}>SSH</Menu.Item>
+            {!serverConnection && onAddSsh && <Menu.Item onClick={onAddSsh}>SSH</Menu.Item>}
             <Menu.Item onClick={() => open(undefined, 'ftp')}>FTP</Menu.Item>
             <Menu.Item onClick={() => open(undefined, 'ftps')}>FTPS</Menu.Item>
             <Menu.Item onClick={() => open(undefined, 'sftp')}>SFTP</Menu.Item>
@@ -144,7 +166,8 @@ export function RemoteConnectionsPanel({
         </Menu>
       </Group>
       {error && <Alert color="red" withCloseButton onClose={() => setError(null)}>{error}</Alert>}
-      {connections.length === 0 && sshConnections.length === 0 ? (
+      {(serverConnection ? visibleConnections.length === 0
+        : visibleConnections.length === 0 && sshConnections.length === 0) ? (
         <Paper className="empty-state connections-empty" radius="lg">
           <IconServer2 size={30} />
           <Text fw={680}>No connections yet</Text>
@@ -153,7 +176,7 @@ export function RemoteConnectionsPanel({
       ) : (
         <div className="ssh-grid">
           {children}
-          {connections.map((connection) => (
+          {visibleConnections.map((connection) => (
             <Paper className="ssh-card" radius="lg" key={connection.id}>
               <Group justify="space-between" wrap="nowrap">
                 <Group gap="sm" wrap="nowrap">

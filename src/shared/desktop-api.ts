@@ -245,6 +245,7 @@ export interface RemoteConnection {
   username: string | null
   sftpSource: RemoteSftpSource | null
   sshConnectionId: string | null
+  parentSshConnectionId: string | null
   authenticationType: RemoteAuthenticationType | null
   privateKeyPath: string | null
   agentSocket: string | null
@@ -267,6 +268,7 @@ export interface RemoteConnectionInput {
   username?: string | null
   sftpSource?: RemoteSftpSource | null
   sshConnectionId?: string | null
+  parentSshConnectionId?: string | null
   authenticationType?: RemoteAuthenticationType | null
   privateKeyPath?: string | null
   agentSocket?: string | null

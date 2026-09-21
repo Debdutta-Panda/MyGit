@@ -22,6 +22,7 @@ interface RemoteConnectionRow {
   username: string | null
   sftp_source: 'ssh' | 'standalone' | null
   ssh_connection_id: string | null
+  parent_ssh_connection_id: string | null
   authentication_type: RemoteAuthenticationType | null
   private_key_path: string | null
   agent_socket: string | null
@@ -35,7 +36,7 @@ interface RemoteConnectionRow {
   last_connected_at: string | null
 }
 
-const columns = `id, name, protocol, host, port, username, sftp_source, ssh_connection_id,
+const columns = `id, name, protocol, host, port, username, sftp_source, ssh_connection_id, parent_ssh_connection_id,
   authentication_type, private_key_path, agent_socket, encrypted_password, encrypted_passphrase,
   tls_mode, reject_unauthorized, host_fingerprint, created_at, updated_at, last_connected_at`
 
@@ -59,6 +60,7 @@ const publicConnection = (value: RemoteConnectionRow): RemoteConnection => ({
   username: value.username,
   sftpSource: value.sftp_source,
   sshConnectionId: value.ssh_connection_id,
+  parentSshConnectionId: value.parent_ssh_connection_id,
   authenticationType: value.authentication_type,
   privateKeyPath: value.private_key_path,
   agentSocket: value.agent_socket,
@@ -115,6 +117,12 @@ const save = (input: RemoteConnectionInput): RemoteConnection[] => {
     const match = getDatabase().prepare('SELECT id FROM ssh_connections WHERE id = ?').get(sshConnectionId)
     if (!match) throw new Error('The selected SSH connection no longer exists.')
   }
+  const parentSshConnectionId = typeof input.parentSshConnectionId === 'string' && input.parentSshConnectionId
+    ? input.parentSshConnectionId : linked ? sshConnectionId : null
+  if (parentSshConnectionId &&
+    !getDatabase().prepare('SELECT id FROM ssh_connections WHERE id = ?').get(parentSshConnectionId)) {
+    throw new Error('The parent SSH connection no longer exists.')
+  }
   const host = linked ? null : text(input.host, 'Host', 255)
   const username = linked ? null : text(input.username, 'Username', 128)
   const defaultPort = input.protocol === 'sftp' ? 22 : input.protocol === 'ftps' && input.tlsMode === 'implicit' ? 990 : 21
@@ -141,17 +149,19 @@ const save = (input: RemoteConnectionInput): RemoteConnection[] => {
   const endpointChanged = existing && (existing.host !== host || existing.port !== port || existing.username !== username)
   getDatabase().prepare(`
     INSERT INTO remote_connections (${columns})
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       name=excluded.name, protocol=excluded.protocol, host=excluded.host, port=excluded.port,
       username=excluded.username, sftp_source=excluded.sftp_source,
-      ssh_connection_id=excluded.ssh_connection_id, authentication_type=excluded.authentication_type,
+      ssh_connection_id=excluded.ssh_connection_id,
+      parent_ssh_connection_id=excluded.parent_ssh_connection_id,
+      authentication_type=excluded.authentication_type,
       private_key_path=excluded.private_key_path, agent_socket=excluded.agent_socket,
       encrypted_password=excluded.encrypted_password, encrypted_passphrase=excluded.encrypted_passphrase,
       tls_mode=excluded.tls_mode, reject_unauthorized=excluded.reject_unauthorized,
       host_fingerprint=excluded.host_fingerprint, updated_at=excluded.updated_at
   `).run(
-    id, name, input.protocol, host, port, username, sftpSource, sshConnectionId,
+    id, name, input.protocol, host, port, username, sftpSource, sshConnectionId, parentSshConnectionId,
     authenticationType, privateKeyPath, agentSocket, encryptedPassword, encryptedPassphrase,
     tlsMode, input.rejectUnauthorized === false ? 0 : 1,
     endpointChanged ? null : existing?.host_fingerprint ?? null,

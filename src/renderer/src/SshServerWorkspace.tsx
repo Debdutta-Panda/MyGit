@@ -41,8 +41,9 @@ import { SshCommandSnippets } from './SshCommandSnippets'
 import { SshScripts } from './SshScripts'
 import { SshDatabases } from './SshDatabases'
 import { SshWeb } from './SshWeb'
+import { RemoteConnectionsPanel } from './RemoteConnectionsPanel'
 
-type WorkspaceTab = 'overview' | 'files' | 'accounts' | 'snippets' | 'scripts' | 'services' | 'databases' | 'web' | 'logs'
+type WorkspaceTab = 'overview' | 'files' | 'accounts' | 'snippets' | 'scripts' | 'services' | 'databases' | 'web' | 'transfers' | 'logs'
 
 const formatBytes = (value: number | null): string => {
   if (value === null) return 'Unavailable'
@@ -243,6 +244,7 @@ export function SshServerWorkspace({
               ['services', 'Services'],
               ['databases', 'Databases'],
               ['web', 'WEB'],
+              ['transfers', 'FTP / SFTP'],
               ['logs', 'Logs'],
             ] as Array<[WorkspaceTab, string]>).map(([value, label]) => (
               <button type="button" key={value} data-active={tab === value || undefined} onClick={() => setTab(value)}>
@@ -422,6 +424,10 @@ export function SshServerWorkspace({
 
       {tab === 'web' && (
         <SshWeb connection={connection} />
+      )}
+
+      {tab === 'transfers' && (
+        <RemoteConnectionsPanel sshConnections={[connection]} serverConnection={connection} />
       )}
 
       {(tab === 'services' || tab === 'logs') && (
