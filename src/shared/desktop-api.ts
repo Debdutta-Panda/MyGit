@@ -322,6 +322,64 @@ export interface SshApacheOverview {
   fetchedAt: string
 }
 
+export type SshApacheConfigKind =
+  | 'main'
+  | 'configuration-available'
+  | 'configuration-enabled'
+  | 'site-available'
+  | 'site-enabled'
+  | 'conf.d'
+
+export interface SshApacheConfigEntry {
+  name: string
+  path: string
+  kind: SshApacheConfigKind
+  enabled: boolean
+  linkTarget: string | null
+  size: number | null
+  modifiedAt: string | null
+}
+
+export interface SshApacheConfiguration {
+  connectionId: string
+  flavor: 'debian' | 'rhel' | 'custom'
+  configDirectory: string | null
+  directories: {
+    configurationsAvailable: string | null
+    configurationsEnabled: string | null
+    sitesAvailable: string | null
+    sitesEnabled: string | null
+    confD: string | null
+  }
+  entries: SshApacheConfigEntry[]
+  canManage: boolean
+  fetchedAt: string
+}
+
+export interface SshApacheConfigFile {
+  path: string
+  content: string
+  etag: string
+  modifiedAt: string
+  size: number
+}
+
+export interface SshApacheSaveResult {
+  file: SshApacheConfigFile
+  backupPath: string
+  validationOutput: string
+}
+
+export type SshApacheAction =
+  | { kind: 'test' }
+  | { kind: 'reload'; confirmation: 'reload' }
+  | { kind: 'enable' | 'disable'; target: 'site' | 'configuration'; name: string }
+
+export interface SshApacheActionResult {
+  configuration: SshApacheConfiguration
+  output: string
+}
+
 export type SshMySqlAccessMode = 'system' | 'password'
 
 export interface SshMySqlAccessProfile {
@@ -1040,6 +1098,13 @@ export interface DesktopApi {
     ) => Promise<SshCommandTemplate[]>
     serverOverview: (id: string) => Promise<SshServerOverview>
     apacheOverview: (id: string) => Promise<SshApacheOverview>
+    apacheConfiguration: (id: string) => Promise<SshApacheConfiguration>
+    apacheReadConfig: (id: string, path: string) => Promise<SshApacheConfigFile>
+    apacheSaveConfig: (
+      id: string,
+      input: { path: string; content: string; expectedEtag: string },
+    ) => Promise<SshApacheSaveResult>
+    apacheAction: (id: string, action: SshApacheAction) => Promise<SshApacheActionResult>
     mysqlOverview: (id: string) => Promise<SshMySqlOverview>
     mysqlAccessProfile: (id: string) => Promise<SshMySqlAccessProfile | null>
     saveMysqlAccess: (id: string, input: SshMySqlAccessInput) => Promise<SshMySqlAccessProfile>

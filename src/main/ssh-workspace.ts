@@ -14,6 +14,12 @@ import type {
   SshRemoteFileWriteInput,
   SshServerOverview,
   SshApacheOverview,
+  SshApacheAction,
+  SshApacheActionResult,
+  SshApacheConfiguration,
+  SshApacheConfigFile,
+  SshApacheConfigKind,
+  SshApacheSaveResult,
   SshMySqlOverview,
   SshMySqlAccessInput,
   SshMySqlDatabase,
@@ -324,6 +330,7 @@ const apacheOverview = async (id: string): Promise<SshApacheOverview> =>
       "config_dir=''; for candidate in /etc/apache2 /etc/httpd /usr/local/apache2/conf; do [ -d \"$candidate\" ] && { config_dir=$candidate; break; }; done; printf 'config_dir|%s\\n' \"$config_dir\"",
       "for file in /etc/apache2/apache2.conf /etc/httpd/conf/httpd.conf /usr/local/apache2/conf/httpd.conf; do [ -f \"$file\" ] && printf 'config|%s\\n' \"$file\"; done",
       "roots=''; for directory in /var/www/html /var/www /srv/http /usr/local/apache2/htdocs; do [ -d \"$directory\" ] && printf 'document_root|%s\\n' \"$directory\"; done",
+      "true",
     ].join('; '))
     const fields = new Map<string, string[]>()
     const configFiles: string[] = []
@@ -352,6 +359,186 @@ const apacheOverview = async (id: string): Promise<SshApacheOverview> =>
       fetchedAt: new Date().toISOString(),
     }
   })
+
+const apacheSafePath = (requestedPath: string): string => {
+  const path = requestedPath.trim()
+  const roots = ['/etc/apache2', '/etc/httpd', '/usr/local/apache2/conf']
+  if (!path.startsWith('/') || posix.normalize(path) !== path || path.includes('\0')
+    || !roots.some((root) => path === root || path.startsWith(`${root}/`))) {
+    throw new Error('Choose a detected Apache configuration file.')
+  }
+  return path
+}
+
+const apacheConfigName = (requestedName: string): string => {
+  const name = requestedName.trim()
+  if (!/^[a-z0-9_.-]{1,255}$/i.test(name)) throw new Error('Choose a valid Apache configuration name.')
+  return name
+}
+
+const apachePrivileged = async (client: Client, command: string, input?: string): Promise<string> => {
+  const privilege = await accountPrivilege(client)
+  if (!privilege.canManage) throw new Error('Root or passwordless sudo is required for Apache changes.')
+  const elevated = privilege.root ? command : `sudo -n sh -c ${shellQuote(command)}`
+  return input === undefined ? await exec(client, elevated) : await execInput(client, elevated, input)
+}
+
+const apacheTestCommand = [
+  "control=$(command -v apache2ctl 2>/dev/null || command -v apachectl 2>/dev/null || command -v httpd 2>/dev/null || command -v apache2 2>/dev/null || true)",
+  "[ -n \"$control\" ] || { echo 'Apache control executable was not found.' >&2; exit 1; }",
+  '"$control" -t 2>&1',
+].join('; ')
+
+const apacheConfiguration = async (id: string): Promise<SshApacheConfiguration> =>
+  await withClient(id, async (client, connection) => {
+    const privilege = await accountPrivilege(client)
+    const output = await exec(client, [
+      "root=''; flavor=custom; if [ -d /etc/apache2 ]; then root=/etc/apache2; flavor=debian; elif [ -d /etc/httpd ]; then root=/etc/httpd; flavor=rhel; elif [ -d /usr/local/apache2/conf ]; then root=/usr/local/apache2/conf; fi",
+      "printf 'layout|%s|%s\\n' \"$flavor\" \"$root\"",
+      "for spec in 'configuration-available|/etc/apache2/conf-available|0' 'configuration-enabled|/etc/apache2/conf-enabled|1' 'site-available|/etc/apache2/sites-available|0' 'site-enabled|/etc/apache2/sites-enabled|1' 'conf.d|/etc/httpd/conf.d|1'; do kind=${spec%%|*}; rest=${spec#*|}; directory=${rest%%|*}; enabled=${rest##*|}; [ -d \"$directory\" ] || continue; printf 'directory|%s|%s\\n' \"$kind\" \"$directory\"; find \"$directory\" -mindepth 1 -maxdepth 1 \\( -type f -o -type l \\) -print 2>/dev/null | while IFS= read -r path; do name=$(basename \"$path\"); target=''; [ -L \"$path\" ] && target=$(readlink -f \"$path\" 2>/dev/null || true); size=$(stat -Lc %s \"$path\" 2>/dev/null || true); modified=$(stat -Lc %Y \"$path\" 2>/dev/null || true); printf 'entry|%s|%s|%s|%s|%s|%s|%s\\n' \"$kind\" \"$enabled\" \"$name\" \"$path\" \"$target\" \"$size\" \"$modified\"; done; done",
+      "for file in /etc/apache2/apache2.conf /etc/httpd/conf/httpd.conf /usr/local/apache2/conf/httpd.conf; do [ -f \"$file\" ] || continue; size=$(stat -Lc %s \"$file\" 2>/dev/null || true); modified=$(stat -Lc %Y \"$file\" 2>/dev/null || true); printf 'entry|main|1|%s|%s||%s|%s\\n' \"$(basename \"$file\")\" \"$file\" \"$size\" \"$modified\"; done",
+      'true',
+    ].join('; '))
+    let flavor: SshApacheConfiguration['flavor'] = 'custom'
+    let configDirectory: string | null = null
+    const directories: SshApacheConfiguration['directories'] = {
+      configurationsAvailable: null,
+      configurationsEnabled: null,
+      sitesAvailable: null,
+      sitesEnabled: null,
+      confD: null,
+    }
+    const entries: SshApacheConfiguration['entries'] = []
+    for (const line of output.split(/\r?\n/)) {
+      const [record, ...values] = line.split('|')
+      if (record === 'layout') {
+        flavor = values[0] === 'debian' ? 'debian' : values[0] === 'rhel' ? 'rhel' : 'custom'
+        configDirectory = values[1] || null
+      } else if (record === 'directory') {
+        const [kind, path] = values
+        if (kind === 'configuration-available') directories.configurationsAvailable = path || null
+        else if (kind === 'configuration-enabled') directories.configurationsEnabled = path || null
+        else if (kind === 'site-available') directories.sitesAvailable = path || null
+        else if (kind === 'site-enabled') directories.sitesEnabled = path || null
+        else if (kind === 'conf.d') directories.confD = path || null
+      } else if (record === 'entry' && values.length >= 7) {
+        const [kind, enabled, name, path, linkTarget, size, modified] = values
+        entries.push({
+          kind: kind as SshApacheConfigKind,
+          enabled: enabled === '1',
+          name,
+          path,
+          linkTarget: linkTarget || null,
+          size: Number.isFinite(Number(size)) ? Number(size) : null,
+          modifiedAt: Number.isFinite(Number(modified)) && Number(modified) > 0
+            ? new Date(Number(modified) * 1000).toISOString() : null,
+        })
+      }
+    }
+    const enabledSiteNames = new Set(entries.filter((entry) => entry.kind === 'site-enabled').map((entry) => entry.name))
+    const enabledConfigurationNames = new Set(entries.filter((entry) => entry.kind === 'configuration-enabled').map((entry) => entry.name))
+    for (const entry of entries) {
+      if (entry.kind === 'site-available') entry.enabled = enabledSiteNames.has(entry.name)
+      if (entry.kind === 'configuration-available') entry.enabled = enabledConfigurationNames.has(entry.name)
+    }
+    return {
+      connectionId: connection.id,
+      flavor,
+      configDirectory,
+      directories,
+      entries: entries.sort((left, right) => left.kind.localeCompare(right.kind) || left.name.localeCompare(right.name)),
+      canManage: privilege.canManage,
+      fetchedAt: new Date().toISOString(),
+    }
+  })
+
+const apacheReadConfigWithClient = async (client: Client, requestedPath: string): Promise<SshApacheConfigFile> => {
+  const path = apacheSafePath(requestedPath)
+  const privilege = await accountPrivilege(client)
+  const command = (value: string): string => privilege.root ? value
+    : privilege.canManage ? `sudo -n sh -c ${shellQuote(value)}` : value
+  const metadata = await exec(client, command(`test -f ${shellQuote(path)} && stat -Lc '%s|%Y' ${shellQuote(path)}`))
+  const [sizeValue, modifiedValue] = metadata.split('|')
+  const size = Number(sizeValue)
+  if (!Number.isFinite(size) || size > 2 * 1024 * 1024) throw new Error('Apache configuration files must be smaller than 2 MB.')
+  const encoded = await exec(client, command(`base64 ${shellQuote(path)} | tr -d '\\n'`))
+  const content = Buffer.from(encoded, 'base64').toString('utf8')
+  return {
+    path,
+    content,
+    etag: createHash('sha256').update(content).digest('hex'),
+    modifiedAt: new Date(Number(modifiedValue) * 1000).toISOString(),
+    size,
+  }
+}
+
+const apacheReadConfig = async (id: string, path: string): Promise<SshApacheConfigFile> =>
+  await withClient(id, async (client) => apacheReadConfigWithClient(client, path))
+
+const apacheSaveConfig = async (
+  id: string,
+  input: { path: string; content: string; expectedEtag: string },
+): Promise<SshApacheSaveResult> => await withClient(id, async (client) => {
+  if (!input || typeof input.content !== 'string' || typeof input.expectedEtag !== 'string') {
+    throw new Error('Invalid Apache configuration update.')
+  }
+  const path = apacheSafePath(input.path)
+  if (Buffer.byteLength(input.content, 'utf8') > 2 * 1024 * 1024) throw new Error('Apache configuration files must be smaller than 2 MB.')
+  const before = await apacheReadConfigWithClient(client, path)
+  if (before.etag !== input.expectedEtag) throw new Error('APACHE_CONFIG_CHANGED: This file changed on the server. Reload it before saving.')
+  const command = [
+    'set -eu',
+    `path=${shellQuote(path)}`,
+    'temporary=$(mktemp)',
+    'backup="${path}.myrepos-$(date +%Y%m%d-%H%M%S).bak"',
+    'trap \'rm -f "$temporary"\' EXIT',
+    'cat > "$temporary"',
+    'cp -a -- "$path" "$backup"',
+    'cat "$temporary" > "$path"',
+    `validation=$(${apacheTestCommand} 2>&1) || { cp -a -- "$backup" "$path"; printf '%s\\n' "$validation" >&2; exit 1; }`,
+    "printf 'backup|%s\\n%s\\n' \"$backup\" \"$validation\"",
+  ].join('; ')
+  const output = await apachePrivileged(client, command, input.content)
+  const [backupRecord = '', ...validation] = output.split(/\r?\n/)
+  const backupPath = backupRecord.startsWith('backup|') ? backupRecord.slice(7) : `${path}.bak`
+  return {
+    file: await apacheReadConfigWithClient(client, path),
+    backupPath,
+    validationOutput: validation.join('\n').trim() || 'Syntax OK',
+  }
+})
+
+const apacheAction = async (id: string, action: SshApacheAction): Promise<SshApacheActionResult> => {
+  const output = await withClient(id, async (client) => {
+    if (!action || typeof action.kind !== 'string') throw new Error('Invalid Apache action.')
+    if (action.kind === 'test') return await exec(client, apacheTestCommand)
+    if (action.kind === 'reload') {
+      if (action.confirmation !== 'reload') throw new Error('Confirm the Apache reload.')
+      const command = [
+        'set -e',
+        apacheTestCommand,
+        "svc=''; if command -v systemctl >/dev/null 2>&1; then for candidate in apache2 httpd; do systemctl show \"$candidate.service\" -p LoadState --value 2>/dev/null | grep -qv '^not-found$' && { svc=$candidate; break; }; done; fi",
+        "if [ -n \"$svc\" ]; then systemctl reload \"$svc.service\"; else control=$(command -v apache2ctl 2>/dev/null || command -v apachectl 2>/dev/null); [ -n \"$control\" ] && \"$control\" graceful; fi",
+        "printf '\\nApache reloaded successfully.\\n'",
+      ].join('; ')
+      return await apachePrivileged(client, command)
+    }
+    const name = apacheConfigName(action.name)
+    const site = action.target === 'site'
+    if (!site && action.target !== 'configuration') throw new Error('Choose a site or configuration.')
+    const tool = `${action.kind === 'enable' ? 'a2en' : 'a2dis'}${site ? 'site' : 'conf'}`
+    const rollback = `${action.kind === 'enable' ? 'a2dis' : 'a2en'}${site ? 'site' : 'conf'}`
+    const command = [
+      'set -e',
+      `command -v ${tool} >/dev/null 2>&1 || { echo '${tool} is unavailable on this Apache layout.' >&2; exit 1; }`,
+      `result=$(${tool} ${shellQuote(name)} 2>&1)`,
+      `validation=$(${apacheTestCommand} 2>&1) || { ${rollback} ${shellQuote(name)} >/dev/null 2>&1 || true; printf '%s\\n' "$validation" >&2; exit 1; }`,
+      "printf '%s\\n%s\\n' \"$result\" \"$validation\"",
+    ].join('; ')
+    return await apachePrivileged(client, command)
+  })
+  return { configuration: await apacheConfiguration(id), output: output || 'Syntax OK' }
+}
 
 const mysqlOverview = async (id: string): Promise<SshMySqlOverview> =>
   await withClient(id, async (client, connection) => {
@@ -2280,6 +2467,10 @@ const downloadFile = async (
 export const registerSshWorkspaceHandlers = (): void => {
   ipcMain.handle('ssh:server-overview', (_event, id: string) => serverOverview(id))
   ipcMain.handle('ssh:apache-overview', (_event, id: string) => apacheOverview(id))
+  ipcMain.handle('ssh:apache-configuration', (_event, id: string) => apacheConfiguration(id))
+  ipcMain.handle('ssh:apache-read-config', (_event, id: string, path: string) => apacheReadConfig(id, path))
+  ipcMain.handle('ssh:apache-save-config', (_event, id: string, input) => apacheSaveConfig(id, input))
+  ipcMain.handle('ssh:apache-action', (_event, id: string, action: SshApacheAction) => apacheAction(id, action))
   ipcMain.handle('ssh:mysql-overview', (_event, id: string) => mysqlOverview(id))
   ipcMain.handle('ssh:mysql-access-profile', (_event, id: string) => getMysqlAccessProfile(id))
   ipcMain.handle('ssh:save-mysql-access', (_event, id: string, input: SshMySqlAccessInput) => saveMysqlAccess(id, input))

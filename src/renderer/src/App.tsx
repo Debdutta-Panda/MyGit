@@ -214,6 +214,39 @@ const DeferredFeature = ({ children }: { children: ReactNode }) => (
   </Suspense>
 )
 
+function SafeAutoPushStatus({ state }: { state: RepositoryAutoPushState | undefined }) {
+  const calculateRemaining = (): number => state?.phase === 'countdown' && state.dueAt
+    ? Math.max(0, Math.ceil((new Date(state.dueAt).getTime() - Date.now()) / 1000))
+    : 0
+  const [remaining, setRemaining] = useState(calculateRemaining)
+
+  useEffect(() => {
+    setRemaining(calculateRemaining())
+    if (state?.phase !== 'countdown' || !state.dueAt) return
+    const timer = window.setInterval(() => setRemaining(calculateRemaining()), 250)
+    return () => window.clearInterval(timer)
+  }, [state?.phase, state?.dueAt])
+
+  if (state?.phase === 'countdown') {
+    return <Group gap={7} mt={5} wrap="nowrap">
+      <Text size="xs" c="teal.4">Safe auto-push countdown</Text>
+      <Badge size="sm" color="teal" variant="light" className="auto-push-countdown-badge">
+        {remaining}s
+      </Badge>
+      <Progress
+        size={4}
+        color="teal"
+        value={remaining / 15 * 100}
+        className="auto-push-countdown-progress"
+      />
+    </Group>
+  }
+
+  return <Text size="xs" c={state?.phase === 'paused' ? 'yellow.4' : 'dimmed'} mt={5}>
+    {state?.message ?? 'Watching this device. Pushes only a clean, tracked branch after a 15-second delay.'}
+  </Text>
+}
+
 const ReadOnlyMonaco = (props: ComponentProps<typeof LazyReadOnlyMonaco>) => (
   <DeferredFeature><LazyReadOnlyMonaco {...props} /></DeferredFeature>
 )
@@ -8447,10 +8480,7 @@ export function App() {
                           </Group>
                         )}
                         {copy.autoPushMode === 'idle' && (
-                          <Text size="xs" c={autoPushState?.phase === 'paused' ? 'yellow.4' : 'dimmed'} mt={5}>
-                            {autoPushState?.message ??
-                              'Watching this device. Pushes only a clean, tracked branch after a 15-second delay.'}
-                          </Text>
+                          <SafeAutoPushStatus state={autoPushState} />
                         )}
                       </div>
                       <Group gap={5} wrap="nowrap">

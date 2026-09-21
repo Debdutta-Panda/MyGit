@@ -3508,6 +3508,15 @@ textarea { font: inherit; }
 
 .working-copy-identity { min-width: 0; }
 .working-copy-label-input { min-width: 180px; flex: 1 1 220px; }
+.auto-push-countdown-badge {
+  min-width: 38px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.auto-push-countdown-progress {
+  width: 90px;
+  flex: 0 0 90px;
+}
 
 .workspace-provision-results {
   display: grid;
