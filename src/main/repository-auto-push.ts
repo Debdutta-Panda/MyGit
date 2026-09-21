@@ -16,6 +16,7 @@ interface AutoPushRow {
 
 const timers = new Map<string, NodeJS.Timeout>()
 const scheduledAhead = new Map<string, number>()
+const cancelledAhead = new Map<string, number>()
 const retryAfter = new Map<string, number>()
 const pushing = new Set<string>()
 const idleDelayMs = 15_000
@@ -143,8 +144,18 @@ export const reconsiderAutoPush = (
   if (pushing.has(status.path)) return
   if (status.ahead <= 0) {
     stopTimer(status.path)
+    cancelledAhead.delete(status.path)
     emit(row, 'watching', 'Watching for unpushed commits.')
     return
+  }
+  const cancelledForAhead = cancelledAhead.get(status.path)
+  if (cancelledForAhead !== undefined) {
+    if (cancelledForAhead === status.ahead) {
+      stopTimer(status.path)
+      emit(row, 'paused', 'This scheduled push was cancelled. A repository change will allow a new countdown.')
+      return
+    }
+    cancelledAhead.delete(status.path)
   }
   const blocked = pauseReason(status)
   if (blocked) {
@@ -209,13 +220,29 @@ export const reconsiderAutoPush = (
 
 export const autoPushPolicyChanged = (row: AutoPushRow): void => {
   stopTimer(row.local_path)
+  cancelledAhead.delete(row.local_path)
   retryAfter.delete(row.local_path)
   emit(row, row.auto_push_mode === 'off' ? 'off' : 'watching',
     row.auto_push_mode === 'off' ? 'Safe auto-push is off.' : 'Watching for unpushed commits.')
+}
+
+export const cancelScheduledAutoPush = (workingCopyId: string): boolean => {
+  const row = getDatabase().prepare(`
+    SELECT id, account_id, full_name, local_path, auto_push_mode
+    FROM working_copies WHERE id = ?
+  `).get(workingCopyId) as unknown as AutoPushRow | undefined
+  if (!row || !timers.has(row.local_path)) return false
+  const ahead = scheduledAhead.get(row.local_path)
+  if (ahead === undefined) return false
+  stopTimer(row.local_path)
+  cancelledAhead.set(row.local_path, ahead)
+  emit(row, 'paused', 'Scheduled auto-push cancelled. It will remain pending until the repository changes.')
+  return true
 }
 
 export const stopAllAutoPush = (): void => {
   for (const timer of timers.values()) clearTimeout(timer)
   timers.clear()
   scheduledAhead.clear()
+  cancelledAhead.clear()
 }

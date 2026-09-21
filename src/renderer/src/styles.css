@@ -3519,20 +3519,18 @@ textarea { font: inherit; }
 }
 .repository-auto-push-countdown {
   position: relative;
-  grid-column: 1 / -1;
-  width: fit-content;
-  min-width: 250px;
+  flex: 0 0 158px;
+  width: 158px;
   display: flex;
-  align-items: baseline;
-  gap: 7px;
-  margin-top: 7px;
-  padding: 8px 12px 10px;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 4px 6px 7px;
   overflow: hidden;
   color: #baf4ff;
   border: 1px solid #169bb8;
-  border-radius: 8px;
+  border-radius: 7px;
   background: #0b2d38;
-  box-shadow: inset 3px 0 0 #22d3ee;
+  box-shadow: inset 2px 0 0 #22d3ee, 0 3px 10px rgba(0, 0, 0, 0.24);
   font-variant-numeric: tabular-nums;
 }
 
@@ -3543,23 +3541,28 @@ textarea { font: inherit; }
 
 .repository-auto-push-countdown-label {
   color: #9eeeff;
-  font-size: 11px;
+  font-size: 9px;
   font-weight: 800;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
 }
 
 .repository-auto-push-countdown strong {
-  min-width: 30px;
-  font-size: 24px;
+  min-width: 19px;
+  margin-left: auto;
+  font-size: 16px;
   line-height: 1;
   text-align: right;
 }
 
 .repository-auto-push-countdown-unit {
   color: #80aeb9;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 800;
-  letter-spacing: 0.04em;
+}
+
+.repository-auto-push-countdown-cancel {
+  flex: 0 0 22px;
+  margin-left: 1px;
 }
 
 .repository-auto-push-countdown-progress {
@@ -3567,6 +3570,20 @@ textarea { font: inherit; }
   right: 0;
   bottom: 0;
   left: 0;
+}
+
+.repository-card--grid .repository-auto-push-countdown {
+  width: 142px;
+  flex-basis: auto;
+  align-self: flex-end;
+}
+
+@media (max-width: 760px) {
+  .repository-card--list .repository-auto-push-countdown {
+    width: 124px;
+    flex-basis: 124px;
+  }
+  .repository-auto-push-countdown-label { display: none; }
 }
 
 .workspace-provision-results {

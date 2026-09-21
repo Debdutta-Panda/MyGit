@@ -5,7 +5,7 @@ import { access, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, relative, resolve } from 'node:path'
 import { getDatabase } from './database'
 import { scheduleConfigurationSync } from './configuration-sync'
-import { autoPushPolicyChanged } from './repository-auto-push'
+import { autoPushPolicyChanged, cancelScheduledAutoPush } from './repository-auto-push'
 import { refreshRepositoryStatus } from './repository-monitor'
 import {
   cloneRepository,
@@ -471,6 +471,10 @@ export const registerWorkingCopyHandlers = (): void => {
     })
     if (copy.autoPushMode === 'idle') void refreshRepositoryStatus(copy.path)
     return copy
+  })
+  ipcMain.handle('working-copies:cancel-auto-push', (_event, id) => {
+    if (typeof id !== 'string') throw new Error('Invalid working copy selection.')
+    return cancelScheduledAutoPush(id)
   })
   ipcMain.handle('working-copies:clone', async (event, accountId, fullName, options) => {
     if (!Number.isInteger(accountId) || typeof fullName !== 'string') {

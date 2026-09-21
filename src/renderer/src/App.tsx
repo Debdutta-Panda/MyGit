@@ -247,7 +247,13 @@ function SafeAutoPushStatus({ state }: { state: RepositoryAutoPushState | undefi
   </Text>
 }
 
-function SafeAutoPushCardCountdown({ state }: { state: RepositoryAutoPushState | undefined }) {
+function SafeAutoPushCardCountdown({
+  state,
+  onCancel,
+}: {
+  state: RepositoryAutoPushState | undefined
+  onCancel: () => void
+}) {
   const remainingNow = (): number => state?.phase === 'countdown' && state.dueAt
     ? Math.max(0, Math.ceil((new Date(state.dueAt).getTime() - Date.now()) / 1000))
     : 0
@@ -267,10 +273,25 @@ function SafeAutoPushCardCountdown({ state }: { state: RepositoryAutoPushState |
     aria-live="polite"
     aria-label={`Safe auto-push starts in ${remaining} seconds`}
   >
-    <IconClock size={18} aria-hidden="true" />
-    <span className="repository-auto-push-countdown-label">AUTO-PUSH IN</span>
+    <IconClock size={15} aria-hidden="true" />
+    <span className="repository-auto-push-countdown-label">AUTO-PUSH</span>
     <strong>{remaining}</strong>
-    <span className="repository-auto-push-countdown-unit">SECONDS</span>
+    <span className="repository-auto-push-countdown-unit">s</span>
+    <Tooltip label="Cancel this scheduled push">
+      <ActionIcon
+        className="repository-auto-push-countdown-cancel"
+        size={22}
+        variant="subtle"
+        color="cyan"
+        aria-label="Cancel this scheduled push"
+        onClick={(event) => {
+          event.stopPropagation()
+          onCancel()
+        }}
+      >
+        <IconX size={14} />
+      </ActionIcon>
+    </Tooltip>
     <Progress
       className="repository-auto-push-countdown-progress"
       value={(15 - remaining) / 15 * 100}
@@ -5804,8 +5825,16 @@ export function App() {
                             )}
                           </Group>
                         )}
-                        <SafeAutoPushCardCountdown state={preferredAutoPushState} />
                       </div>
+
+                      <SafeAutoPushCardCountdown
+                        state={preferredAutoPushState}
+                        onCancel={() => {
+                          if (!preferredWorkingCopy || !window.desktop) return
+                          void window.desktop.workingCopies.cancelAutoPush(preferredWorkingCopy.id)
+                            .catch((error) => setRepositoriesError(errorMessage(error)))
+                        }}
+                      />
 
                       <Group className="repository-actions" gap="xs" wrap="nowrap">
                         {repositoryTab === 'workspace' && (

@@ -1234,6 +1234,7 @@ export interface DesktopApi {
     ) => Promise<RepositoryWorkingCopy | null>
     updateLabel: (id: string, label: string) => Promise<RepositoryWorkingCopy>
     setAutoPush: (id: string, mode: RepositoryAutoPushMode) => Promise<RepositoryWorkingCopy>
+    cancelAutoPush: (id: string) => Promise<boolean>
     setPreferred: (id: string) => Promise<RepositoryWorkingCopy[]>
     relocate: (id: string) => Promise<RepositoryWorkingCopy | null>
     detach: (id: string) => Promise<void>
