@@ -1643,9 +1643,14 @@ export function App() {
 
   useEffect(() => {
     if (!window.desktop) return
-    return window.desktop.workingCopies.onAutoPushState((state) => {
+    const unsubscribe = window.desktop.workingCopies.onAutoPushState((state) => {
       setAutoPushStates((current) => ({ ...current, [state.workingCopyId]: state }))
     })
+    void window.desktop.workingCopies.autoPushStates().then((states) => {
+      const snapshot = Object.fromEntries(states.map((state) => [state.workingCopyId, state]))
+      setAutoPushStates((current) => ({ ...snapshot, ...current }))
+    }).catch(() => undefined)
+    return unsubscribe
   }, [])
 
   useEffect(() => {

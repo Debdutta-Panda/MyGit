@@ -118,17 +118,20 @@ let autoPushInitialTimer: NodeJS.Timeout | null = null
 
 export const startAutoPushMonitoring = (): void => {
   if (autoPushScanTimer) return
-  const scan = (): void => {
+  const scan = async (): Promise<void> => {
     const rows = getDatabase().prepare(`
       SELECT local_path FROM working_copies WHERE auto_push_mode = 'idle'
     `).all() as unknown as Array<{ local_path: string }>
-    for (const row of rows) void readRepositoryStatus(row.local_path).then(broadcastStatus)
+    await Promise.allSettled(rows.map(async (row) => {
+      broadcastStatus(await readRepositoryStatus(row.local_path))
+    }))
   }
+  void scan()
   autoPushInitialTimer = setTimeout(() => {
     autoPushInitialTimer = null
-    scan()
+    void scan()
   }, 2_000)
-  autoPushScanTimer = setInterval(scan, 30_000)
+  autoPushScanTimer = setInterval(() => { void scan() }, 30_000)
   autoPushScanTimer.unref()
 }
 

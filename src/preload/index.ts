@@ -232,6 +232,7 @@ const desktopApi: DesktopApi = {
     updateLabel: (id, label) => ipcRenderer.invoke('working-copies:update-label', id, label),
     setAutoPush: (id, mode) => ipcRenderer.invoke('working-copies:set-auto-push', id, mode),
     cancelAutoPush: (id) => ipcRenderer.invoke('working-copies:cancel-auto-push', id),
+    autoPushStates: () => ipcRenderer.invoke('working-copies:auto-push-states'),
     setPreferred: (id) => ipcRenderer.invoke('working-copies:set-preferred', id),
     relocate: (id) => ipcRenderer.invoke('working-copies:relocate', id),
     detach: (id) => ipcRenderer.invoke('working-copies:detach', id),

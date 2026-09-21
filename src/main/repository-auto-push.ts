@@ -19,6 +19,7 @@ const scheduledAhead = new Map<string, number>()
 const cancelledAhead = new Map<string, number>()
 const retryAfter = new Map<string, number>()
 const pushing = new Set<string>()
+const lastStates = new Map<string, RepositoryAutoPushState>()
 const idleDelayMs = 15_000
 
 const rowForPath = (path: string): AutoPushRow | undefined => getDatabase().prepare(`
@@ -35,10 +36,13 @@ const emit = (row: AutoPushRow, phase: RepositoryAutoPushState['phase'], message
     dueAt,
     message,
   }
+  lastStates.set(row.id, state)
   for (const window of BrowserWindow.getAllWindows()) {
     if (!window.isDestroyed()) window.webContents.send('working-copies:auto-push-state', state)
   }
 }
+
+export const currentAutoPushStates = (): RepositoryAutoPushState[] => [...lastStates.values()]
 
 const stopTimer = (path: string): void => {
   const timer = timers.get(path)
@@ -245,4 +249,5 @@ export const stopAllAutoPush = (): void => {
   timers.clear()
   scheduledAhead.clear()
   cancelledAhead.clear()
+  lastStates.clear()
 }

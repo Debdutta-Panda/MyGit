@@ -5,7 +5,7 @@ import { access, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, relative, resolve } from 'node:path'
 import { getDatabase } from './database'
 import { scheduleConfigurationSync } from './configuration-sync'
-import { autoPushPolicyChanged, cancelScheduledAutoPush } from './repository-auto-push'
+import { autoPushPolicyChanged, cancelScheduledAutoPush, currentAutoPushStates } from './repository-auto-push'
 import { refreshRepositoryStatus } from './repository-monitor'
 import {
   cloneRepository,
@@ -445,6 +445,7 @@ const generateCodeWorkspace = async (
 }
 
 export const registerWorkingCopyHandlers = (): void => {
+  ipcMain.handle('working-copies:auto-push-states', () => currentAutoPushStates())
   ipcMain.handle('working-copies:list', (_event, accountId, fullName) => {
     if (!Number.isInteger(accountId) || typeof fullName !== 'string' || !repositoryPattern.test(fullName)) {
       throw new Error('Invalid repository selection.')
