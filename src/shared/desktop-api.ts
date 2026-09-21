@@ -386,6 +386,7 @@ export interface SshApacheSslSite {
   enabled: boolean
   serverNames: string[]
   documentRoot: string | null
+  documentRootExists: boolean
   httpEnabled: boolean
   httpsEnabled: boolean
   redirectsToHttps: boolean

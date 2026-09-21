@@ -127,6 +127,7 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
     : selectedCertificate?.domains ?? []
   const hasHttpValidationHost = overview?.sites.some((site) => site.enabled && site.httpEnabled) ?? false
   const selectedHttpReady = Boolean(selectedSite?.enabled && selectedSite.httpEnabled)
+  const selectedDocumentRootReady = Boolean(selectedSite?.documentRoot && selectedSite.documentRootExists)
 
   const run = async (key: string, request: SshApacheSslAction): Promise<void> => {
     if (!window.desktop) return
@@ -233,21 +234,23 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
         {!selectedSite ? <div className="ssh-web-empty"><Text size="sm">Select a site</Text></div> : <>
           <header><div><Group gap={7}><Text fw={750}>{selectedSite.serverNames[0] || selectedSite.name}</Text>{selectedSite.httpsEnabled && <Badge size="xs" color="teal">HTTPS</Badge>}{selectedHttpReady && <Badge size="xs" color="blue">HTTP validation ready</Badge>}{selectedSite.redirectsToHttps && <Badge size="xs" color="blue">Redirects to HTTPS</Badge>}</Group><Text size="xs" c="dimmed">{selectedSite.path}</Text></div>
             <Group gap={6}>
-              <Button size="compact-xs" variant="light" disabled={!overview?.canManage || !selectedHttpReady} onClick={() => prepareDialog('issue')}>Issue certificate</Button><Button size="compact-xs" variant="subtle" color="gray" disabled={!overview?.opensslInstalled || !overview?.canManage} onClick={() => prepareDialog('self-signed')}>Self-signed</Button><Button size="compact-xs" variant="subtle" color="gray" disabled={!overview?.canManage} onClick={() => prepareDialog('import')}>Import PEM</Button>
+              <Button size="compact-xs" variant="light" disabled={!overview?.canManage || !selectedHttpReady || !selectedDocumentRootReady} onClick={() => prepareDialog('issue')}>Issue certificate</Button><Button size="compact-xs" variant="subtle" color="gray" disabled={!overview?.opensslInstalled || !overview?.canManage || !selectedDocumentRootReady} onClick={() => prepareDialog('self-signed')}>Self-signed</Button><Button size="compact-xs" variant="subtle" color="gray" disabled={!overview?.canManage || !selectedDocumentRootReady} onClick={() => prepareDialog('import')}>Import PEM</Button>
             </Group></header>
           {!selectedHttpReady && <section className="apache-ssl-setup-step">
             <Badge size="sm" color="blue" variant="filled">REQUIRED</Badge>
             <div>
-              <Text size="sm" fw={750}>Enable HTTP validation for this site</Text>
-              <Text size="xs" c="dimmed">Let&apos;s Encrypt needs an enabled port 80 virtual host. MyRepos will back up this file, add the host, validate Apache, reload it, and roll back on failure.</Text>
+              <Text size="sm" fw={750}>{selectedDocumentRootReady ? 'Enable HTTP validation for this site' : 'Fix the missing document root first'}</Text>
+              <Text size="xs" c="dimmed">{selectedDocumentRootReady
+                ? 'Let\'s Encrypt needs an enabled port 80 virtual host. MyRepos will back up this file, add the host, validate Apache, reload it, and roll back on failure.'
+                : `Apache declares ${selectedSite.documentRoot || 'no DocumentRoot'}, but that directory does not exist on the server. Correct the site configuration or create the intended directory before enabling HTTP validation.`}</Text>
             </div>
-            <Button size="compact-sm" color="blue" loading={action === 'enable-http-site'} disabled={!overview?.canManage || !selectedSite.documentRoot || selectedHttpDomains.length === 0} onClick={() => selectedSite.documentRoot && void run('enable-http-site', { kind: 'enable-http-site', sitePath: selectedSite.path, domains: selectedHttpDomains, documentRoot: selectedSite.documentRoot, confirmation: 'http-site' })}>
-              {selectedSite.httpEnabled ? 'Enable this site' : 'Enable HTTP validation'}
+            <Button size="compact-sm" color="blue" loading={action === 'enable-http-site'} disabled={!overview?.canManage || !selectedDocumentRootReady || selectedHttpDomains.length === 0} onClick={() => selectedSite.documentRoot && void run('enable-http-site', { kind: 'enable-http-site', sitePath: selectedSite.path, domains: selectedHttpDomains, documentRoot: selectedSite.documentRoot, confirmation: 'http-site' })}>
+              {!selectedDocumentRootReady ? 'Document root missing' : selectedSite.httpEnabled ? 'Enable this site' : 'Enable HTTP validation'}
             </Button>
           </section>}
           <div className="apache-ssl-site-facts">
             <section><small>Domains</small><strong>{selectedSite.serverNames.join(', ') || 'Not declared'}</strong></section>
-            <section><small>Document root</small><code>{selectedSite.documentRoot || 'Not declared'}</code></section>
+            <section><small>Document root</small><Group gap={6} wrap="nowrap"><code>{selectedSite.documentRoot || 'Not declared'}</code>{!selectedDocumentRootReady && <Badge size="xs" color="red">Missing</Badge>}</Group></section>
             <section><small>Certificate</small><code>{selectedSite.certificatePath || 'Not configured'}</code></section>
             <section><small>Private key</small><code>{selectedSite.privateKeyPath || 'Not configured'}</code></section>
           </div>
