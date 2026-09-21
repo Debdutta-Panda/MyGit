@@ -406,6 +406,11 @@
 .apache-ssl-operation-progress strong { color: #b9eff5; font-size: 12px; }
 .apache-ssl-operation-progress small { color: #7f9da3; font-size: 10px; }
 .apache-ssl-operation-progress-bar { grid-column: 1 / -1; width: 100%; }
+.apache-ssl-error-notice { height: auto; min-height: 50px; overflow: visible; }
+.apache-ssl-error-notice .mantine-Alert-body, .apache-ssl-error-notice .mantine-Alert-message { min-width: 0; overflow: visible; }
+.apache-ssl-error-notice-content { min-width: 0; display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: start; gap: 10px; padding-right: 18px; }
+.apache-ssl-error-notice-content .mantine-Text-root { min-width: 0; line-height: 1.45; white-space: normal; overflow-wrap: anywhere; }
+.apache-ssl-error-notice-content .mantine-Button-root { align-self: start; white-space: nowrap; }
 .apache-ssl-renew-controls { display: flex; align-items: center; gap: 6px; padding: 7px 9px; border: 1px solid #34424d; border-radius: 8px; background: #10181f; }
 .apache-ssl-site-layout { height: clamp(380px, calc(100vh - 470px), 620px); min-height: 380px; display: grid; grid-template-columns: minmax(220px, 27%) minmax(0, 1fr); overflow: hidden; border: 1px solid #34424d; border-radius: 9px; background: #0b1218; }
 .apache-ssl-sites { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0,1fr); overflow: hidden; border-right: 1px solid #34424d; background: #101920; }
@@ -440,7 +445,7 @@
 .apache-ssl-pem-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; }
 .apache-ssl-pem-grid textarea { font: 10px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; }
 @media (max-width: 1100px) { .apache-ssl-health { grid-template-columns: repeat(2,minmax(0,1fr)); } .apache-ssl-site-layout { grid-template-columns: minmax(190px,32%) minmax(0,1fr); } .apache-ssl-certificate-meta { grid-template-columns: repeat(2,minmax(0,1fr)); } }
-@media (max-width: 780px) { .apache-ssl-site-layout, .apache-ssl-pem-grid { grid-template-columns: 1fr; } .apache-ssl-site-layout { height: auto; max-height: none; } .apache-ssl-sites { max-height: 260px; border-right: 0; border-bottom: 1px solid #34424d; } .apache-ssl-site-detail > header { align-items: flex-start; flex-direction: column; } .apache-ssl-setup-step { grid-template-columns: auto minmax(0,1fr); } .apache-ssl-setup-step .mantine-Button-root { grid-column: 1 / -1; justify-self: end; } }
+@media (max-width: 780px) { .apache-ssl-site-layout, .apache-ssl-pem-grid { grid-template-columns: 1fr; } .apache-ssl-site-layout { height: auto; max-height: none; } .apache-ssl-sites { max-height: 260px; border-right: 0; border-bottom: 1px solid #34424d; } .apache-ssl-site-detail > header { align-items: flex-start; flex-direction: column; } .apache-ssl-setup-step { grid-template-columns: auto minmax(0,1fr); } .apache-ssl-setup-step .mantine-Button-root { grid-column: 1 / -1; justify-self: end; } .apache-ssl-error-notice-content { grid-template-columns: 1fr; } .apache-ssl-error-notice-content .mantine-Button-root { justify-self: start; } }
 .apache-gui-editor { height: min(68vh, 760px); min-height: 420px; padding-right: 5px; overflow: auto; }
 .apache-directive-row { padding: 8px; display: grid; grid-template-columns: minmax(170px, .55fr) minmax(260px, 1fr); align-items: center; gap: 12px; border-bottom: 1px solid #2a353e; }
 .apache-directive-row:hover { background: #101a22; }

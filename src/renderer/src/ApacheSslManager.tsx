@@ -153,13 +153,13 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
       </Group>
     </header>
 
-    {error && <Alert color="red" icon={<IconAlertCircle size={16} />} withCloseButton onClose={() => setError(null)}>
-      <Group justify="space-between" gap="sm" wrap="nowrap">
-        <Text size="sm" fw={650} lineClamp={2}>{sslErrorSummary(error)}</Text>
+    {error && <Alert className="apache-ssl-error-notice" color="red" icon={<IconAlertCircle size={16} />} withCloseButton onClose={() => setError(null)}>
+      <div className="apache-ssl-error-notice-content">
+        <Text size="sm" fw={650}>{sslErrorSummary(error)}</Text>
         <Button size="compact-xs" variant="light" color="red" onClick={() => setErrorDetailsOpened(true)}>
           View full error
         </Button>
-      </Group>
+      </div>
     </Alert>}
     {result && <Alert color="teal" icon={<IconCircleCheck size={16} />} withCloseButton onClose={() => setResult(null)}><pre className="ssh-web-output">{result}</pre></Alert>}
     {activeOperation && <section className="apache-ssl-operation-progress" role="status" aria-live="polite">
