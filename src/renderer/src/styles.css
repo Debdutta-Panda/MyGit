@@ -3517,6 +3517,57 @@ textarea { font: inherit; }
   width: 90px;
   flex: 0 0 90px;
 }
+.repository-auto-push-countdown {
+  position: relative;
+  grid-column: 1 / -1;
+  width: fit-content;
+  min-width: 250px;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-top: 7px;
+  padding: 8px 12px 10px;
+  overflow: hidden;
+  color: #baf4ff;
+  border: 1px solid #169bb8;
+  border-radius: 8px;
+  background: #0b2d38;
+  box-shadow: inset 3px 0 0 #22d3ee;
+  font-variant-numeric: tabular-nums;
+}
+
+.repository-auto-push-countdown > svg {
+  align-self: center;
+  color: #66d9ef;
+}
+
+.repository-auto-push-countdown-label {
+  color: #9eeeff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.repository-auto-push-countdown strong {
+  min-width: 30px;
+  font-size: 24px;
+  line-height: 1;
+  text-align: right;
+}
+
+.repository-auto-push-countdown-unit {
+  color: #80aeb9;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.repository-auto-push-countdown-progress {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+}
 
 .workspace-provision-results {
   display: grid;

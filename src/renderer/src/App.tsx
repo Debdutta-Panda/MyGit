@@ -247,6 +247,40 @@ function SafeAutoPushStatus({ state }: { state: RepositoryAutoPushState | undefi
   </Text>
 }
 
+function SafeAutoPushCardCountdown({ state }: { state: RepositoryAutoPushState | undefined }) {
+  const remainingNow = (): number => state?.phase === 'countdown' && state.dueAt
+    ? Math.max(0, Math.ceil((new Date(state.dueAt).getTime() - Date.now()) / 1000))
+    : 0
+  const [remaining, setRemaining] = useState(remainingNow)
+  useEffect(() => {
+    setRemaining(remainingNow())
+    if (state?.phase !== 'countdown' || !state.dueAt) return
+    const timer = window.setInterval(() => setRemaining(remainingNow()), 250)
+    return () => window.clearInterval(timer)
+  }, [state?.phase, state?.dueAt])
+
+  if (state?.phase !== 'countdown') return null
+
+  return <div
+    className="repository-auto-push-countdown"
+    role="status"
+    aria-live="polite"
+    aria-label={`Safe auto-push starts in ${remaining} seconds`}
+  >
+    <IconClock size={18} aria-hidden="true" />
+    <span className="repository-auto-push-countdown-label">AUTO-PUSH IN</span>
+    <strong>{remaining}</strong>
+    <span className="repository-auto-push-countdown-unit">SECONDS</span>
+    <Progress
+      className="repository-auto-push-countdown-progress"
+      value={(15 - remaining) / 15 * 100}
+      color="cyan"
+      size={4}
+      animated
+    />
+  </div>
+}
+
 const ReadOnlyMonaco = (props: ComponentProps<typeof LazyReadOnlyMonaco>) => (
   <DeferredFeature><LazyReadOnlyMonaco {...props} /></DeferredFeature>
 )
@@ -3039,7 +3073,9 @@ export function App() {
         copy.id,
         enabled ? 'idle' : 'off',
       )
-      setWorkingCopies((current) => current.map((item) => item.id === updated.id ? updated : item))
+      const updatedCopies = workingCopies.map((item) => item.id === updated.id ? updated : item)
+      if (workingCopyRepository) applyWorkingCopies(workingCopyRepository, updatedCopies)
+      else setWorkingCopies(updatedCopies)
       if (!enabled) {
         setAutoPushStates((current) => ({
           ...current,
@@ -5420,6 +5456,9 @@ export function App() {
                     const preferredWorkingCopy = repository.workingCopies.find((copy) =>
                       copy.id === repository.preferredWorkingCopyId) ?? repository.workingCopies[0]
                     const preferredWorkingCopyAvailable = preferredWorkingCopy?.available ?? false
+                    const preferredAutoPushState = preferredWorkingCopy
+                      ? autoPushStates[preferredWorkingCopy.id]
+                      : undefined
                     const gitStatus = repository.localPath && preferredWorkingCopyAvailable
                       ? gitStatuses[repository.localPath]
                       : undefined
@@ -5765,6 +5804,7 @@ export function App() {
                             )}
                           </Group>
                         )}
+                        <SafeAutoPushCardCountdown state={preferredAutoPushState} />
                       </div>
 
                       <Group className="repository-actions" gap="xs" wrap="nowrap">
