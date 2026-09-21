@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import {
   ActionIcon, Alert, Badge, Button, Checkbox, Group, Menu, Modal, NumberInput, Paper,
-  PasswordInput, Select, Stack, Text, TextInput, ThemeIcon,
+  PasswordInput, Progress, Select, Stack, Text, TextInput, ThemeIcon,
 } from '@mantine/core'
 import {
   IconAlertCircle, IconCheck, IconDotsVertical, IconEdit, IconKey, IconPlugConnected, IconPlus,
@@ -41,6 +41,14 @@ const blank = (): Draft => ({
   tlsMode: 'explicit', rejectUnauthorized: true,
 })
 const message = (error: unknown): string => error instanceof Error ? error.message : String(error)
+const connectionTestMessage = (error: unknown, connection: RemoteConnection): string => {
+  const value = message(error)
+  if (/timeout.*control socket|control socket.*timeout/i.test(value)) {
+    const port = connection.port ?? (connection.protocol === 'ftps' && connection.tlsMode === 'implicit' ? 990 : 21)
+    return `Timed out connecting to ${connection.host}:${port}. Check that the ${connection.protocol.toUpperCase()} service is running and the port is allowed by the firewall.`
+  }
+  return value
+}
 const protocolLabel = (item: RemoteConnection): string => item.protocol === 'ftp' ? 'FTP'
   : item.protocol === 'ftps' ? `FTPS ${item.tlsMode ?? 'explicit'}` : 'SFTP'
 
@@ -60,6 +68,7 @@ export function RemoteConnectionsPanel({
   const [opened, setOpened] = useState(false)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState<string | null>(null)
+  const [testSeconds, setTestSeconds] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<Record<string, { color: 'teal' | 'red'; text: string }>>({})
   const [trust, setTrust] = useState<{ connection: RemoteConnection; result: RemoteConnectionTestResult } | null>(null)
@@ -70,6 +79,12 @@ export function RemoteConnectionsPanel({
     catch (reason) { setError(message(reason)) }
   }
   useEffect(() => { void load() }, [])
+  useEffect(() => {
+    if (!testing) return
+    setTestSeconds(0)
+    const timer = window.setInterval(() => setTestSeconds((value) => value + 1), 1_000)
+    return () => window.clearInterval(timer)
+  }, [testing])
 
   const visibleConnections = serverConnection
     ? connections.filter((item) => item.parentSshConnectionId === serverConnection.id ||
@@ -121,6 +136,11 @@ export function RemoteConnectionsPanel({
 
   const test = async (connection: RemoteConnection, trustHostKey = false): Promise<void> => {
     setTesting(connection.id); setError(null)
+    setResults((current) => {
+      const next = { ...current }
+      delete next[connection.id]
+      return next
+    })
     try {
       const result = await window.desktop.remoteConnections.test(connection.id, trustHostKey)
       if (result.status === 'untrusted') setTrust({ connection, result })
@@ -133,7 +153,10 @@ export function RemoteConnectionsPanel({
       }
     } catch (reason) {
       setTrust(null)
-      setResults((current) => ({ ...current, [connection.id]: { color: 'red', text: message(reason) } }))
+      setResults((current) => ({
+        ...current,
+        [connection.id]: { color: 'red', text: connectionTestMessage(reason, connection) },
+      }))
     } finally { setTesting(null) }
   }
 
@@ -206,10 +229,16 @@ export function RemoteConnectionsPanel({
               </Group>
               <Group gap={7} mt="md">
                 <Badge variant="light">{protocolLabel(connection)}</Badge>
+                {testing === connection.id && <Badge color="yellow" variant="light">
+                  Testing{testSeconds ? ` · ${testSeconds}s` : '…'}
+                </Badge>}
                 {connection.protocol === 'sftp' && <Badge variant="outline" color="teal">
                   {connection.sftpSource === 'ssh' ? 'Uses SSH profile' : 'Standalone'}
                 </Badge>}
               </Group>
+              {testing === connection.id && (
+                <Progress mt="sm" size="xs" value={100} striped animated color="yellow" />
+              )}
               {results[connection.id] && <Alert mt="sm" color={results[connection.id].color}
                 icon={results[connection.id].color === 'teal' ? <IconCheck size={15} /> : <IconAlertCircle size={15} />}>
                 <Text size="xs">{results[connection.id].text}</Text>
