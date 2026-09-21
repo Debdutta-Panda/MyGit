@@ -387,6 +387,47 @@
 .ssh-web-editor-loading { min-height: 55vh; display: flex; align-items: center; justify-content: center; gap: 9px; }
 .ssh-web-editor textarea { height: min(68vh, 760px); min-height: 420px; resize: none; tab-size: 2; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .apache-config-editor-shell { min-height: 0; }
+.ssh-web-site-tabs { height: 36px; display: flex; align-items: end; gap: 4px; padding: 0 14px; border-bottom: 1px solid #2d3943; background: #0d151b; }
+.ssh-web-site-tabs button { height: 36px; padding: 0 12px; color: #8fa0ad; border: 0; border-bottom: 2px solid transparent; background: transparent; cursor: pointer; font-size: 11px; font-weight: 700; }
+.ssh-web-site-tabs button:hover { color: #d7e1e7; background: rgba(255,255,255,.03); }
+.ssh-web-site-tabs button[data-active] { color: #7ee8ca; border-bottom-color: #20c997; }
+.apache-ssl-manager { min-height: 0; display: grid; gap: 10px; padding: 12px 14px 16px; }
+.apache-ssl-toolbar { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.apache-ssl-loading { min-height: 240px; display: flex; align-items: center; justify-content: center; gap: 9px; }
+.apache-ssl-health { display: grid; grid-template-columns: minmax(180px,.8fr) minmax(230px,1.2fr) minmax(170px,.8fr) auto; gap: 8px; }
+.apache-ssl-health > article { min-width: 0; display: flex; align-items: flex-start; gap: 9px; padding: 10px; border: 1px solid #34424d; border-radius: 8px; background: #111a21; color: #8fa0ad; }
+.apache-ssl-health > article[data-ok] { border-color: #176e5c; background: #0e211e; color: #63e6be; }
+.apache-ssl-health article span { min-width: 0; display: grid; gap: 2px; }
+.apache-ssl-health small, .apache-ssl-site-facts small, .apache-ssl-certificate-meta small { color: #758795; font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+.apache-ssl-health strong { color: #d9e3e9; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apache-ssl-health em { color: #778b98; font-size: 10px; font-style: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apache-ssl-renew-controls { display: flex; align-items: center; gap: 6px; padding: 7px 9px; border: 1px solid #34424d; border-radius: 8px; background: #10181f; }
+.apache-ssl-site-layout { min-height: 360px; display: grid; grid-template-columns: minmax(220px, 27%) minmax(0, 1fr); overflow: hidden; border: 1px solid #34424d; border-radius: 9px; background: #0b1218; }
+.apache-ssl-sites { min-width: 0; border-right: 1px solid #34424d; background: #101920; }
+.apache-ssl-sites > header { height: 36px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; border-bottom: 1px solid #2b3741; }
+.apache-ssl-sites > button { width: 100%; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 9px 10px; color: #c7d2d9; border: 0; border-bottom: 1px solid #25313a; background: transparent; text-align: left; cursor: pointer; }
+.apache-ssl-sites > button:hover { background: #16242c; }
+.apache-ssl-sites > button[data-active] { box-shadow: inset 3px 0 0 #20c997; background: #12312c; }
+.apache-ssl-sites button > span { min-width: 0; display: grid; gap: 2px; }
+.apache-ssl-sites strong, .apache-ssl-sites small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apache-ssl-sites strong { font-size: 12px; }
+.apache-ssl-sites small { color: #758895; font-size: 9px; }
+.apache-ssl-site-detail { min-width: 0; display: grid; align-content: start; gap: 10px; padding: 12px; }
+.apache-ssl-site-detail > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.apache-ssl-site-facts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1px; overflow: hidden; border: 1px solid #2e3b45; border-radius: 7px; background: #2e3b45; }
+.apache-ssl-site-facts section { min-width: 0; display: grid; gap: 4px; padding: 9px 10px; background: #101920; }
+.apache-ssl-site-facts strong, .apache-ssl-site-facts code { overflow: hidden; color: #cbd7de; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.apache-ssl-certificate-card { display: grid; gap: 10px; padding: 11px; border: 1px solid #176e5c; border-radius: 8px; background: #0d211d; }
+.apache-ssl-certificate-meta { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 7px; }
+.apache-ssl-certificate-meta > span { min-width: 0; display: grid; gap: 3px; padding: 7px 8px; border: 1px solid #27483f; border-radius: 6px; background: #0d1918; }
+.apache-ssl-certificate-meta strong, .apache-ssl-certificate-meta code { overflow: hidden; color: #c8d8d3; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.apache-ssl-renew-log { border: 1px solid #303d47; border-radius: 7px; background: #0c1318; }
+.apache-ssl-renew-log summary { padding: 8px 10px; color: #9aabb6; cursor: pointer; font-size: 11px; font-weight: 700; }
+.apache-ssl-renew-log pre { max-height: 220px; margin: 0; padding: 10px; overflow: auto; border-top: 1px solid #303d47; color: #b9c7cf; font: 10px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }
+.apache-ssl-pem-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; }
+.apache-ssl-pem-grid textarea { font: 10px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; }
+@media (max-width: 1100px) { .apache-ssl-health { grid-template-columns: repeat(2,minmax(0,1fr)); } .apache-ssl-site-layout { grid-template-columns: minmax(190px,32%) minmax(0,1fr); } .apache-ssl-certificate-meta { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (max-width: 780px) { .apache-ssl-site-layout, .apache-ssl-pem-grid { grid-template-columns: 1fr; } .apache-ssl-sites { border-right: 0; border-bottom: 1px solid #34424d; } .apache-ssl-site-detail > header { align-items: flex-start; flex-direction: column; } }
 .apache-gui-editor { height: min(68vh, 760px); min-height: 420px; padding-right: 5px; overflow: auto; }
 .apache-directive-row { padding: 8px; display: grid; grid-template-columns: minmax(170px, .55fr) minmax(260px, 1fr); align-items: center; gap: 12px; border-bottom: 1px solid #2a353e; }
 .apache-directive-row:hover { background: #101a22; }

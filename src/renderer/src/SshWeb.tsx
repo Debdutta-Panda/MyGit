@@ -18,6 +18,7 @@ import type {
   SshConnection,
 } from '../../shared/desktop-api'
 import { ApacheConfigurationEditor } from './ApacheConfigurationEditor'
+import { ApacheSslManager } from './ApacheSslManager'
 
 type ApacheTab = 'overview' | 'configurations' | 'sites'
 
@@ -44,6 +45,7 @@ export function SshWeb({ connection }: { connection: SshConnection }) {
   const [editorError, setEditorError] = useState<string | null>(null)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [reloadOpen, setReloadOpen] = useState(false)
+  const [sitesSection, setSitesSection] = useState<'sites' | 'ssl'>('sites')
 
   useEffect(() => {
     setServer(null)
@@ -53,6 +55,7 @@ export function SshWeb({ connection }: { connection: SshConnection }) {
     setError(null)
     setResult(null)
     setFile(null)
+    setSitesSection('sites')
   }, [connection.id])
 
   const load = useCallback(async (): Promise<void> => {
@@ -209,7 +212,15 @@ export function SshWeb({ connection }: { connection: SshConnection }) {
         <div className="ssh-web-path-grid">{Object.entries(configuration?.directories ?? {}).map(([name, path]) => path && <section key={name}><small>{name.replace(/([A-Z])/g, ' $1')}</small><code>{path}</code></section>)}</div>
       </div>
       : tab === 'configurations' ? entryList(configurationEntries, 'No configuration files')
-      : tab === 'sites' ? entryList(siteEntries, 'No virtual-host sites') : null}
+      : tab === 'sites' ? <>
+        <nav className="ssh-web-site-tabs">
+          <button type="button" data-active={sitesSection === 'sites' || undefined} onClick={() => setSitesSection('sites')}>Site files</button>
+          <button type="button" data-active={sitesSection === 'ssl' || undefined} onClick={() => setSitesSection('ssl')}>SSL & certificates</button>
+        </nav>
+        {sitesSection === 'sites'
+          ? entryList(siteEntries, 'No virtual-host sites')
+          : <ApacheSslManager connection={connection} />}
+      </> : null}
 
     <Modal opened={editorLoading || Boolean(file) || Boolean(editorError)} onClose={() => { if (action !== 'save') { setFile(null); setEditorError(null) } }} title={file ? `Apache configuration · ${file.path}` : 'Apache configuration'} size="90%" centered closeOnClickOutside={action !== 'save'} closeOnEscape={action !== 'save'}>
       {editorLoading ? <div className="ssh-web-editor-loading"><Loader size="sm" /><Text size="sm">Opening configuration…</Text></div> : <>

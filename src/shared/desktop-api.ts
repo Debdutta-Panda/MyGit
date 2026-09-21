@@ -380,6 +380,64 @@ export interface SshApacheActionResult {
   output: string
 }
 
+export interface SshApacheSslSite {
+  name: string
+  path: string
+  enabled: boolean
+  serverNames: string[]
+  documentRoot: string | null
+  httpsEnabled: boolean
+  redirectsToHttps: boolean
+  certificatePath: string | null
+  privateKeyPath: string | null
+  chainPath: string | null
+}
+
+export interface SshApacheSslCertificate {
+  name: string
+  domains: string[]
+  certificatePath: string
+  privateKeyPath: string | null
+  issuer: string | null
+  serialNumber: string | null
+  validFrom: string | null
+  expiresAt: string | null
+  daysRemaining: number | null
+  status: 'valid' | 'expiring' | 'expired' | 'invalid'
+  managedBy: 'certbot' | 'manual' | 'self-signed'
+}
+
+export interface SshApacheSslOverview {
+  connectionId: string
+  certbotInstalled: boolean
+  certbotVersion: string | null
+  opensslInstalled: boolean
+  renewalTimer: string | null
+  renewalEnabled: boolean | null
+  renewalActive: boolean | null
+  nextRenewalAt: string | null
+  renewalLog: string
+  sites: SshApacheSslSite[]
+  certificates: SshApacheSslCertificate[]
+  canManage: boolean
+  fetchedAt: string
+}
+
+export type SshApacheSslAction =
+  | { kind: 'install-certbot'; confirmation: 'install-certbot' }
+  | { kind: 'issue'; sitePath: string; domains: string[]; email: string; challenge: 'apache' | 'webroot'; webroot?: string; redirect: boolean; staging: boolean; confirmation: 'issue' }
+  | { kind: 'renew'; certificateName?: string; force: boolean; confirmation: 'renew' }
+  | { kind: 'test-renewal' }
+  | { kind: 'set-auto-renew'; enabled: boolean; confirmation: 'auto-renew' }
+  | { kind: 'self-signed'; sitePath: string; commonName: string; domains: string[]; documentRoot: string; days: number; confirmation: 'self-signed' }
+  | { kind: 'import'; sitePath: string; commonName: string; documentRoot: string; certificate: string; privateKey: string; chain?: string; confirmation: 'import' }
+  | { kind: 'revoke'; certificateName: string; deleteCertificate: boolean; confirmation: 'revoke' }
+
+export interface SshApacheSslActionResult {
+  overview: SshApacheSslOverview
+  output: string
+}
+
 export type SshMySqlAccessMode = 'system' | 'password'
 
 export interface SshMySqlAccessProfile {
@@ -1105,6 +1163,8 @@ export interface DesktopApi {
       input: { path: string; content: string; expectedEtag: string },
     ) => Promise<SshApacheSaveResult>
     apacheAction: (id: string, action: SshApacheAction) => Promise<SshApacheActionResult>
+    apacheSslOverview: (id: string) => Promise<SshApacheSslOverview>
+    apacheSslAction: (id: string, action: SshApacheSslAction) => Promise<SshApacheSslActionResult>
     mysqlOverview: (id: string) => Promise<SshMySqlOverview>
     mysqlAccessProfile: (id: string) => Promise<SshMySqlAccessProfile | null>
     saveMysqlAccess: (id: string, input: SshMySqlAccessInput) => Promise<SshMySqlAccessProfile>

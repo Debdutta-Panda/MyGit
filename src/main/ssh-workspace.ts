@@ -20,6 +20,11 @@ import type {
   SshApacheConfigFile,
   SshApacheConfigKind,
   SshApacheSaveResult,
+  SshApacheSslAction,
+  SshApacheSslActionResult,
+  SshApacheSslOverview,
+  SshApacheSslSite,
+  SshApacheSslCertificate,
   SshMySqlOverview,
   SshMySqlAccessInput,
   SshMySqlDatabase,
@@ -538,6 +543,281 @@ const apacheAction = async (id: string, action: SshApacheAction): Promise<SshApa
     return await apachePrivileged(client, command)
   })
   return { configuration: await apacheConfiguration(id), output: output || 'Syntax OK' }
+}
+
+const sslDomain = (value: string): string => {
+  const domain = value.trim().toLowerCase()
+  if (domain.length > 253 || !/^(?:\*\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(domain)) {
+    throw new Error(`Invalid certificate domain: ${value}`)
+  }
+  return domain
+}
+
+const sslDomains = (values: unknown): string[] => {
+  if (!Array.isArray(values) || values.length === 0 || values.length > 100) throw new Error('Add at least one certificate domain.')
+  return [...new Set(values.map((value) => {
+    if (typeof value !== 'string') throw new Error('Certificate domains must be text.')
+    return sslDomain(value)
+  }))]
+}
+
+const sslWebPath = (value: unknown): string => {
+  if (typeof value !== 'string') throw new Error('Choose an absolute web path.')
+  const path = value.trim()
+  if (!path.startsWith('/') || posix.normalize(path) !== path || path.includes('\0')) throw new Error('Choose an absolute normalized web path.')
+  return path
+}
+
+const sslName = (value: unknown): string => {
+  if (typeof value !== 'string' || !/^[a-z0-9_.-]{1,255}$/i.test(value.trim())) throw new Error('Choose a valid certificate name.')
+  return value.trim()
+}
+
+const decoded = (value: string | undefined): string => value ? Buffer.from(value, 'base64').toString('utf8') : ''
+
+const apacheDirective = (source: string, name: string): string | null => {
+  const match = source.match(new RegExp(`^\\s*${name}\\s+(.+?)\\s*$`, 'im'))
+  return match?.[1]?.replace(/^['"]|['"]$/g, '').trim() || null
+}
+
+const apacheSslInspectionCommand = [
+  'set +e',
+  "b64(){ printf '%s' \"$1\" | base64 | tr -d '\\n'; }",
+  "certbot_bin=$(command -v certbot 2>/dev/null || true); openssl_bin=$(command -v openssl 2>/dev/null || true)",
+  "certbot_version=''; [ -n \"$certbot_bin\" ] && certbot_version=$(certbot --version 2>&1 | head -n1); printf 'tool|%s|%s|%s\\n' \"$(b64 \"$certbot_bin\")\" \"$(b64 \"$certbot_version\")\" \"$(b64 \"$openssl_bin\")\"",
+  "timer=''; if command -v systemctl >/dev/null 2>&1; then for candidate in certbot.timer snap.certbot.renew.timer; do load=$(systemctl show \"$candidate\" -p LoadState --value 2>/dev/null || true); [ -n \"$load\" ] && [ \"$load\" != not-found ] && { timer=$candidate; break; }; done; fi",
+  "timer_enabled=''; timer_active=''; timer_next=''; if [ -n \"$timer\" ]; then timer_enabled=$(systemctl is-enabled \"$timer\" 2>/dev/null || true); timer_active=$(systemctl is-active \"$timer\" 2>/dev/null || true); timer_next=$(systemctl list-timers \"$timer\" --no-legend --no-pager 2>/dev/null | head -n1); fi; printf 'timer|%s|%s|%s|%s\\n' \"$(b64 \"$timer\")\" \"$timer_enabled\" \"$timer_active\" \"$(b64 \"$timer_next\")\"",
+  "for spec in '/etc/apache2/sites-available|0' '/etc/apache2/sites-enabled|1' '/etc/httpd/conf.d|1'; do directory=${spec%%|*}; enabled=${spec##*|}; [ -d \"$directory\" ] || continue; find \"$directory\" -mindepth 1 -maxdepth 1 \\( -type f -o -type l \\) -print 2>/dev/null | while IFS= read -r path; do target=$(readlink -f \"$path\" 2>/dev/null || printf '%s' \"$path\"); [ -f \"$target\" ] || continue; printf 'site|%s|%s|%s|%s\\n' \"$enabled\" \"$(b64 \"$(basename \"$path\")\")\" \"$(b64 \"$target\")\" \"$(base64 \"$target\" 2>/dev/null | tr -d '\\n')\"; done; done",
+  "paths=$( { find /etc/letsencrypt/live -mindepth 2 -maxdepth 2 -name fullchain.pem -print 2>/dev/null; grep -RhisE '^\\s*SSLCertificateFile\\s+' /etc/apache2/sites-available /etc/httpd/conf.d 2>/dev/null | awk '{print $2}' | tr -d '\"'; } | sort -u)",
+  "printf '%s\\n' \"$paths\" | while IFS= read -r cert; do [ -n \"$cert\" ] && [ -f \"$cert\" ] || continue; name=$(basename \"$(dirname \"$cert\")\"); key=''; managed=manual; case \"$cert\" in /etc/letsencrypt/live/*) key=$(dirname \"$cert\")/privkey.pem; managed=certbot;; /etc/ssl/myrepos/*) key=$(dirname \"$cert\")/private.key; managed=self-signed;; esac; issuer=$($openssl_bin x509 -in \"$cert\" -noout -issuer 2>/dev/null | sed 's/^issuer=//'); serial=$($openssl_bin x509 -in \"$cert\" -noout -serial 2>/dev/null | sed 's/^serial=//'); start=$($openssl_bin x509 -in \"$cert\" -noout -startdate 2>/dev/null | sed 's/^notBefore=//'); end=$($openssl_bin x509 -in \"$cert\" -noout -enddate 2>/dev/null | sed 's/^notAfter=//'); sans=$($openssl_bin x509 -in \"$cert\" -noout -ext subjectAltName 2>/dev/null | tr '\\n' ' '); printf 'cert|%s|%s|%s|%s|%s|%s|%s|%s|%s\\n' \"$(b64 \"$name\")\" \"$(b64 \"$cert\")\" \"$(b64 \"$key\")\" \"$(b64 \"$issuer\")\" \"$(b64 \"$serial\")\" \"$(b64 \"$start\")\" \"$(b64 \"$end\")\" \"$(b64 \"$sans\")\" \"$managed\"; done",
+  "log=''; if [ -n \"$timer\" ] && command -v journalctl >/dev/null 2>&1; then log=$(journalctl -u \"$timer\" -n 12 --no-pager 2>/dev/null || true); fi; printf 'log|%s\\n' \"$(b64 \"$log\")\"",
+  'true',
+].join('; ')
+
+const apacheSslOverview = async (id: string): Promise<SshApacheSslOverview> =>
+  await withClient(id, async (client, connection) => {
+    const privilege = await accountPrivilege(client)
+    const command = privilege.root ? apacheSslInspectionCommand : privilege.canManage
+      ? `sudo -n sh -c ${shellQuote(apacheSslInspectionCommand)}` : apacheSslInspectionCommand
+    const output = await exec(client, command)
+    let certbotInstalled = false
+    let certbotVersion: string | null = null
+    let opensslInstalled = false
+    let renewalTimer: string | null = null
+    let renewalEnabled: boolean | null = null
+    let renewalActive: boolean | null = null
+    let nextRenewalAt: string | null = null
+    let renewalLog = ''
+    const siteMap = new Map<string, SshApacheSslSite>()
+    const certificates: SshApacheSslCertificate[] = []
+    for (const line of output.split(/\r?\n/)) {
+      const [record, ...values] = line.split('|')
+      if (record === 'tool') {
+        certbotInstalled = Boolean(decoded(values[0]))
+        certbotVersion = decoded(values[1]) || null
+        opensslInstalled = Boolean(decoded(values[2]))
+      } else if (record === 'timer') {
+        renewalTimer = decoded(values[0]) || null
+        renewalEnabled = values[1] ? values[1] === 'enabled' : null
+        renewalActive = values[2] ? values[2] === 'active' : null
+        nextRenewalAt = decoded(values[3]) || null
+      } else if (record === 'log') {
+        renewalLog = decoded(values[0])
+      } else if (record === 'site') {
+        const enabled = values[0] === '1'
+        const name = decoded(values[1])
+        const path = decoded(values[2])
+        const source = decoded(values[3])
+        if (!path || (siteMap.has(path) && !enabled)) continue
+        const serverNames = [...new Set([
+          ...[...source.matchAll(/^\s*ServerName\s+(\S+)/gim)].map((match) => match[1]),
+          ...[...source.matchAll(/^\s*ServerAlias\s+(.+)$/gim)].flatMap((match) => match[1].trim().split(/\s+/)),
+        ])]
+        siteMap.set(path, {
+          name,
+          path,
+          enabled,
+          serverNames,
+          documentRoot: apacheDirective(source, 'DocumentRoot'),
+          httpsEnabled: /<VirtualHost\s+[^>]*:443\b/i.test(source) || /^\s*SSLEngine\s+on\b/im.test(source),
+          redirectsToHttps: /^\s*Redirect\s+(?:permanent\s+)?\/\s+https:/im.test(source) || /RewriteRule\s+.+https:/i.test(source),
+          certificatePath: apacheDirective(source, 'SSLCertificateFile'),
+          privateKeyPath: apacheDirective(source, 'SSLCertificateKeyFile'),
+          chainPath: apacheDirective(source, 'SSLCertificateChainFile'),
+        })
+      } else if (record === 'cert') {
+        const expiresAtValue = decoded(values[6])
+        const expiresAtDate = Date.parse(expiresAtValue)
+        const daysRemaining = Number.isFinite(expiresAtDate)
+          ? Math.floor((expiresAtDate - Date.now()) / 86_400_000) : null
+        certificates.push({
+          name: decoded(values[0]),
+          certificatePath: decoded(values[1]),
+          privateKeyPath: decoded(values[2]) || null,
+          issuer: decoded(values[3]) || null,
+          serialNumber: decoded(values[4]) || null,
+          validFrom: decoded(values[5]) || null,
+          expiresAt: expiresAtValue || null,
+          daysRemaining,
+          domains: [...decoded(values[7]).matchAll(/DNS:([^,\s]+)/g)].map((match) => match[1]),
+          managedBy: values[8] === 'certbot' ? 'certbot' : values[8] === 'self-signed' ? 'self-signed' : 'manual',
+          status: daysRemaining === null ? 'invalid' : daysRemaining < 0 ? 'expired' : daysRemaining <= 30 ? 'expiring' : 'valid',
+        })
+      }
+    }
+    return {
+      connectionId: connection.id,
+      certbotInstalled,
+      certbotVersion,
+      opensslInstalled,
+      renewalTimer,
+      renewalEnabled,
+      renewalActive,
+      nextRenewalAt,
+      renewalLog,
+      sites: [...siteMap.values()].sort((left, right) => left.name.localeCompare(right.name)),
+      certificates: certificates.sort((left, right) => (left.daysRemaining ?? -Infinity) - (right.daysRemaining ?? -Infinity)),
+      canManage: privilege.canManage,
+      fetchedAt: new Date().toISOString(),
+    }
+  })
+
+const sslVirtualHost = (
+  commonName: string,
+  domains: string[],
+  documentRoot: string,
+  certificatePath: string,
+  keyPath: string,
+  chainPath?: string,
+): string => {
+  const aliases = domains.filter((domain) => domain !== commonName)
+  return [
+    '',
+    '<VirtualHost *:443>',
+    `    ServerName ${commonName}`,
+    ...(aliases.length ? [`    ServerAlias ${aliases.join(' ')}`] : []),
+    `    DocumentRoot ${documentRoot}`,
+    '    SSLEngine on',
+    `    SSLCertificateFile ${certificatePath}`,
+    `    SSLCertificateKeyFile ${keyPath}`,
+    ...(chainPath ? [`    SSLCertificateChainFile ${chainPath}`] : []),
+    '</VirtualHost>',
+    '',
+  ].join('\n')
+}
+
+const writeApacheSslMaterial = async (
+  client: Client,
+  action: Extract<SshApacheSslAction, { kind: 'self-signed' | 'import' }>,
+): Promise<string> => {
+  const sitePath = apacheSafePath(action.sitePath)
+  const commonName = sslDomain(action.commonName)
+  const documentRoot = sslWebPath(action.documentRoot)
+  const slug = commonName.replace(/[^a-z0-9.-]/g, '-')
+  const directory = `/etc/ssl/myrepos/${slug}`
+  const certificatePath = `${directory}/certificate.pem`
+  const privateKeyPath = `${directory}/private.key`
+  let chainPath: string | undefined
+  let materialCommand: string[]
+  let input: string | undefined
+  let domains: string[]
+  if (action.kind === 'self-signed') {
+    if (action.confirmation !== 'self-signed') throw new Error('Confirm self-signed certificate generation.')
+    domains = sslDomains(action.domains.length ? action.domains : [commonName])
+    const days = Math.trunc(action.days)
+    if (days < 1 || days > 3650) throw new Error('Validity must be between 1 and 3650 days.')
+    const san = domains.map((domain) => `DNS:${domain}`).join(',')
+    materialCommand = [
+      `openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days ${days} -subj ${shellQuote(`/CN=${commonName}`)} -addext ${shellQuote(`subjectAltName=${san}`)} -keyout ${shellQuote(privateKeyPath)} -out ${shellQuote(certificatePath)}`,
+    ]
+  } else {
+    if (action.confirmation !== 'import') throw new Error('Confirm certificate import.')
+    if (!action.certificate.includes('BEGIN CERTIFICATE') || !action.privateKey.includes('PRIVATE KEY')) {
+      throw new Error('Provide a PEM certificate and matching PEM private key.')
+    }
+    domains = [commonName]
+    chainPath = action.chain?.trim() ? `${directory}/chain.pem` : undefined
+    input = [action.certificate, action.privateKey, action.chain ?? '']
+      .map((value) => Buffer.from(value).toString('base64')).join('\n') + '\n'
+    materialCommand = [
+      'IFS= read -r cert64; IFS= read -r key64; IFS= read -r chain64',
+      `printf '%s' "$cert64" | base64 -d > ${shellQuote(certificatePath)}`,
+      `printf '%s' "$key64" | base64 -d > ${shellQuote(privateKeyPath)}`,
+      ...(chainPath ? [`printf '%s' "$chain64" | base64 -d > ${shellQuote(chainPath)}`] : []),
+      `certpub=$(openssl x509 -in ${shellQuote(certificatePath)} -pubkey -noout | openssl pkey -pubin -outform pem | sha256sum | awk '{print $1}')`,
+      `keypub=$(openssl pkey -in ${shellQuote(privateKeyPath)} -pubout -outform pem | sha256sum | awk '{print $1}')`,
+      '[ "$certpub" = "$keypub" ] || { echo "Certificate and private key do not match." >&2; exit 1; }',
+    ]
+  }
+  const block = sslVirtualHost(commonName, domains, documentRoot, certificatePath, privateKeyPath, chainPath)
+  const command = [
+    'set -eu',
+    `site=${shellQuote(sitePath)}`,
+    `directory=${shellQuote(directory)}`,
+    'grep -Eiq "<VirtualHost[[:space:]]+[^>]*:443" "$site" && { echo "This site already has an HTTPS virtual host. Edit it instead of creating a duplicate." >&2; exit 1; }',
+    'mkdir -p "$directory"',
+    'chmod 700 "$directory"',
+    ...materialCommand,
+    `chmod 600 ${shellQuote(privateKeyPath)}`,
+    'backup="$site.myrepos-$(date +%Y%m%d-%H%M%S).bak"',
+    'cp -a -- "$site" "$backup"',
+    `printf '%s' ${shellQuote(block)} >> "$site"`,
+    'command -v a2enmod >/dev/null 2>&1 && a2enmod ssl >/dev/null || true',
+    `validation=$(${apacheTestCommand} 2>&1) || { cp -a -- "$backup" "$site"; printf '%s\n' "$validation" >&2; exit 1; }`,
+    `printf 'Certificate material saved and Apache configuration validated.\\nBackup: %s\\n%s\\n' "$backup" "$validation"`,
+  ].join('; ')
+  return await apachePrivileged(client, command, input)
+}
+
+const apacheSslAction = async (id: string, action: SshApacheSslAction): Promise<SshApacheSslActionResult> => {
+  if (!action || typeof action.kind !== 'string') throw new Error('Invalid SSL action.')
+  const output = await withClient(id, async (client) => {
+    if (action.kind === 'test-renewal') {
+      return await apachePrivileged(client, "command -v certbot >/dev/null 2>&1 || { echo 'Certbot is not installed.' >&2; exit 1; }; certbot renew --dry-run --non-interactive")
+    }
+    if (action.kind === 'install-certbot') {
+      if (action.confirmation !== 'install-certbot') throw new Error('Confirm Certbot installation.')
+      return await apachePrivileged(client, [
+        'set -e',
+        "command -v certbot >/dev/null 2>&1 && { certbot --version; exit 0; }",
+        "if command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y certbot python3-certbot-apache; elif command -v dnf >/dev/null 2>&1; then dnf install -y certbot python3-certbot-apache; elif command -v yum >/dev/null 2>&1; then yum install -y certbot python3-certbot-apache; else echo 'Supported package manager not found.' >&2; exit 1; fi",
+        'certbot --version',
+      ].join('; '))
+    }
+    if (action.kind === 'set-auto-renew') {
+      if (action.confirmation !== 'auto-renew') throw new Error('Confirm the automatic renewal change.')
+      const timer = "timer=certbot.timer; systemctl show snap.certbot.renew.timer -p LoadState --value 2>/dev/null | grep -qv '^not-found$' && timer=snap.certbot.renew.timer"
+      return await apachePrivileged(client, action.enabled
+        ? `${timer}; systemctl enable --now "$timer"; systemctl status "$timer" --no-pager --lines=4`
+        : `${timer}; systemctl disable --now "$timer"; echo 'Automatic Certbot renewal disabled.'`)
+    }
+    if (action.kind === 'renew') {
+      if (action.confirmation !== 'renew') throw new Error('Confirm certificate renewal.')
+      const name = action.certificateName ? sslName(action.certificateName) : null
+      const command = ['certbot renew --non-interactive', name ? `--cert-name ${shellQuote(name)}` : '', action.force ? '--force-renewal' : ''].filter(Boolean).join(' ')
+      return await apachePrivileged(client, `command -v certbot >/dev/null 2>&1 || { echo 'Certbot is not installed.' >&2; exit 1; }; ${command}`)
+    }
+    if (action.kind === 'issue') {
+      if (action.confirmation !== 'issue') throw new Error('Confirm certificate issuance.')
+      apacheSafePath(action.sitePath)
+      const domains = sslDomains(action.domains)
+      if (!/^\S+@\S+\.\S+$/.test(action.email)) throw new Error('Enter a valid renewal email address.')
+      const challenge = action.challenge === 'webroot'
+        ? `certonly --webroot -w ${shellQuote(sslWebPath(action.webroot))}` : '--apache'
+      const domainArgs = domains.map((domain) => `-d ${shellQuote(domain)}`).join(' ')
+      const redirectFlag = action.challenge === 'apache' ? action.redirect ? '--redirect' : '--no-redirect' : ''
+      const command = `certbot ${challenge} --non-interactive --agree-tos --email ${shellQuote(action.email.trim())} ${domainArgs} ${redirectFlag} ${action.staging ? '--staging' : ''}`
+      return await apachePrivileged(client, `set -e; command -v certbot >/dev/null 2>&1 || { echo 'Certbot is not installed.' >&2; exit 1; }; ${apacheTestCommand}; ${command}; ${apacheTestCommand}`)
+    }
+    if (action.kind === 'revoke') {
+      if (action.confirmation !== 'revoke') throw new Error('Confirm certificate revocation.')
+      const name = sslName(action.certificateName)
+      const remove = action.deleteCertificate ? `; certbot delete --non-interactive --cert-name ${shellQuote(name)}` : ''
+      return await apachePrivileged(client, `certbot revoke --non-interactive --cert-path ${shellQuote(`/etc/letsencrypt/live/${name}/cert.pem`)}${remove}`)
+    }
+    return await writeApacheSslMaterial(client, action)
+  })
+  return { overview: await apacheSslOverview(id), output: output.trim() || 'SSL operation completed.' }
 }
 
 const mysqlOverview = async (id: string): Promise<SshMySqlOverview> =>
@@ -2471,6 +2751,8 @@ export const registerSshWorkspaceHandlers = (): void => {
   ipcMain.handle('ssh:apache-read-config', (_event, id: string, path: string) => apacheReadConfig(id, path))
   ipcMain.handle('ssh:apache-save-config', (_event, id: string, input) => apacheSaveConfig(id, input))
   ipcMain.handle('ssh:apache-action', (_event, id: string, action: SshApacheAction) => apacheAction(id, action))
+  ipcMain.handle('ssh:apache-ssl-overview', (_event, id: string) => apacheSslOverview(id))
+  ipcMain.handle('ssh:apache-ssl-action', (_event, id: string, action: SshApacheSslAction) => apacheSslAction(id, action))
   ipcMain.handle('ssh:mysql-overview', (_event, id: string) => mysqlOverview(id))
   ipcMain.handle('ssh:mysql-access-profile', (_event, id: string) => getMysqlAccessProfile(id))
   ipcMain.handle('ssh:save-mysql-access', (_event, id: string, input: SshMySqlAccessInput) => saveMysqlAccess(id, input))
