@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActionIcon, Alert, Badge, Button, Checkbox, CopyButton, Group, Loader, Modal, NumberInput,
   Progress, Select, Stack, Switch, Text, TextInput, Textarea, Tooltip,
 } from '@mantine/core'
 import {
   IconAlertCircle, IconCertificate, IconCircleCheck, IconClockShield, IconCopy,
-  IconRefresh, IconShieldCheck, IconTrash,
+  IconRefresh, IconShieldCheck, IconTerminal2, IconTrash,
 } from '@tabler/icons-react'
 import type {
   SshApacheSslAction, SshApacheSslCertificate, SshApacheSslOverview,
@@ -61,6 +61,7 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
   const [action, setAction] = useState<string | null>(null)
   const [operationStartedAt, setOperationStartedAt] = useState<number | null>(null)
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
+  const [operationOutput, setOperationOutput] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [errorDetailsOpened, setErrorDetailsOpened] = useState(false)
   const [result, setResult] = useState<string | null>(null)
@@ -77,6 +78,8 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
   const [privateKeyPem, setPrivateKeyPem] = useState('')
   const [chainPem, setChainPem] = useState('')
   const [deleteRevoked, setDeleteRevoked] = useState(false)
+  const operationRunId = useRef<string | null>(null)
+  const operationOutputRef = useRef<HTMLPreElement>(null)
 
   const load = useCallback(async (): Promise<void> => {
     if (!window.desktop) return
@@ -104,6 +107,14 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
     const timer = window.setInterval(update, 250)
     return () => window.clearInterval(timer)
   }, [operationStartedAt])
+  useEffect(() => window.desktop?.ssh.onCommandOutput((event) => {
+    if (event.id !== operationRunId.current) return
+    setOperationOutput((current) => current + event.data)
+  }), [])
+  useEffect(() => {
+    if (!action) return
+    operationOutputRef.current?.scrollTo({ top: operationOutputRef.current.scrollHeight })
+  }, [action, operationOutput])
 
   const selectedSite = useMemo(() => overview?.sites.find((site) => site.path === selectedPath) ?? null,
     [overview, selectedPath])
@@ -118,15 +129,21 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
 
   const run = async (key: string, request: SshApacheSslAction): Promise<void> => {
     if (!window.desktop) return
+    const runId = crypto.randomUUID()
+    operationRunId.current = runId
+    setOperationOutput('')
     setAction(key); setOperationStartedAt(Date.now()); setError(null); setResult(null)
     try {
-      const response = await window.desktop.ssh.apacheSslAction(connection.id, request)
+      const response = await window.desktop.ssh.apacheSslAction(connection.id, runId, request)
       setOverview(response.overview); setResult(response.output); setDialog(null)
     } catch (reason) {
       setError(errorMessage(reason))
       setErrorDetailsOpened(true)
     }
-    finally { setAction(null); setOperationStartedAt(null) }
+    finally {
+      if (operationRunId.current === runId) operationRunId.current = null
+      setAction(null); setOperationStartedAt(null)
+    }
   }
 
   const prepareDialog = (kind: 'issue' | 'self-signed' | 'import'): void => {
@@ -167,6 +184,16 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
       <span><strong>{sslActionDescription(activeOperation)}</strong><small>{formatElapsed(elapsedSeconds)} elapsed · {formatElapsed(activeLimit)} maximum</small></span>
       <Badge size="sm" color="cyan" variant="light">{formatElapsed(elapsedSeconds)}</Badge>
       <Progress className="apache-ssl-operation-progress-bar" value={Math.min(100, elapsedSeconds / activeLimit * 100)} color="cyan" size={4} animated />
+      {action && <div className="apache-ssl-live-output">
+        <header><span><IconTerminal2 size={14} /> Live server output</span>
+          <CopyButton value={operationOutput}>{({ copied, copy }) =>
+            <Button size="compact-xs" variant="subtle" color={copied ? 'teal' : 'gray'} onClick={copy} disabled={!operationOutput}>
+              {copied ? 'Copied' : 'Copy'}
+            </Button>}
+          </CopyButton>
+        </header>
+        <pre ref={operationOutputRef}>{operationOutput || 'Connected. Waiting for the server to produce output...'}</pre>
+      </div>}
     </section>}
 
     <div className="apache-ssl-health">

@@ -1167,7 +1167,7 @@ export interface DesktopApi {
     ) => Promise<SshApacheSaveResult>
     apacheAction: (id: string, action: SshApacheAction) => Promise<SshApacheActionResult>
     apacheSslOverview: (id: string) => Promise<SshApacheSslOverview>
-    apacheSslAction: (id: string, action: SshApacheSslAction) => Promise<SshApacheSslActionResult>
+    apacheSslAction: (id: string, runId: string, action: SshApacheSslAction) => Promise<SshApacheSslActionResult>
     mysqlOverview: (id: string) => Promise<SshMySqlOverview>
     mysqlAccessProfile: (id: string) => Promise<SshMySqlAccessProfile | null>
     saveMysqlAccess: (id: string, input: SshMySqlAccessInput) => Promise<SshMySqlAccessProfile>

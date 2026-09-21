@@ -134,6 +134,7 @@ interface RemoteExecOptions {
   timeoutMessage?: string
   remoteTimeoutSeconds?: number
   remoteTimeoutMessage?: string
+  onOutput?: (stream: 'stdout' | 'stderr', data: string) => void
 }
 
 const exec = async (
@@ -169,8 +170,14 @@ const exec = async (
         stream.close()
         finish(new Error(options.timeoutMessage ?? 'The server operation timed out.'))
       }, options.timeoutMs ?? 20_000)
-      stream.on('data', (chunk: Buffer) => { stdout = append(stdout, chunk) })
-      stream.stderr.on('data', (chunk: Buffer) => { stderr = append(stderr, chunk) })
+      stream.on('data', (chunk: Buffer) => {
+        options.onOutput?.('stdout', chunk.toString('utf8'))
+        stdout = append(stdout, chunk)
+      })
+      stream.stderr.on('data', (chunk: Buffer) => {
+        options.onOutput?.('stderr', chunk.toString('utf8'))
+        stderr = append(stderr, chunk)
+      })
       stream.once('close', (code: number | null) => {
         if (code && code !== 0) finish(new Error(stderr.trim() || `Remote command failed (${code}).`))
         else finish()
@@ -210,8 +217,14 @@ const execInput = async (
         stream.close()
         finish(new Error(options.timeoutMessage ?? 'The server operation timed out.'))
       }, options.timeoutMs ?? 20_000)
-      stream.on('data', (chunk: Buffer) => { stdout = append(stdout, chunk) })
-      stream.stderr.on('data', (chunk: Buffer) => { stderr = append(stderr, chunk) })
+      stream.on('data', (chunk: Buffer) => {
+        options.onOutput?.('stdout', chunk.toString('utf8'))
+        stdout = append(stdout, chunk)
+      })
+      stream.stderr.on('data', (chunk: Buffer) => {
+        options.onOutput?.('stderr', chunk.toString('utf8'))
+        stderr = append(stderr, chunk)
+      })
       stream.once('close', (code: number | null) => code && code !== 0
         ? finish(new Error(stderr.trim() || `Remote command failed (${code}).`)) : finish())
       stream.once('error', (streamError: Error) => finish(streamError))
@@ -833,13 +846,23 @@ const writeApacheSslMaterial = async (
   return await apachePrivileged(client, command, input)
 }
 
-const apacheSslAction = async (id: string, action: SshApacheSslAction): Promise<SshApacheSslActionResult> => {
+const apacheSslAction = async (
+  event: IpcMainInvokeEvent,
+  id: string,
+  runId: string,
+  action: SshApacheSslAction,
+): Promise<SshApacheSslActionResult> => {
+  if (!/^[a-z0-9-]{12,80}$/i.test(runId)) throw new Error('Invalid SSL operation identifier.')
   if (!action || typeof action.kind !== 'string') throw new Error('Invalid SSL action.')
+  const emitOutput = (stream: 'stdout' | 'stderr', data: string): void => {
+    if (!event.sender.isDestroyed()) event.sender.send('ssh:command-output', { id: runId, stream, data })
+  }
   const certbotOptions: RemoteExecOptions = {
     timeoutMs: 15 * 60_000 + 30_000,
     timeoutMessage: 'The SSL operation timed out after 15 minutes. Check the Certbot log before retrying.',
     remoteTimeoutSeconds: 15 * 60,
     remoteTimeoutMessage: 'The SSL operation reached its 15-minute server limit and was stopped.',
+    onOutput: emitOutput,
   }
   const certbotIdleCheck = "if command -v pgrep >/dev/null 2>&1 && pgrep -x certbot >/dev/null 2>&1; then echo 'Another Certbot operation is already running on this server. Wait for it to finish or inspect the process before retrying.' >&2; exit 1; fi"
   const output = await withClient(id, async (client) => {
@@ -2888,7 +2911,8 @@ export const registerSshWorkspaceHandlers = (): void => {
   ipcMain.handle('ssh:apache-save-config', (_event, id: string, input) => apacheSaveConfig(id, input))
   ipcMain.handle('ssh:apache-action', (_event, id: string, action: SshApacheAction) => apacheAction(id, action))
   ipcMain.handle('ssh:apache-ssl-overview', (_event, id: string) => apacheSslOverview(id))
-  ipcMain.handle('ssh:apache-ssl-action', (_event, id: string, action: SshApacheSslAction) => apacheSslAction(id, action))
+  ipcMain.handle('ssh:apache-ssl-action', (event, id: string, runId: string, action: SshApacheSslAction) =>
+    apacheSslAction(event, id, runId, action))
   ipcMain.handle('ssh:mysql-overview', (_event, id: string) => mysqlOverview(id))
   ipcMain.handle('ssh:mysql-access-profile', (_event, id: string) => getMysqlAccessProfile(id))
   ipcMain.handle('ssh:save-mysql-access', (_event, id: string, input: SshMySqlAccessInput) => saveMysqlAccess(id, input))

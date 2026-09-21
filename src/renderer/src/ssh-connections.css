@@ -406,6 +406,10 @@
 .apache-ssl-operation-progress strong { color: #b9eff5; font-size: 12px; }
 .apache-ssl-operation-progress small { color: #7f9da3; font-size: 10px; }
 .apache-ssl-operation-progress-bar { grid-column: 1 / -1; width: 100%; }
+.apache-ssl-live-output { grid-column: 1 / -1; min-width: 0; overflow: hidden; border: 1px solid #29414a; border-radius: 7px; background: #070d11; }
+.apache-ssl-live-output > header { min-height: 30px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 7px 3px 10px; border-bottom: 1px solid #23343c; color: #91aeb8; font-size: 10px; font-weight: 700; }
+.apache-ssl-live-output > header span { display: flex; align-items: center; gap: 6px; }
+.apache-ssl-live-output > pre { min-height: 54px; max-height: 170px; margin: 0; padding: 9px 10px; overflow: auto; color: #c4d8de; white-space: pre-wrap; overflow-wrap: anywhere; font: 10px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .apache-ssl-error-notice { height: auto; min-height: 50px; overflow: visible; }
 .apache-ssl-error-notice .mantine-Alert-body, .apache-ssl-error-notice .mantine-Alert-message { min-width: 0; overflow: visible; }
 .apache-ssl-error-notice-content { min-width: 0; display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: start; gap: 10px; padding-right: 18px; }
