@@ -132,6 +132,8 @@ const withClient = async <Result>(
 interface RemoteExecOptions {
   timeoutMs?: number
   timeoutMessage?: string
+  remoteTimeoutSeconds?: number
+  remoteTimeoutMessage?: string
 }
 
 const exec = async (
@@ -406,7 +408,19 @@ const apachePrivileged = async (
 ): Promise<string> => {
   const privilege = await accountPrivilege(client)
   if (!privilege.canManage) throw new Error('Root or passwordless sudo is required for Apache changes.')
-  const elevated = privilege.root ? command : `sudo -n sh -c ${shellQuote(command)}`
+  const remoteCommand = options.remoteTimeoutSeconds
+    ? [
+        "if command -v timeout >/dev/null 2>&1; then",
+        `timeout --signal=TERM --kill-after=15s ${Math.trunc(options.remoteTimeoutSeconds)}s sh -c ${shellQuote(command)}`,
+        'status=$?',
+        `if [ "$status" = 124 ] || [ "$status" = 137 ]; then echo ${shellQuote(options.remoteTimeoutMessage ?? 'The remote operation reached its time limit.')} >&2; fi`,
+        'exit "$status"',
+        'else',
+        command,
+        'fi',
+      ].join(' ')
+    : command
+  const elevated = privilege.root ? remoteCommand : `sudo -n sh -c ${shellQuote(remoteCommand)}`
   return input === undefined
     ? await exec(client, elevated, options)
     : await execInput(client, elevated, input, options)
@@ -820,14 +834,18 @@ const writeApacheSslMaterial = async (
 const apacheSslAction = async (id: string, action: SshApacheSslAction): Promise<SshApacheSslActionResult> => {
   if (!action || typeof action.kind !== 'string') throw new Error('Invalid SSL action.')
   const certbotOptions: RemoteExecOptions = {
-    timeoutMs: 15 * 60_000,
+    timeoutMs: 15 * 60_000 + 30_000,
     timeoutMessage: 'The SSL operation timed out after 15 minutes. Check the Certbot log before retrying.',
+    remoteTimeoutSeconds: 15 * 60,
+    remoteTimeoutMessage: 'The SSL operation reached its 15-minute server limit and was stopped.',
   }
+  const certbotIdleCheck = "if command -v pgrep >/dev/null 2>&1 && pgrep -x certbot >/dev/null 2>&1; then echo 'Another Certbot operation is already running on this server. Wait for it to finish or inspect the process before retrying.' >&2; exit 1; fi"
   const output = await withClient(id, async (client) => {
     if (action.kind === 'test-renewal') {
       return await apachePrivileged(client, [
         'set -e',
         "command -v certbot >/dev/null 2>&1 || { echo 'Certbot is not installed.' >&2; exit 1; }",
+        certbotIdleCheck,
         "certbot plugins 2>/dev/null | grep -Eq '(^|[[:space:]])apache([[:space:]]|$)' || { echo 'The Certbot Apache plugin is required. Install it from SSL management first.' >&2; exit 1; }",
         apacheTestCommand,
         'certbot renew --dry-run --non-interactive --apache',
@@ -838,6 +856,7 @@ const apacheSslAction = async (id: string, action: SshApacheSslAction): Promise<
       if (action.confirmation !== 'install-certbot') throw new Error('Confirm Certbot installation.')
       return await apachePrivileged(client, [
         'set -e',
+        certbotIdleCheck,
         "if command -v certbot >/dev/null 2>&1 && certbot plugins 2>/dev/null | grep -Eq '(^|[[:space:]])apache([[:space:]]|$)'; then certbot --version; echo 'Apache plugin is ready.'; exit 0; fi",
         "if command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y certbot python3-certbot-apache; elif command -v dnf >/dev/null 2>&1; then dnf install -y certbot python3-certbot-apache; elif command -v yum >/dev/null 2>&1; then yum install -y certbot python3-certbot-apache; else echo 'Supported package manager not found.' >&2; exit 1; fi",
         'certbot --version',
@@ -904,6 +923,7 @@ const apacheSslAction = async (id: string, action: SshApacheSslAction): Promise<
       return await apachePrivileged(client, [
         'set -e',
         "command -v certbot >/dev/null 2>&1 || { echo 'Certbot is not installed.' >&2; exit 1; }",
+        certbotIdleCheck,
         "certbot plugins 2>/dev/null | grep -Eq '(^|[[:space:]])apache([[:space:]]|$)' || { echo 'The Certbot Apache plugin is required. Install it from SSL management first.' >&2; exit 1; }",
         apacheTestCommand,
         migrateStandaloneRenewals,
@@ -921,13 +941,13 @@ const apacheSslAction = async (id: string, action: SshApacheSslAction): Promise<
       const domainArgs = domains.map((domain) => `-d ${shellQuote(domain)}`).join(' ')
       const redirectFlag = action.challenge === 'apache' ? action.redirect ? '--redirect' : '--no-redirect' : ''
       const command = `certbot ${challenge} --non-interactive --agree-tos --email ${shellQuote(action.email.trim())} ${domainArgs} ${redirectFlag} ${action.staging ? '--staging' : ''}`
-      return await apachePrivileged(client, `set -e; command -v certbot >/dev/null 2>&1 || { echo 'Certbot is not installed.' >&2; exit 1; }; ${apacheTestCommand}; ${command}; ${apacheTestCommand}`, undefined, certbotOptions)
+      return await apachePrivileged(client, `set -e; command -v certbot >/dev/null 2>&1 || { echo 'Certbot is not installed.' >&2; exit 1; }; ${certbotIdleCheck}; ${apacheTestCommand}; ${command}; ${apacheTestCommand}`, undefined, certbotOptions)
     }
     if (action.kind === 'revoke') {
       if (action.confirmation !== 'revoke') throw new Error('Confirm certificate revocation.')
       const name = sslName(action.certificateName)
       const remove = action.deleteCertificate ? `; certbot delete --non-interactive --cert-name ${shellQuote(name)}` : ''
-      return await apachePrivileged(client, `certbot revoke --non-interactive --cert-path ${shellQuote(`/etc/letsencrypt/live/${name}/cert.pem`)}${remove}`, undefined, certbotOptions)
+      return await apachePrivileged(client, `${certbotIdleCheck}; certbot revoke --non-interactive --cert-path ${shellQuote(`/etc/letsencrypt/live/${name}/cert.pem`)}${remove}`, undefined, certbotOptions)
     }
     return await writeApacheSslMaterial(client, action)
   })

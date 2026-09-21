@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ActionIcon, Alert, Badge, Button, Checkbox, CopyButton, Group, Loader, Modal, NumberInput,
-  Select, Stack, Switch, Text, TextInput, Textarea, Tooltip,
+  Progress, Select, Stack, Switch, Text, TextInput, Textarea, Tooltip,
 } from '@mantine/core'
 import {
   IconAlertCircle, IconCertificate, IconCircleCheck, IconClockShield, IconCopy,
@@ -28,6 +28,7 @@ const sslErrorSummary = (value: string): string => {
   return line.length > 220 ? `${line.slice(0, 217)}...` : line
 }
 const sslActionDescription = (key: string): string => {
+  if (key === 'detect') return 'Detecting SSL configuration'
   if (key === 'install') return 'Installing Certbot and the Apache plugin'
   if (key === 'dry-run') return 'Testing certificate renewal'
   if (key === 'renew-all') return 'Renewing due certificates'
@@ -40,12 +41,26 @@ const sslActionDescription = (key: string): string => {
   if (key === 'import') return 'Verifying and importing certificate material'
   return 'Running SSL operation'
 }
+const sslActionLimitSeconds = (key: string): number =>
+  ['install', 'dry-run', 'renew-all', 'issue', 'revoke'].includes(key) || key.startsWith('renew:')
+    ? 15 * 60
+    : 20
+const formatElapsed = (seconds: number): string => {
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor(seconds % 3600 / 60)
+  const remainder = seconds % 60
+  return hours > 0
+    ? [hours, minutes, remainder].map((value) => String(value).padStart(2, '0')).join(':')
+    : [minutes, remainder].map((value) => String(value).padStart(2, '0')).join(':')
+}
 
 export function ApacheSslManager({ connection }: { connection: SshConnection }) {
   const [overview, setOverview] = useState<SshApacheSslOverview | null>(null)
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [action, setAction] = useState<string | null>(null)
+  const [operationStartedAt, setOperationStartedAt] = useState<number | null>(null)
+  const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [errorDetailsOpened, setErrorDetailsOpened] = useState(false)
   const [result, setResult] = useState<string | null>(null)
@@ -65,7 +80,7 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
 
   const load = useCallback(async (): Promise<void> => {
     if (!window.desktop) return
-    setLoading(true); setError(null)
+    setLoading(true); setOperationStartedAt(Date.now()); setError(null)
     try {
       const next = await window.desktop.ssh.apacheSslOverview(connection.id)
       setOverview(next)
@@ -75,10 +90,20 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
       setError(errorMessage(reason))
       setErrorDetailsOpened(true)
     }
-    finally { setLoading(false) }
+    finally { setLoading(false); setOperationStartedAt(null) }
   }, [connection.id])
 
   useEffect(() => { setOverview(null); setSelectedPath(null); void load() }, [load])
+  useEffect(() => {
+    if (operationStartedAt === null) {
+      setElapsedSeconds(0)
+      return
+    }
+    const update = (): void => setElapsedSeconds(Math.max(0, Math.floor((Date.now() - operationStartedAt) / 1000)))
+    update()
+    const timer = window.setInterval(update, 250)
+    return () => window.clearInterval(timer)
+  }, [operationStartedAt])
 
   const selectedSite = useMemo(() => overview?.sites.find((site) => site.path === selectedPath) ?? null,
     [overview, selectedPath])
@@ -93,7 +118,7 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
 
   const run = async (key: string, request: SshApacheSslAction): Promise<void> => {
     if (!window.desktop) return
-    setAction(key); setError(null); setResult(null)
+    setAction(key); setOperationStartedAt(Date.now()); setError(null); setResult(null)
     try {
       const response = await window.desktop.ssh.apacheSslAction(connection.id, request)
       setOverview(response.overview); setResult(response.output); setDialog(null)
@@ -101,7 +126,7 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
       setError(errorMessage(reason))
       setErrorDetailsOpened(true)
     }
-    finally { setAction(null) }
+    finally { setAction(null); setOperationStartedAt(null) }
   }
 
   const prepareDialog = (kind: 'issue' | 'self-signed' | 'import'): void => {
@@ -109,6 +134,9 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
     const initialDomains = selectedSite.serverNames.join(', ')
     setDomains(initialDomains); setWebroot(selectedSite.documentRoot ?? ''); setDialog(kind)
   }
+
+  const activeOperation = action ?? (loading ? 'detect' : null)
+  const activeLimit = activeOperation ? sslActionLimitSeconds(activeOperation) : 0
 
   if (loading && !overview) return <div className="apache-ssl-loading"><Loader size="sm" /><Text size="sm">Detecting certificates and renewal automation…</Text></div>
 
@@ -134,10 +162,11 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
       </Group>
     </Alert>}
     {result && <Alert color="teal" icon={<IconCircleCheck size={16} />} withCloseButton onClose={() => setResult(null)}><pre className="ssh-web-output">{result}</pre></Alert>}
-    {action && <section className="apache-ssl-operation-progress" role="status" aria-live="polite">
+    {activeOperation && <section className="apache-ssl-operation-progress" role="status" aria-live="polite">
       <Loader size={18} color="cyan" />
-      <span><strong>{sslActionDescription(action)}</strong><small>Keep this connection open. Certbot operations can take several minutes.</small></span>
-      <Badge size="sm" color="cyan" variant="light">WORKING</Badge>
+      <span><strong>{sslActionDescription(activeOperation)}</strong><small>{formatElapsed(elapsedSeconds)} elapsed · {formatElapsed(activeLimit)} maximum</small></span>
+      <Badge size="sm" color="cyan" variant="light">{formatElapsed(elapsedSeconds)}</Badge>
+      <Progress className="apache-ssl-operation-progress-bar" value={Math.min(100, elapsedSeconds / activeLimit * 100)} color="cyan" size={4} animated />
     </section>}
 
     <div className="apache-ssl-health">

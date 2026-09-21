@@ -405,6 +405,7 @@
 .apache-ssl-operation-progress span { min-width: 0; display: grid; gap: 2px; }
 .apache-ssl-operation-progress strong { color: #b9eff5; font-size: 12px; }
 .apache-ssl-operation-progress small { color: #7f9da3; font-size: 10px; }
+.apache-ssl-operation-progress-bar { grid-column: 1 / -1; width: 100%; }
 .apache-ssl-renew-controls { display: flex; align-items: center; gap: 6px; padding: 7px 9px; border: 1px solid #34424d; border-radius: 8px; background: #10181f; }
 .apache-ssl-site-layout { height: clamp(380px, calc(100vh - 470px), 620px); min-height: 380px; display: grid; grid-template-columns: minmax(220px, 27%) minmax(0, 1fr); overflow: hidden; border: 1px solid #34424d; border-radius: 9px; background: #0b1218; }
 .apache-ssl-sites { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0,1fr); overflow: hidden; border-right: 1px solid #34424d; background: #101920; }
