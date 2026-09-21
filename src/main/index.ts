@@ -15,6 +15,8 @@ import { closeAllTerminals, registerTerminalHandlers } from './terminal-service'
 import { registerSshConnectionHandlers } from './ssh-connections'
 import { registerSshWorkspaceHandlers } from './ssh-workspace'
 import { startAutoPushMonitoring, stopAutoPushMonitoring } from './repository-monitor'
+import { registerLocalFolderHandlers } from './local-folders'
+import { registerRemoteConnectionHandlers } from './remote-connections'
 
 // Squirrel invokes the application briefly while installing, updating, and uninstalling. Its
 // startup helper creates/removes shortcuts and exits before normal application initialization.
@@ -111,6 +113,8 @@ app.whenReady().then(async () => {
   registerTerminalHandlers()
   registerSshConnectionHandlers()
   registerSshWorkspaceHandlers()
+  registerLocalFolderHandlers()
+  registerRemoteConnectionHandlers()
   registerOrganizationHandlers()
   registerConfigurationSyncHandlers()
   registerWorkingCopyHandlers()

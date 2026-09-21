@@ -12,6 +12,7 @@ import type {
   SshVaultStatus,
 } from '../shared/desktop-api'
 import { getDatabase } from './database'
+import { scheduleConfigurationSync } from './configuration-sync'
 
 interface SshConnectionRow {
   id: string
@@ -215,11 +216,13 @@ const saveConnection = (input: SshConnectionInput): SshConnection[] => {
     agentSocket, encryptedPassword, encryptedPassphrase, existing?.host_fingerprint ?? null,
     existing?.created_at ?? now, now, existing?.last_connected_at ?? null,
   )
+  scheduleConfigurationSync()
   return listConnections()
 }
 
 const removeConnection = (id: string): SshConnection[] => {
   getDatabase().prepare('DELETE FROM ssh_connections WHERE id = ?').run(id)
+  scheduleConfigurationSync()
   return listConnections()
 }
 
@@ -366,6 +369,7 @@ const testConnection = async (
         SET host_fingerprint = ?, last_connected_at = ?, updated_at = ?
         WHERE id = ?
       `).run(observedFingerprint, now, now, id)
+      scheduleConfigurationSync()
       finish(null, {
         status: 'connected',
         fingerprint: observedFingerprint,

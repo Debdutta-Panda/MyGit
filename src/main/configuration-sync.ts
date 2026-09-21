@@ -49,9 +49,45 @@ interface PortableRepository {
   tagIds: string[]
 }
 
+interface PortableSshConnection {
+  id: string
+  name: string
+  host: string
+  port: number
+  username: string
+  authenticationType: 'password' | 'private-key' | 'agent'
+  hostFingerprint: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+interface PortableSshMysqlProfile {
+  connectionId: string
+  mode: 'system' | 'password'
+  username: string
+  updatedAt: string
+}
+
+interface PortableRemoteConnection {
+  id: string
+  name: string
+  protocol: 'ftp' | 'ftps' | 'sftp'
+  host: string | null
+  port: number | null
+  username: string | null
+  sftpSource: 'ssh' | 'standalone' | null
+  sshConnectionId: string | null
+  authenticationType: 'password' | 'private-key' | 'agent' | null
+  tlsMode: 'explicit' | 'implicit' | null
+  rejectUnauthorized: boolean
+  hostFingerprint: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 interface PortableConfiguration {
   format: 'myrepos-configuration'
-  version: 2
+  version: 3
   workspaces: PortableItem[]
   groups: PortableItem[]
   tags: PortableItem[]
@@ -62,6 +98,9 @@ interface PortableConfiguration {
     preferredLabel: string | null
     workspaceLabels: Record<string, string>
   }>
+  sshConnections: PortableSshConnection[]
+  sshMysqlProfiles: PortableSshMysqlProfile[]
+  remoteConnections: PortableRemoteConnection[]
   preferences: Array<{ key: PortablePreferenceKey; value: unknown; updatedAt: string }>
 }
 
@@ -218,10 +257,45 @@ const exportConfiguration = (): PortableConfiguration => {
     value_json: string
     updated_at: string
   }>
+  const sshConnections = db.prepare(`
+    SELECT id, name, host, port, username, authentication_type, host_fingerprint,
+           created_at, updated_at
+    FROM ssh_connections ORDER BY name COLLATE NOCASE, host COLLATE NOCASE, port
+  `).all() as unknown as Array<{
+    id: string
+    name: string
+    host: string
+    port: number
+    username: string
+    authentication_type: PortableSshConnection['authenticationType']
+    host_fingerprint: string | null
+    created_at: string
+    updated_at: string
+  }>
+  const sshMysqlProfiles = db.prepare(`
+    SELECT connection_id, access_mode, username, updated_at
+    FROM ssh_mysql_profiles ORDER BY connection_id
+  `).all() as unknown as Array<{
+    connection_id: string
+    access_mode: PortableSshMysqlProfile['mode']
+    username: string
+    updated_at: string
+  }>
+  const remoteConnections = db.prepare(`
+    SELECT id, name, protocol, host, port, username, sftp_source, ssh_connection_id,
+           authentication_type, tls_mode, reject_unauthorized, host_fingerprint, created_at, updated_at
+    FROM remote_connections ORDER BY name COLLATE NOCASE
+  `).all() as unknown as Array<{
+    id: string; name: string; protocol: PortableRemoteConnection['protocol']; host: string | null
+    port: number | null; username: string | null; sftp_source: PortableRemoteConnection['sftpSource']
+    ssh_connection_id: string | null; authentication_type: PortableRemoteConnection['authenticationType']
+    tls_mode: PortableRemoteConnection['tlsMode']; reject_unauthorized: number
+    host_fingerprint: string | null; created_at: string; updated_at: string
+  }>
 
   return {
     format: 'myrepos-configuration',
-    version: 2,
+    version: 3,
     workspaces: portableItems('workspaces'),
     groups: portableItems('groups'),
     tags: portableItems('tags'),
@@ -259,6 +333,39 @@ const exportConfiguration = (): PortableConfiguration => {
           copy.full_name.toLowerCase() === repository.fullName.toLowerCase())
         .map((copy) => [copy.workspace_id, copy.label])),
     })),
+    sshConnections: sshConnections.map((connection) => ({
+      id: connection.id,
+      name: connection.name,
+      host: connection.host,
+      port: connection.port,
+      username: connection.username,
+      authenticationType: connection.authentication_type,
+      hostFingerprint: connection.host_fingerprint,
+      createdAt: connection.created_at,
+      updatedAt: connection.updated_at,
+    })),
+    sshMysqlProfiles: sshMysqlProfiles.map((profile) => ({
+      connectionId: profile.connection_id,
+      mode: profile.access_mode,
+      username: profile.username,
+      updatedAt: profile.updated_at,
+    })),
+    remoteConnections: remoteConnections.map((connection) => ({
+      id: connection.id,
+      name: connection.name,
+      protocol: connection.protocol,
+      host: connection.host,
+      port: connection.port,
+      username: connection.username,
+      sftpSource: connection.sftp_source,
+      sshConnectionId: connection.ssh_connection_id,
+      authenticationType: connection.authentication_type,
+      tlsMode: connection.tls_mode,
+      rejectUnauthorized: connection.reject_unauthorized !== 0,
+      hostFingerprint: connection.host_fingerprint,
+      createdAt: connection.created_at,
+      updatedAt: connection.updated_at,
+    })),
     preferences: portablePreferences.flatMap((row) => {
       if (!portablePreferenceKeys.has(row.key)) return []
       try {
@@ -273,7 +380,8 @@ const exportConfiguration = (): PortableConfiguration => {
 const validatePortableConfiguration = (value: unknown): PortableConfiguration => {
   if (!value || typeof value !== 'object') throw new Error('The configuration file is invalid.')
   const config = value as Partial<PortableConfiguration> & { version?: number }
-  if (config.format !== 'myrepos-configuration' || (config.version !== 1 && config.version !== 2) ||
+  if (config.format !== 'myrepos-configuration' ||
+    (config.version !== 1 && config.version !== 2 && config.version !== 3) ||
     !Array.isArray(config.workspaces) || !Array.isArray(config.groups) ||
     !Array.isArray(config.tags) || !Array.isArray(config.repositories) ||
     config.workspaces.length > 10_000 || config.groups.length > 10_000 ||
@@ -283,9 +391,25 @@ const validatePortableConfiguration = (value: unknown): PortableConfiguration =>
   if (config.preferences !== undefined && (!Array.isArray(config.preferences) || config.preferences.length > 100)) {
     throw new Error('This configuration contains invalid preferences.')
   }
+  if (config.sshConnections !== undefined &&
+    (!Array.isArray(config.sshConnections) || config.sshConnections.length > 10_000)) {
+    throw new Error('This configuration contains invalid SSH connections.')
+  }
+  if (config.sshMysqlProfiles !== undefined &&
+    (!Array.isArray(config.sshMysqlProfiles) || config.sshMysqlProfiles.length > 10_000)) {
+    throw new Error('This configuration contains invalid SSH database profiles.')
+  }
+  if (config.remoteConnections !== undefined &&
+    (!Array.isArray(config.remoteConnections) || config.remoteConnections.length > 10_000)) {
+    throw new Error('This configuration contains invalid file-transfer connections.')
+  }
   return {
-    ...(config as Omit<PortableConfiguration, 'version' | 'preferences'>),
-    version: 2,
+    ...(config as Omit<PortableConfiguration,
+      'version' | 'preferences' | 'sshConnections' | 'sshMysqlProfiles' | 'remoteConnections'>),
+    version: 3,
+    sshConnections: Array.isArray(config.sshConnections) ? config.sshConnections : [],
+    sshMysqlProfiles: Array.isArray(config.sshMysqlProfiles) ? config.sshMysqlProfiles : [],
+    remoteConnections: Array.isArray(config.remoteConnections) ? config.remoteConnections : [],
     preferences: Array.isArray(config.preferences) ? config.preferences : [],
   }
 }
@@ -352,7 +476,7 @@ const mergePortableConfigurations = (
 
   return {
     format: 'myrepos-configuration',
-    version: 2,
+    version: 3,
     workspaces: mergeItems(local.workspaces, remote.workspaces),
     groups: mergeItems(local.groups, remote.groups),
     tags: mergeItems(local.tags, remote.tags),
@@ -360,6 +484,21 @@ const mergePortableConfigurations = (
       .sort((left, right) => left.fullName.localeCompare(right.fullName)),
     workingCopyPreferences: [...preferences.values()]
       .sort((left, right) => left.fullName.localeCompare(right.fullName)),
+    sshConnections: mergeNewest(
+      local.sshConnections,
+      remote.sshConnections,
+      (connection) => connection.id,
+    ),
+    sshMysqlProfiles: mergeNewest(
+      local.sshMysqlProfiles,
+      remote.sshMysqlProfiles,
+      (profile) => profile.connectionId,
+    ),
+    remoteConnections: mergeNewest(
+      local.remoteConnections,
+      remote.remoteConnections,
+      (connection) => connection.id,
+    ),
     preferences: mergeNewest(local.preferences, remote.preferences, (item) => item.key),
   }
 }
@@ -473,6 +612,127 @@ const importConfiguration = (config: PortableConfiguration): void => {
         `).run(workspaceId, preference.accountId, preference.fullName, copy.id)
       }
     }
+
+    const authenticationTypes = new Set(['password', 'private-key', 'agent'])
+    for (const connection of config.sshConnections) {
+      if (typeof connection.id !== 'string' || !connection.id || connection.id.length > 100 ||
+        typeof connection.name !== 'string' || !connection.name.trim() || connection.name.length > 100 ||
+        typeof connection.host !== 'string' || !connection.host.trim() || connection.host.length > 255 ||
+        typeof connection.username !== 'string' || !connection.username.trim() || connection.username.length > 128 ||
+        !Number.isInteger(connection.port) || connection.port < 1 || connection.port > 65_535 ||
+        !authenticationTypes.has(connection.authenticationType) ||
+        (connection.hostFingerprint !== null &&
+          (typeof connection.hostFingerprint !== 'string' || connection.hostFingerprint.length > 256)) ||
+        typeof connection.createdAt !== 'string' || !Number.isFinite(Date.parse(connection.createdAt)) ||
+        typeof connection.updatedAt !== 'string' || !Number.isFinite(Date.parse(connection.updatedAt))) continue
+      db.prepare(`
+        INSERT INTO ssh_connections (
+          id, name, host, port, username, authentication_type, private_key_path,
+          agent_socket, encrypted_password, encrypted_passphrase, host_fingerprint,
+          created_at, updated_at, last_connected_at
+        ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, NULL)
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          host = excluded.host,
+          port = excluded.port,
+          username = excluded.username,
+          authentication_type = excluded.authentication_type,
+          private_key_path = CASE
+            WHEN excluded.authentication_type = 'private-key' AND
+              ssh_connections.authentication_type = 'private-key'
+              THEN ssh_connections.private_key_path ELSE NULL END,
+          agent_socket = CASE
+            WHEN excluded.authentication_type = 'agent' AND ssh_connections.authentication_type = 'agent'
+              THEN ssh_connections.agent_socket ELSE NULL END,
+          encrypted_password = CASE
+            WHEN excluded.authentication_type = 'password' AND
+              ssh_connections.authentication_type = 'password' AND
+              ssh_connections.host = excluded.host AND
+              ssh_connections.port = excluded.port AND
+              ssh_connections.username = excluded.username
+              THEN ssh_connections.encrypted_password ELSE NULL END,
+          encrypted_passphrase = CASE
+            WHEN excluded.authentication_type = 'private-key' AND
+              ssh_connections.authentication_type = 'private-key'
+              THEN ssh_connections.encrypted_passphrase ELSE NULL END,
+          host_fingerprint = excluded.host_fingerprint,
+          created_at = ssh_connections.created_at,
+          updated_at = excluded.updated_at
+      `).run(
+        connection.id, connection.name.trim(), connection.host.trim(), connection.port,
+        connection.username.trim(), connection.authenticationType, connection.hostFingerprint,
+        connection.createdAt, connection.updatedAt,
+      )
+    }
+
+    for (const profile of config.sshMysqlProfiles) {
+      if (typeof profile.connectionId !== 'string' || !profile.connectionId ||
+        (profile.mode !== 'system' && profile.mode !== 'password') ||
+        typeof profile.username !== 'string' || profile.username.length > 128 ||
+        typeof profile.updatedAt !== 'string' || !Number.isFinite(Date.parse(profile.updatedAt))) continue
+      const connection = db.prepare('SELECT 1 FROM ssh_connections WHERE id = ?')
+        .get(profile.connectionId)
+      if (!connection) continue
+      db.prepare(`
+        INSERT INTO ssh_mysql_profiles (
+          connection_id, access_mode, username, encrypted_password, updated_at
+        ) VALUES (?, ?, ?, NULL, ?)
+        ON CONFLICT(connection_id) DO UPDATE SET
+          access_mode = excluded.access_mode,
+          username = excluded.username,
+          encrypted_password = CASE
+            WHEN excluded.access_mode = 'password' AND ssh_mysql_profiles.access_mode = 'password' AND
+              ssh_mysql_profiles.username = excluded.username
+              THEN ssh_mysql_profiles.encrypted_password ELSE NULL END,
+          updated_at = excluded.updated_at
+      `).run(profile.connectionId, profile.mode, profile.username, profile.updatedAt)
+    }
+
+    const remoteProtocols = new Set(['ftp', 'ftps', 'sftp'])
+    const remoteAuthenticationTypes = new Set(['password', 'private-key', 'agent'])
+    for (const connection of config.remoteConnections) {
+      if (typeof connection.id !== 'string' || !connection.id || connection.id.length > 100 ||
+        typeof connection.name !== 'string' || !connection.name.trim() || connection.name.length > 100 ||
+        !remoteProtocols.has(connection.protocol) ||
+        (connection.host !== null && (typeof connection.host !== 'string' || !connection.host.trim() || connection.host.length > 255)) ||
+        (connection.port !== null && (!Number.isInteger(connection.port) || connection.port < 1 || connection.port > 65_535)) ||
+        (connection.username !== null && (typeof connection.username !== 'string' || connection.username.length > 128)) ||
+        (connection.authenticationType !== null && !remoteAuthenticationTypes.has(connection.authenticationType)) ||
+        typeof connection.updatedAt !== 'string' || !Number.isFinite(Date.parse(connection.updatedAt))) continue
+      const linkedSftp = connection.protocol === 'sftp' && connection.sftpSource === 'ssh'
+      if (linkedSftp && (!connection.sshConnectionId ||
+        !db.prepare('SELECT 1 FROM ssh_connections WHERE id = ?').get(connection.sshConnectionId))) continue
+      db.prepare(`
+        INSERT INTO remote_connections (
+          id, name, protocol, host, port, username, sftp_source, ssh_connection_id,
+          authentication_type, private_key_path, agent_socket, encrypted_password,
+          encrypted_passphrase, tls_mode, reject_unauthorized, host_fingerprint,
+          created_at, updated_at, last_connected_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, NULL)
+        ON CONFLICT(id) DO UPDATE SET
+          name=excluded.name, protocol=excluded.protocol, host=excluded.host, port=excluded.port,
+          username=excluded.username, sftp_source=excluded.sftp_source,
+          ssh_connection_id=excluded.ssh_connection_id, authentication_type=excluded.authentication_type,
+          private_key_path=CASE WHEN excluded.authentication_type='private-key' AND
+            remote_connections.authentication_type='private-key' THEN remote_connections.private_key_path ELSE NULL END,
+          agent_socket=CASE WHEN excluded.authentication_type='agent' AND
+            remote_connections.authentication_type='agent' THEN remote_connections.agent_socket ELSE NULL END,
+          encrypted_password=CASE WHEN excluded.authentication_type='password' AND
+            remote_connections.authentication_type='password' AND remote_connections.host=excluded.host AND
+            remote_connections.port=excluded.port AND remote_connections.username=excluded.username
+            THEN remote_connections.encrypted_password ELSE NULL END,
+          encrypted_passphrase=CASE WHEN excluded.authentication_type='private-key' AND
+            remote_connections.authentication_type='private-key' THEN remote_connections.encrypted_passphrase ELSE NULL END,
+          tls_mode=excluded.tls_mode, reject_unauthorized=excluded.reject_unauthorized,
+          host_fingerprint=excluded.host_fingerprint, updated_at=excluded.updated_at
+      `).run(
+        connection.id, connection.name.trim(), connection.protocol, connection.host, connection.port,
+        connection.username, connection.sftpSource, connection.sshConnectionId,
+        connection.authenticationType, connection.tlsMode, connection.rejectUnauthorized ? 1 : 0,
+        connection.hostFingerprint, connection.createdAt, connection.updatedAt,
+      )
+    }
+
     for (const preference of config.preferences) {
       if (!portablePreferenceKeys.has(preference.key) ||
         typeof preference.updatedAt !== 'string' || !Number.isFinite(Date.parse(preference.updatedAt))) continue

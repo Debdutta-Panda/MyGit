@@ -1,0 +1,16 @@
+.local-folders-page { padding: 28px; display: flex; flex-direction: column; gap: 22px; min-height: 100%; }
+.local-folder-empty { min-height: 360px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 13px; border: 1px solid var(--mantine-color-dark-4); background: rgba(18, 24, 31, .72); }
+.local-folder-browser { overflow: hidden; border: 1px solid var(--mantine-color-dark-4); background: rgba(18, 24, 31, .72); }
+.local-folder-toolbar { min-height: 66px; padding: 12px 16px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 16px; border-bottom: 1px solid var(--mantine-color-dark-4); }
+.local-folder-location { min-width: 0; }
+.local-folder-list { min-width: 720px; }
+.local-folder-row { width: 100%; min-height: 43px; padding: 7px 16px; display: grid; grid-template-columns: 26px minmax(220px, 1fr) 90px 100px 190px; align-items: center; gap: 9px; color: var(--mantine-color-gray-3); background: transparent; border: 0; border-bottom: 1px solid rgba(55, 65, 76, .48); text-align: left; cursor: default; font: inherit; }
+.local-folder-row:hover { background: rgba(45, 212, 191, .07); }
+.local-folder-row > span:nth-last-child(-n+3) { color: var(--mantine-color-dimmed); font-size: 12px; }
+.local-folder-entry-icon { display: inline-flex; align-items: center; }
+.local-folder-entry-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 570; }
+.local-folder-loading { min-height: 220px; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--mantine-color-dimmed); }
+.local-folder-context { position: fixed; z-index: 10000; width: 220px; padding: 5px; border: 1px solid var(--mantine-color-dark-4); border-radius: 8px; background: #171d25; box-shadow: 0 12px 38px rgba(0, 0, 0, .45); }
+.local-folder-context button { width: 100%; padding: 8px 10px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: 5px; color: var(--mantine-color-gray-2); background: transparent; font: inherit; font-size: 13px; text-align: left; }
+.local-folder-context button:hover:not(:disabled) { background: rgba(45, 212, 191, .12); }
+.local-folder-context button:disabled { opacity: .45; }

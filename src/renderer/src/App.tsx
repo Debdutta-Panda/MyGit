@@ -50,6 +50,7 @@ import yamlLogo from 'devicon/icons/yaml/yaml-original.svg'
 import { FileIcon, FolderIcon } from '@react-symbols/icons/utils'
 import { marked } from 'marked'
 import { SshConnectionsPage } from './SshConnectionsPage'
+import { LocalFoldersPage } from './LocalFoldersPage'
 import {
   ActionIcon,
   Alert,
@@ -183,6 +184,8 @@ import type {
   RepositoryAutoPushState,
   RepositoryWorkingCopy,
   RepositoryWorkingTreeFile,
+  LocalFolderUploadProgress,
+  SshConnection,
   ProjectInsightsResult,
   ProjectInsightFile,
   ProjectInsightTechnology,
@@ -332,7 +335,7 @@ const RepositoryPortfolioAnalytics = (
 )
 
 type AuthorizationState = 'idle' | 'starting' | 'waiting'
-type ActiveView = 'accounts' | 'repositories' | 'ssh' | 'workspaces' | 'groups' | 'tags' | 'settings'
+type ActiveView = 'accounts' | 'repositories' | 'local-folders' | 'ssh' | 'workspaces' | 'groups' | 'tags' | 'settings'
 type RepositoryTab = 'local' | 'github' | 'workspace'
 type RepositoryLayout = 'list' | 'grid'
 type RepositoryPaneLayout = 'line' | 'card'
@@ -948,6 +951,11 @@ const errorMessage = (error: unknown): string => {
     .replace(/^Error: /, '')
 }
 
+const normalizeEditorText = (value: string): string => value.replace(/\r\n?/g, '\n')
+
+const editorTextForSave = (value: string, lineEnding: 'lf' | 'crlf'): string =>
+  lineEnding === 'crlf' ? value.replace(/\n/g, '\r\n') : value
+
 const timeAgo = (value: string, now: number): string => {
   const seconds = Math.max(0, Math.floor((now - new Date(value).getTime()) / 1000))
   if (seconds < 60) return 'just now'
@@ -1309,10 +1317,29 @@ export function App() {
   const [selectedWorkingTreeFolder, setSelectedWorkingTreeFolder] = useState<string | null>(null)
   const [workingTreeDetailTab, setWorkingTreeDetailTab] = useState<WorkingTreeDetailTab>('content')
   const [workingTreeContent, setWorkingTreeContent] = useState<string | null>(null)
+  const [workingTreeSavedContent, setWorkingTreeSavedContent] = useState<string | null>(null)
+  const [workingTreeFileEtag, setWorkingTreeFileEtag] = useState<string | null>(null)
+  const [workingTreeFileLineEnding, setWorkingTreeFileLineEnding] = useState<'lf' | 'crlf'>('lf')
+  const [workingTreeContentSaving, setWorkingTreeContentSaving] = useState(false)
   const [workingTreeContentLoading, setWorkingTreeContentLoading] = useState(false)
   const [workingTreeContentError, setWorkingTreeContentError] = useState<string | null>(null)
   const [workingTreeView, setWorkingTreeView] = useState<WorkingTreeView>('code')
   const [workingTreePreview, setWorkingTreePreview] = useState<RepositoryFilePreview | null>(null)
+  const [repositoryUploadContext, setRepositoryUploadContext] = useState<{
+    node: WorkingTreeNode; rootPath?: string; x: number; y: number
+  } | null>(null)
+  const [repositoryUploadTarget, setRepositoryUploadTarget] = useState<{
+    node: WorkingTreeNode; rootPath: string
+  } | null>(null)
+  const [repositoryUploadConnections, setRepositoryUploadConnections] = useState<SshConnection[]>([])
+  const [repositoryUploadConnectionId, setRepositoryUploadConnectionId] = useState<string | null>(null)
+  const [repositoryUploadDirectory, setRepositoryUploadDirectory] = useState('/')
+  const [repositoryUploadOverwrite, setRepositoryUploadOverwrite] = useState(false)
+  const [repositoryUploading, setRepositoryUploading] = useState(false)
+  const [repositoryUploadProgress, setRepositoryUploadProgress] =
+    useState<LocalFolderUploadProgress | null>(null)
+  const [repositoryUploadError, setRepositoryUploadError] = useState<string | null>(null)
+  const [repositoryUploadResult, setRepositoryUploadResult] = useState<string | null>(null)
   const [changeAnalytics, setChangeAnalytics] = useState<RepositoryChangeAnalyticsData | null>(null)
   const [changeAnalyticsRange, setChangeAnalyticsRange] = useState<RepositoryAnalyticsRange>('7d')
   const [changeAnalyticsLoading, setChangeAnalyticsLoading] = useState(false)
@@ -1389,6 +1416,22 @@ export function App() {
   const platform =
     window.desktop?.platform ??
     (navigator.userAgent.includes('Macintosh') ? 'darwin' : 'unknown')
+
+  useEffect(() => window.desktop?.localFolders.onUploadProgress(setRepositoryUploadProgress), [])
+
+  useEffect(() => {
+    if (!repositoryUploadContext) return
+    const close = (): void => setRepositoryUploadContext(null)
+    const key = (event: KeyboardEvent): void => { if (event.key === 'Escape') close() }
+    window.addEventListener('click', close)
+    window.addEventListener('blur', close)
+    window.addEventListener('keydown', key)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('blur', close)
+      window.removeEventListener('keydown', key)
+    }
+  }, [repositoryUploadContext])
 
   useEffect(() => {
     if (!window.desktop) return
@@ -2644,7 +2687,10 @@ export function App() {
     setGitStatuses((current) => ({ ...current, [details.status.path]: details.status }))
   }
 
-  const openGitPanel = async (repository: GitHubRepository): Promise<void> => {
+  const openGitPanel = async (
+    repository: GitHubRepository,
+    initialTab: FilesPanelTab = 'changes',
+  ): Promise<void> => {
     if (!window.desktop || !repository.localPath) return
     const repositoryPath = repository.localPath
     const requestId = ++gitPanelRequestRef.current
@@ -2653,7 +2699,7 @@ export function App() {
     setRepositoryLayout('list')
     setGitRepository(repository)
     setGitDetails(null)
-    setFilesPanelTab('changes')
+    setFilesPanelTab(initialTab)
     setFileSearch('')
     setWorkingTreeFiles([])
     setWorkingTreeSearch('')
@@ -2665,6 +2711,8 @@ export function App() {
     setSelectedWorkingTreeFolder(null)
     setWorkingTreeDetailTab('content')
     setWorkingTreeContent(null)
+    setWorkingTreeSavedContent(null)
+    setWorkingTreeFileEtag(null)
     setWorkingTreePreview(null)
     setWorkingTreeView('code')
     setWorkingTreeContentError(null)
@@ -3214,11 +3262,15 @@ export function App() {
 
   const showWorkingTreeFile = async (file: RepositoryWorkingTreeFile): Promise<void> => {
     if (!window.desktop || !gitRepository?.localPath) return
+    if (workingTreeContent !== workingTreeSavedContent && workingTreeContent !== null &&
+      !window.confirm('Discard the unsaved changes in the current file?')) return
     const previewKind = workingTreePreviewKind(file.path)
     setDiffVisible(true)
     setSelectedWorkingTreeFile(file.path)
     setSelectedWorkingTreeFolder(null)
     setWorkingTreeContent(null)
+    setWorkingTreeSavedContent(null)
+    setWorkingTreeFileEtag(null)
     setWorkingTreePreview(null)
     setWorkingTreeView(previewKind ? 'preview' : 'code')
     setWorkingTreeContentLoading(true)
@@ -3231,15 +3283,47 @@ export function App() {
           file.path,
         ))
       } else {
-        setWorkingTreeContent(await window.desktop.repositories.gitWorkingFileContent(
+        const result = await window.desktop.repositories.gitWorkingFile(
           gitRepository.localPath,
           file.path,
-        ))
+        )
+        const editorContent = normalizeEditorText(result.content)
+        setWorkingTreeFileLineEnding(result.content.includes('\r\n') ? 'crlf' : 'lf')
+        setWorkingTreeContent(editorContent)
+        setWorkingTreeSavedContent(editorContent)
+        setWorkingTreeFileEtag(result.etag)
       }
     } catch (error) {
       setWorkingTreeContentError(errorMessage(error))
     } finally {
       setWorkingTreeContentLoading(false)
+    }
+  }
+
+  const saveWorkingTreeFile = async (): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath || !selectedWorkingTreeFile ||
+      workingTreeContent === null || !workingTreeFileEtag ||
+      workingTreeContent === workingTreeSavedContent || workingTreeContentSaving) return
+    setWorkingTreeContentSaving(true)
+    setWorkingTreeContentError(null)
+    try {
+      const result = await window.desktop.repositories.gitSaveWorkingFile({
+        path: gitRepository.localPath,
+        file: selectedWorkingTreeFile,
+        content: editorTextForSave(workingTreeContent, workingTreeFileLineEnding),
+        expectedEtag: workingTreeFileEtag,
+      })
+      const editorContent = normalizeEditorText(result.content)
+      setWorkingTreeContent(editorContent)
+      setWorkingTreeSavedContent(editorContent)
+      setWorkingTreeFileEtag(result.etag)
+      setWorkingTreeRefreshVersion((version) => version + 1)
+      const details = await window.desktop.repositories.gitDetails(gitRepository.localPath)
+      applyGitDetails(details)
+    } catch (error) {
+      setWorkingTreeContentError(errorMessage(error))
+    } finally {
+      setWorkingTreeContentSaving(false)
     }
   }
 
@@ -4172,6 +4256,58 @@ export function App() {
       }, {})).sort((a, b) => b[1].lines - a[1].lines || b[1].files - a[1].files)
     : [], [insightsResult, scopedInsightFiles])
 
+  const openRepositoryUpload = async (node: WorkingTreeNode, rootPath?: string | null): Promise<void> => {
+    const localRoot = rootPath ?? gitRepository?.localPath
+    if (!localRoot) return
+    setRepositoryUploadContext(null)
+    setRepositoryUploadTarget({ node, rootPath: localRoot })
+    setRepositoryUploadProgress(null)
+    setRepositoryUploadError(null)
+    setRepositoryUploadResult(null)
+    try {
+      const connections = await window.desktop?.ssh.list() ?? []
+      setRepositoryUploadConnections(connections)
+      setRepositoryUploadConnectionId((current) => current ?? connections[0]?.id ?? null)
+    } catch (error) {
+      setRepositoryUploadError(errorMessage(error))
+    }
+  }
+
+  const uploadRepositoryEntry = async (): Promise<void> => {
+    if (!window.desktop || !repositoryUploadTarget ||
+      !repositoryUploadConnectionId) return
+    setRepositoryUploading(true)
+    setRepositoryUploadProgress(null)
+    setRepositoryUploadError(null)
+    setRepositoryUploadResult(null)
+    try {
+      const result = await window.desktop.localFolders.upload({
+        rootPath: repositoryUploadTarget.rootPath,
+        relativePath: repositoryUploadTarget.node.path,
+        sshConnectionId: repositoryUploadConnectionId,
+        remoteDirectory: repositoryUploadDirectory,
+        overwrite: repositoryUploadOverwrite,
+      })
+      setRepositoryUploadResult(
+        `Uploaded ${result.uploadedFiles} ${result.uploadedFiles === 1 ? 'file' : 'files'} ` +
+        `(${formatBytes(result.uploadedBytes)}) to ${result.remotePath}` +
+        (result.skippedLinks ? `; skipped ${result.skippedLinks} symbolic links.` : '.'),
+      )
+    } catch (error) {
+      setRepositoryUploadError(errorMessage(error))
+    } finally {
+      setRepositoryUploading(false)
+    }
+  }
+  const repositoryUploadPercent = repositoryUploadProgress?.totalBytes
+    ? Math.min(100, repositoryUploadProgress.transferredBytes /
+      repositoryUploadProgress.totalBytes * 100)
+    : repositoryUploadProgress && repositoryUploadProgress.totalFiles > 0
+      ? repositoryUploadProgress.completedFiles / repositoryUploadProgress.totalFiles * 100
+      : 0
+  const workingTreeContentDirty = workingTreeContent !== null &&
+    workingTreeSavedContent !== null && workingTreeContent !== workingTreeSavedContent
+
   const renderWorkingTreeNodes = (nodes: WorkingTreeNode[], depth = 0): ReactNode => nodes.map((node) => {
     const expanded = Boolean(workingTreeSearch.trim()) || workingTreeExpandedFolders.includes(node.path)
     const change = node.type === 'file' ? workingTreeChanges.get(node.path) : undefined
@@ -4188,6 +4324,10 @@ export function App() {
             selectedWorkingTreeFolder === node.path) || undefined}
           data-ignored={node.ignored || undefined}
           style={{ paddingLeft: 7 + depth * 15 }}
+          onContextMenu={(event) => {
+            event.preventDefault()
+            setRepositoryUploadContext({ node, x: event.clientX, y: event.clientY })
+          }}
         >
           {node.type === 'folder' ? (
             <UnstyledButton
@@ -4208,10 +4348,14 @@ export function App() {
             disabled={node.type === 'file' && !file}
             onClick={() => {
               if (node.type === 'folder') {
+                if (workingTreeContent !== workingTreeSavedContent && workingTreeContent !== null &&
+                  !window.confirm('Discard the unsaved changes in the current file?')) return
                 setDiffVisible(true)
                 setSelectedWorkingTreeFolder(node.path)
                 setSelectedWorkingTreeFile(null)
                 setWorkingTreeContent(null)
+                setWorkingTreeSavedContent(null)
+                setWorkingTreeFileEtag(null)
                 setWorkingTreePreview(null)
                 setWorkingTreeContentError(null)
                 setWorkingTreeDetailTab('analytics')
@@ -4233,6 +4377,8 @@ export function App() {
               title={node.path}
             >
               {node.name}
+              {node.type === 'file' && selectedWorkingTreeFile === node.path &&
+                workingTreeContentDirty ? ' •' : ''}
             </Text>
           </UnstyledButton>
           {node.type === 'folder' && changedChildren > 0 && (
@@ -4320,12 +4466,21 @@ export function App() {
           </UnstyledButton>
           <UnstyledButton
             className="nav-item"
-            title="SSH"
+            title="Local folders"
+            data-active={activeView === 'local-folders' || undefined}
+            onClick={() => setActiveView('local-folders')}
+          >
+            <IconFolderOpen size={17} stroke={1.7} />
+            <Text size="sm" fw={600}>Local folders</Text>
+          </UnstyledButton>
+          <UnstyledButton
+            className="nav-item"
+            title="Connections"
             data-active={activeView === 'ssh' || undefined}
             onClick={() => setActiveView('ssh')}
           >
             <IconServer2 size={17} stroke={1.7} />
-            <Text size="sm" fw={600}>SSH</Text>
+            <Text size="sm" fw={600}>Connections</Text>
           </UnstyledButton>
           <Text className="nav-section-title nav-section-title--secondary">ORGANIZE</Text>
           <UnstyledButton
@@ -4375,7 +4530,7 @@ export function App() {
             </ThemeIcon>
             <div>
               <Text size="xs" fw={650}>Connections</Text>
-              <Text size="10px" c="dimmed">GitHub + SSH</Text>
+              <Text size="10px" c="dimmed">GitHub + files + SSH</Text>
             </div>
           </Group>
           <Badge size="xs" variant="light" color="teal">Ready</Badge>
@@ -4468,6 +4623,12 @@ export function App() {
                 onClick={() => setActiveView('repositories')}
               >
                 Repositories
+              </Menu.Item>
+              <Menu.Item
+                leftSection={<IconFolderOpen size={15} />}
+                onClick={() => setActiveView('local-folders')}
+              >
+                Local folders
               </Menu.Item>
               <Menu.Item
                 leftSection={<IconServer2 size={15} />}
@@ -4759,6 +4920,13 @@ export function App() {
               </Group>
             )}
             </>
+          ) : activeView === 'local-folders' ? (
+            <div className="topbar-heading">
+              <Text fw={700} fz="lg">Local folders</Text>
+              <Text size="xs" c="dimmed">
+                Browse and transfer local files
+              </Text>
+            </div>
           ) : activeView === 'ssh' ? (
             <div className="topbar-heading">
               <Text fw={700} fz="lg">SSH</Text>
@@ -4806,7 +4974,7 @@ export function App() {
                 <IconRefresh size={18} />
               </ActionIcon>
             </Tooltip>
-          ) : activeView === 'ssh' ? null : activeOrganizationKind && activeOrganizationCopy ? (
+          ) : activeView === 'ssh' || activeView === 'local-folders' ? null : activeOrganizationKind && activeOrganizationCopy ? (
             <Button
               size="sm"
               leftSection={<IconPlus size={16} />}
@@ -6043,15 +6211,15 @@ export function App() {
                                 <IconChartBar size={16} />
                               </ActionIcon>
                             </Tooltip>
-                            <Tooltip label="Browse files and changes">
+                            <Tooltip label="Open in MyRepos editor">
                               <ActionIcon
                                 className="repository-files-button repository-secondary-action"
                                 variant="subtle"
                                 color="gray"
-                                aria-label={`Browse files for ${repository.fullName}`}
-                                onClick={() => void openGitPanel(repository)}
+                                aria-label={`Open ${repository.fullName} in MyRepos editor`}
+                                onClick={() => void openGitPanel(repository, 'files')}
                               >
-                                <IconGitCommit size={16} />
+                                <IconCode size={17} />
                               </ActionIcon>
                             </Tooltip>
                             <Tooltip label="Open in VS Code">
@@ -6942,6 +7110,18 @@ export function App() {
                                       ? selectedWorkingTreePath ?? 'Select a file or folder'
                                       : diffTitle ?? gitRepository.fullName}
                                 </Text>
+                                {filesPanelTab === 'files' && selectedWorkingTreeFile &&
+                                  workingTreeContent !== null && (
+                                  <Badge
+                                    size="xs"
+                                    variant={workingTreeContentDirty ? 'filled' : 'light'}
+                                    color={workingTreeContentDirty ? 'orange' : 'teal'}
+                                  >
+                                    {workingTreeContentSaving
+                                      ? 'Saving…'
+                                      : workingTreeContentDirty ? 'Unsaved' : 'Saved'}
+                                  </Badge>
+                                )}
                                 {filesPanelTab === 'files' && selectedWorkingTreePath && (
                                   <Group gap={2} wrap="nowrap" className="working-tree-detail-tabs">
                                     <Button
@@ -7061,6 +7241,31 @@ export function App() {
                                 {filesPanelTab === 'files' && workingTreeDetailTab === 'content' &&
                                   workingTreeView !== 'preview' &&
                                   workingTreeContent !== null && (
+                                  <Tooltip label={workingTreeContent === workingTreeSavedContent
+                                    ? 'No unsaved changes'
+                                    : 'Save file (Ctrl/Cmd+S)'}>
+                                    <ActionIcon
+                                      size="sm"
+                                      variant={workingTreeContent === workingTreeSavedContent ? 'subtle' : 'light'}
+                                      color={workingTreeContent === workingTreeSavedContent ? 'gray' : 'teal'}
+                                      loading={workingTreeContentSaving}
+                                      disabled={workingTreeContent === workingTreeSavedContent}
+                                      aria-label="Save current file"
+                                      onClick={() => void saveWorkingTreeFile()}
+                                    >
+                                      <IconDeviceFloppy size={15} />
+                                    </ActionIcon>
+                                  </Tooltip>
+                                )}
+                                {filesPanelTab === 'files' && workingTreeContentError &&
+                                  workingTreeContent !== null && (
+                                  <Tooltip label={workingTreeContentError}>
+                                    <IconAlertCircle size={16} color="var(--mantine-color-red-5)" />
+                                  </Tooltip>
+                                )}
+                                {filesPanelTab === 'files' && workingTreeDetailTab === 'content' &&
+                                  workingTreeView !== 'preview' &&
+                                  workingTreeContent !== null && (
                                   <CopyButton value={workingTreeContent} timeout={1600}>
                                     {({ copied, copy }) => (
                                       <Tooltip label={copied ? 'Copied' : 'Copy current file'}>
@@ -7131,6 +7336,9 @@ export function App() {
                                       <ReadOnlyMonaco
                                         path={selectedWorkingTreeFile ?? 'schema.sql'}
                                         value={workingTreeContent}
+                                        readOnly={false}
+                                        onChange={setWorkingTreeContent}
+                                        onSave={() => void saveWorkingTreeFile()}
                                       />
                                     </div>
                                     <HorizontalSplitter
@@ -7157,6 +7365,9 @@ export function App() {
                                       <ReadOnlyMonaco
                                         path={selectedWorkingTreeFile ?? 'untitled.txt'}
                                         value={workingTreeContent}
+                                        readOnly={false}
+                                        onChange={setWorkingTreeContent}
+                                        onSave={() => void saveWorkingTreeFile()}
                                       />
                                     </div>
                                     <HorizontalSplitter
@@ -7237,6 +7448,9 @@ export function App() {
                                   <ReadOnlyMonaco
                                     path={selectedWorkingTreeFile ?? 'untitled.txt'}
                                     value={workingTreeContent}
+                                    readOnly={false}
+                                    onChange={setWorkingTreeContent}
+                                    onSave={() => void saveWorkingTreeFile()}
                                   />
                                 ) : (
                                   <div className="scm-diff-empty">
@@ -7463,6 +7677,8 @@ export function App() {
                 )}
               </div>
             </div>
+          ) : activeView === 'local-folders' ? (
+            <LocalFoldersPage />
           ) : activeView === 'ssh' ? (
             <SshConnectionsPage onOpenTerminal={(connection, initialInput) => {
               setTerminalMounted(true)
@@ -7650,9 +7866,9 @@ export function App() {
                 ) : configurationSync.connected ? (
                   <Stack gap="md" mt="lg">
                     <Alert color="blue" variant="light">
-                      Server credentials, SSH hosts and usernames, private-key paths, snippets, scripts,
-                      local paths, SQL history, and terminal state stay on this device. Snippets and scripts
-                      are protected in the app database and migrate automatically from older local storage.
+                      SSH connection details, trusted host fingerprints, and non-secret database access
+                      settings are synchronized. Passwords, passphrases, private-key paths, agent sockets,
+                      snippets, scripts, local paths, SQL history, and terminal state stay on this device.
                     </Alert>
                     <Paper className="configuration-sync-location" radius="md">
                       <Text size="sm" fw={650}>
@@ -7756,8 +7972,8 @@ export function App() {
                 ) : (
                   <Stack gap="md" mt="lg">
                     <Alert color="blue" variant="light">
-                      Credentials, OAuth tokens, absolute local paths, and machine-specific settings
-                      are never written to the shared configuration.
+                      SSH connection details can be synchronized, but credentials, OAuth tokens, absolute
+                      local paths, and machine-specific settings are never written to the shared configuration.
                     </Alert>
                     <Group gap="xs" wrap="wrap">
                       <Button
@@ -7972,6 +8188,100 @@ export function App() {
           </Suspense>
         )}
       </main>
+
+      {repositoryUploadContext && (
+        <div
+          className="local-folder-context"
+          style={{
+            left: Math.min(repositoryUploadContext.x, window.innerWidth - 230),
+            top: Math.min(repositoryUploadContext.y, window.innerHeight - 90),
+          }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button type="button" onClick={() => void openRepositoryUpload(
+            repositoryUploadContext.node,
+            repositoryUploadContext.rootPath,
+          )}>
+            <IconUpload size={15} /> Upload via SFTP…
+          </button>
+        </div>
+      )}
+
+      <Modal
+        opened={Boolean(repositoryUploadTarget)}
+        onClose={() => {
+          if (repositoryUploading) return
+          setRepositoryUploadTarget(null)
+          setRepositoryUploadError(null)
+          setRepositoryUploadResult(null)
+        }}
+        title={`Upload ${repositoryUploadTarget?.node.name ?? ''}`}
+        centered
+        closeOnClickOutside={!repositoryUploading}
+        closeOnEscape={!repositoryUploading}
+      >
+        <Stack gap="md">
+          {repositoryUploadConnections.length === 0 ? (
+            <Alert color="yellow" icon={<IconServer2 size={16} />}>
+              Add and verify an SSH connection before uploading through SFTP.
+            </Alert>
+          ) : (
+            <>
+              <Select
+                label="SFTP connection"
+                searchable
+                data={repositoryUploadConnections.map((connection) => ({
+                  value: connection.id,
+                  label: `${connection.name} — ${connection.username}@${connection.host}`,
+                }))}
+                value={repositoryUploadConnectionId}
+                onChange={setRepositoryUploadConnectionId}
+              />
+              <TextInput
+                label="Remote directory"
+                value={repositoryUploadDirectory}
+                placeholder="/var/www"
+                onChange={(event) => setRepositoryUploadDirectory(event.currentTarget.value)}
+              />
+              <Checkbox
+                checked={repositoryUploadOverwrite}
+                onChange={(event) => setRepositoryUploadOverwrite(event.currentTarget.checked)}
+                label="Overwrite existing remote files"
+              />
+            </>
+          )}
+          {repositoryUploading && (
+            <div>
+              <Group justify="space-between">
+                <Text size="xs">{repositoryUploadProgress?.relativePath ?? 'Preparing upload…'}</Text>
+                <Text size="xs">{Math.round(repositoryUploadPercent)}%</Text>
+              </Group>
+              <Progress value={repositoryUploadPercent} animated mt={6} />
+            </div>
+          )}
+          {repositoryUploadError && <Alert color="red">{repositoryUploadError}</Alert>}
+          {repositoryUploadResult && <Alert color="teal">{repositoryUploadResult}</Alert>}
+          <Group justify="flex-end">
+            <Button
+              variant="subtle"
+              color="gray"
+              disabled={repositoryUploading}
+              onClick={() => setRepositoryUploadTarget(null)}
+            >
+              Close
+            </Button>
+            <Button
+              leftSection={<IconUpload size={15} />}
+              loading={repositoryUploading}
+              disabled={!repositoryUploadConnectionId || !repositoryUploadDirectory.trim() ||
+                Boolean(repositoryUploadResult)}
+              onClick={() => void uploadRepositoryEntry()}
+            >
+              Upload
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
 
       <Modal
         opened={Boolean(insightsRepository)}

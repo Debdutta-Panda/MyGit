@@ -6,6 +6,7 @@ import {
   Button,
   Group,
   Loader,
+  Menu,
   Modal,
   NumberInput,
   Paper,
@@ -20,13 +21,13 @@ import {
 import {
   IconAlertCircle,
   IconCheck,
+  IconDotsVertical,
   IconEdit,
   IconFingerprint,
   IconLayoutDashboard,
   IconKey,
   IconLock,
   IconPlugConnected,
-  IconPlus,
   IconServer2,
   IconShieldCheck,
   IconTerminal2,
@@ -41,6 +42,7 @@ import type {
 } from '../../shared/desktop-api'
 import './ssh-connections.css'
 import { SshServerWorkspace } from './SshServerWorkspace'
+import { RemoteConnectionsPanel } from './RemoteConnectionsPanel'
 
 interface ConnectionDraft {
   id: string | null
@@ -247,77 +249,24 @@ export function SshConnectionsPage({
 
   return (
     <div className="ssh-content">
-      <section className="intro-row">
-        <div>
-          <Text fz={24} fw={720} className="page-title">SSH connections</Text>
-          <Text c="dimmed" mt={5} maw={680}>
-            Save multiple servers securely. Open shells, files, and visual server tools from one connection profile.
-          </Text>
-        </div>
-        <Group gap="sm" wrap="nowrap">
-          <Badge variant="outline" color="gray" size="lg">
-            {connections.length} {connections.length === 1 ? 'connection' : 'connections'}
-          </Badge>
-          <Button leftSection={<IconPlus size={16} />} onClick={() => openEditor()}>
-            Add connection
-          </Button>
-        </Group>
-      </section>
-
       {error && (
-        <Alert mt="lg" color="red" icon={<IconAlertCircle size={17} />} withCloseButton
+        <Alert mb="sm" color="red" icon={<IconAlertCircle size={17} />} withCloseButton
           onClose={() => setError(null)}>
           {error}
         </Alert>
       )}
 
-      <Paper className="ssh-vault-card" radius="lg">
-        <Group gap="sm" wrap="nowrap">
-          <ThemeIcon
-            variant="light"
-            color={vault?.available ? 'teal' : 'red'}
-            size={38}
-            radius="md"
-          >
-            {vault?.available ? <IconShieldCheck size={20} /> : <IconLock size={20} />}
-          </ThemeIcon>
-          <div>
-            <Text size="sm" fw={680}>OS-protected credentials</Text>
-            <Text size="xs" c="dimmed">
-              {vault?.available
-                ? `Passwords and passphrases are encrypted with ${vault.label} and never returned to the UI.`
-                : 'Secure password storage is unavailable. Agent and unencrypted-key profiles remain usable.'}
-            </Text>
-          </div>
-        </Group>
-        <Badge variant="light" color={vault?.available ? 'teal' : 'red'}>
-          {vault?.label ?? 'Checking...'}
-        </Badge>
-      </Paper>
-
       {loading ? (
         <Paper className="empty-state ssh-empty" radius="lg">
           <Loader size="sm" />
-          <Text size="sm" c="dimmed">Loading SSH connections...</Text>
-        </Paper>
-      ) : connections.length === 0 ? (
-        <Paper className="empty-state ssh-empty" radius="lg">
-          <div className="empty-icon-wrap"><IconServer2 size={35} stroke={1.55} /></div>
-          <Text fz={19} fw={680}>Add your first server</Text>
-          <Text c="dimmed" size="sm" maw={500} ta="center" lh={1.6}>
-            Use a password, private key, or your SSH agent. Host fingerprints are verified before credentials are sent.
-          </Text>
-          <Button mt="xs" leftSection={<IconPlus size={17} />} onClick={() => openEditor()}>
-            Add SSH connection
-          </Button>
+          <Text size="sm" c="dimmed">Loading connections...</Text>
         </Paper>
       ) : (
-        <div className="ssh-grid">
+        <RemoteConnectionsPanel sshConnections={connections} onAddSsh={() => openEditor()}>
           {connections.map((connection) => {
             const result = testResults[connection.id]
             return (
               <Paper className="ssh-card" radius="lg" key={connection.id}>
-                <div className="ssh-card-accent" aria-hidden="true" />
                 <Group justify="space-between" align="flex-start" wrap="nowrap">
                   <Group gap="sm" wrap="nowrap" className="ssh-card-main">
                     <ThemeIcon variant="light" color="teal" size={42} radius="md">
@@ -330,7 +279,7 @@ export function SshConnectionsPage({
                       </Text>
                     </div>
                   </Group>
-                  <Group gap={4} wrap="nowrap">
+                  <Group gap={2} wrap="nowrap">
                     <Tooltip label={connection.hostFingerprint
                       ? 'Open server control center'
                       : 'Test and verify this host before opening its control center'}>
@@ -344,72 +293,39 @@ export function SshConnectionsPage({
                         <IconLayoutDashboard size={17} />
                       </ActionIcon>
                     </Tooltip>
-                    <Tooltip label={connection.hostFingerprint
-                      ? 'Open SSH terminal'
-                      : 'Test and verify this host before opening a terminal'}>
-                      <ActionIcon
-                        variant="subtle"
-                        color="teal"
-                        disabled={!connection.hostFingerprint}
-                        aria-label={`Open terminal for ${connection.name}`}
-                        onClick={() => onOpenTerminal(connection)}
-                      >
-                        <IconTerminal2 size={17} />
-                      </ActionIcon>
-                    </Tooltip>
-                    <Tooltip label="Test connection">
-                      <ActionIcon
-                        variant="subtle"
-                        color="teal"
-                        loading={testingId === connection.id}
-                        aria-label={`Test ${connection.name}`}
-                        onClick={() => void testConnection(connection)}
-                      >
-                        <IconPlugConnected size={17} />
-                      </ActionIcon>
-                    </Tooltip>
-                    <Tooltip label="Edit connection">
-                      <ActionIcon variant="subtle" color="gray" aria-label={`Edit ${connection.name}`}
-                        onClick={() => openEditor(connection)}>
-                        <IconEdit size={17} />
-                      </ActionIcon>
-                    </Tooltip>
-                    <Tooltip label="Delete connection">
-                      <ActionIcon variant="subtle" color="red" aria-label={`Delete ${connection.name}`}
-                        onClick={() => setRemoveTarget(connection)}>
-                        <IconTrash size={17} />
-                      </ActionIcon>
-                    </Tooltip>
+                    <Menu position="bottom-end" withinPortal>
+                      <Menu.Target>
+                        <ActionIcon variant="subtle" color="gray" aria-label={`Actions for ${connection.name}`}>
+                          <IconDotsVertical size={17} />
+                        </ActionIcon>
+                      </Menu.Target>
+                      <Menu.Dropdown>
+                        <Menu.Item leftSection={<IconTerminal2 size={15} />} disabled={!connection.hostFingerprint}
+                          onClick={() => onOpenTerminal(connection)}>Open terminal</Menu.Item>
+                        <Menu.Item leftSection={<IconPlugConnected size={15} />}
+                          disabled={testingId === connection.id}
+                          onClick={() => void testConnection(connection)}>Test</Menu.Item>
+                        <Menu.Item leftSection={<IconEdit size={15} />}
+                          onClick={() => openEditor(connection)}>Edit</Menu.Item>
+                        <Menu.Divider />
+                        <Menu.Item color="red" leftSection={<IconTrash size={15} />}
+                          onClick={() => setRemoveTarget(connection)}>Delete</Menu.Item>
+                      </Menu.Dropdown>
+                    </Menu>
                   </Group>
                 </Group>
 
-                <Group gap={7} mt="md">
+                <Group gap={7} mt="sm">
                   <Badge size="sm" variant="light" color="blue"
                     leftSection={connection.authenticationType === 'private-key'
                       ? <IconKey size={11} />
                       : <IconKey size={11} />}>
                     {authenticationLabel[connection.authenticationType]}
                   </Badge>
-                  <Badge
-                    size="sm"
-                    variant="outline"
-                    color={connection.hostFingerprint ? 'teal' : 'yellow'}
-                    leftSection={<IconFingerprint size={11} />}
-                  >
+                  <Badge size="sm" variant="outline" color={connection.hostFingerprint ? 'teal' : 'yellow'}>
                     {connection.hostFingerprint ? 'Host verified' : 'Fingerprint pending'}
                   </Badge>
                 </Group>
-
-                <div className="ssh-card-meta">
-                  <Text size="xs" c="dimmed" truncate>
-                    {connection.hostFingerprint ?? 'Test once to verify the server identity'}
-                  </Text>
-                  <Text size="xs" c="dimmed">
-                    {connection.lastConnectedAt
-                      ? `Last connected ${new Date(connection.lastConnectedAt).toLocaleString()}`
-                      : 'Not connected yet'}
-                  </Text>
-                </div>
 
                 {result && (
                   <Alert mt="sm" color={result.color} variant="light"
@@ -422,7 +338,7 @@ export function SshConnectionsPage({
               </Paper>
             )
           })}
-        </div>
+        </RemoteConnectionsPanel>
       )}
 
       <Modal

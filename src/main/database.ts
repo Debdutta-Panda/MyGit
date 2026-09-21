@@ -239,6 +239,31 @@ const createSchema = (db: DatabaseSync): void => {
     CREATE INDEX IF NOT EXISTS ssh_connections_name_idx
       ON ssh_connections(name);
 
+    CREATE TABLE IF NOT EXISTS remote_connections (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL COLLATE NOCASE,
+      protocol TEXT NOT NULL CHECK (protocol IN ('ftp', 'ftps', 'sftp')),
+      host TEXT,
+      port INTEGER CHECK (port IS NULL OR port BETWEEN 1 AND 65535),
+      username TEXT,
+      sftp_source TEXT CHECK (sftp_source IS NULL OR sftp_source IN ('ssh', 'standalone')),
+      ssh_connection_id TEXT REFERENCES ssh_connections(id) ON DELETE SET NULL,
+      authentication_type TEXT CHECK (authentication_type IS NULL OR authentication_type IN ('password', 'private-key', 'agent')),
+      private_key_path TEXT,
+      agent_socket TEXT,
+      encrypted_password TEXT,
+      encrypted_passphrase TEXT,
+      tls_mode TEXT CHECK (tls_mode IS NULL OR tls_mode IN ('explicit', 'implicit')),
+      reject_unauthorized INTEGER NOT NULL DEFAULT 1,
+      host_fingerprint TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_connected_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS remote_connections_name_idx
+      ON remote_connections(name);
+
     CREATE TABLE IF NOT EXISTS ssh_mysql_profiles (
       connection_id TEXT PRIMARY KEY REFERENCES ssh_connections(id) ON DELETE CASCADE,
       access_mode TEXT NOT NULL CHECK (access_mode IN ('system', 'password')),
@@ -345,6 +370,8 @@ const createSchema = (db: DatabaseSync): void => {
       VALUES (11, datetime('now'));
     INSERT OR IGNORE INTO schema_migrations (version, applied_at)
       VALUES (12, datetime('now'));
+    INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+      VALUES (13, datetime('now'));
     INSERT OR IGNORE INTO portable_preferences (key, value_json, updated_at)
       SELECT 'app.updatePreferences',
         '{"automaticallyCheckForUpdates":' ||

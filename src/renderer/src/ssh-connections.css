@@ -1,7 +1,7 @@
 .ssh-content {
   width: min(1180px, 100%);
   margin: 0 auto;
-  padding: 30px 32px 52px;
+  padding: 18px 24px 36px;
 }
 
 .ssh-vault-card {
@@ -16,16 +16,16 @@
 }
 
 .ssh-grid {
-  margin-top: 18px;
+  margin-top: 4px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 10px;
 }
 
 .ssh-card {
   position: relative;
   min-width: 0;
-  padding: 17px 18px 16px 20px;
+  padding: 12px 13px;
   overflow: hidden;
   border: 1px solid #344252;
   background: #121922;
@@ -52,6 +52,11 @@
 }
 
 .ssh-empty { margin-top: 24px; }
+
+.connections-empty {
+  min-height: 150px;
+  padding: 24px;
+}
 
 .ssh-form-grid {
   display: grid;

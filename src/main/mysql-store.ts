@@ -1,6 +1,7 @@
 import { safeStorage } from 'electron'
 import type { SshMySqlAccessInput, SshMySqlAccessMode, SshMySqlAccessProfile } from '../shared/desktop-api'
 import { getDatabase } from './database'
+import { scheduleConfigurationSync } from './configuration-sync'
 
 interface MySqlProfileRow {
   connection_id: string
@@ -76,9 +77,11 @@ export const saveMysqlAccessProfile = (connectionId: string, input: SshMySqlAcce
       encrypted_password = excluded.encrypted_password,
       updated_at = excluded.updated_at
   `).run(connectionId, input.mode, username, encryptedPassword, updatedAt)
+  scheduleConfigurationSync()
   return getMysqlAccessProfile(connectionId)!
 }
 
 export const clearMysqlAccessProfile = (connectionId: string): void => {
   getDatabase().prepare('DELETE FROM ssh_mysql_profiles WHERE connection_id = ?').run(connectionId)
+  scheduleConfigurationSync()
 }

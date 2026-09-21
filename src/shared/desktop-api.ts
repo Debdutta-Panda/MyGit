@@ -232,6 +232,58 @@ export interface SshVaultStatus {
   label: string
 }
 
+export type RemoteConnectionProtocol = 'ftp' | 'ftps' | 'sftp'
+export type RemoteSftpSource = 'ssh' | 'standalone'
+export type RemoteAuthenticationType = 'password' | 'private-key' | 'agent'
+
+export interface RemoteConnection {
+  id: string
+  name: string
+  protocol: RemoteConnectionProtocol
+  host: string | null
+  port: number | null
+  username: string | null
+  sftpSource: RemoteSftpSource | null
+  sshConnectionId: string | null
+  authenticationType: RemoteAuthenticationType | null
+  privateKeyPath: string | null
+  agentSocket: string | null
+  hasPassword: boolean
+  hasPassphrase: boolean
+  tlsMode: 'explicit' | 'implicit' | null
+  rejectUnauthorized: boolean
+  hostFingerprint: string | null
+  createdAt: string
+  updatedAt: string
+  lastConnectedAt: string | null
+}
+
+export interface RemoteConnectionInput {
+  id?: string
+  name: string
+  protocol: RemoteConnectionProtocol
+  host?: string | null
+  port?: number | null
+  username?: string | null
+  sftpSource?: RemoteSftpSource | null
+  sshConnectionId?: string | null
+  authenticationType?: RemoteAuthenticationType | null
+  privateKeyPath?: string | null
+  agentSocket?: string | null
+  password?: string
+  passphrase?: string
+  tlsMode?: 'explicit' | 'implicit' | null
+  rejectUnauthorized?: boolean
+}
+
+export interface RemoteConnectionTestResult {
+  status: 'connected' | 'untrusted'
+  fingerprint: string | null
+  latencyMs: number | null
+  rootPath: string | null
+  message: string
+}
+
 export interface SshCommandOutput {
   id: string
   stream: 'stdout' | 'stderr'
@@ -931,10 +983,69 @@ export interface RepositoryWorkingTreeFile {
   ignored: boolean
 }
 
+export interface LocalFolderSelection {
+  path: string
+  name: string
+  gitRepository: boolean
+}
+
+export interface LocalFolderEntry {
+  name: string
+  relativePath: string
+  type: 'file' | 'directory' | 'link' | 'other'
+  size: number
+  modifiedAt: string
+}
+
+export interface LocalFolderListing extends LocalFolderSelection {
+  relativePath: string
+  parentPath: string | null
+  entries: LocalFolderEntry[]
+}
+
+export interface LocalFolderUploadInput {
+  rootPath: string
+  relativePath: string
+  remoteConnectionId: string
+  remoteDirectory: string
+  overwrite: boolean
+}
+
+export interface LocalFolderUploadProgress {
+  id: string
+  relativePath: string
+  transferredBytes: number
+  totalBytes: number
+  completedFiles: number
+  totalFiles: number
+}
+
+export interface LocalFolderUploadResult {
+  id: string
+  remotePath: string
+  uploadedFiles: number
+  uploadedBytes: number
+  skippedLinks: number
+}
+
 export interface RepositoryFilePreview {
   mimeType: string
   dataUrl: string
   size: number
+}
+
+export interface RepositoryWorkingFile {
+  content: string
+  etag: string
+  modifiedAt: string
+  size: number
+}
+
+export interface RepositoryWorkingFileWriteInput {
+  path: string
+  file: string
+  content: string
+  expectedEtag: string
 }
 
 export type RepositoryAnalyticsRange = '7d' | '30d' | '90d' | '1y' | 'all'
@@ -1145,6 +1256,19 @@ export interface DesktopApi {
     onData: (callback: (id: string, data: string) => void) => () => void
     onExit: (callback: (session: TerminalSessionInfo) => void) => () => void
   }
+  localFolders: {
+    choose: () => Promise<LocalFolderSelection | null>
+    list: (rootPath: string, relativePath?: string) => Promise<LocalFolderListing>
+    upload: (input: LocalFolderUploadInput) => Promise<LocalFolderUploadResult>
+    onUploadProgress: (callback: (progress: LocalFolderUploadProgress) => void) => () => void
+  }
+  remoteConnections: {
+    list: () => Promise<RemoteConnection[]>
+    save: (input: RemoteConnectionInput) => Promise<RemoteConnection[]>
+    remove: (id: string) => Promise<RemoteConnection[]>
+    test: (id: string, trustHostKey?: boolean) => Promise<RemoteConnectionTestResult>
+    choosePrivateKey: () => Promise<string | null>
+  }
   ssh: {
     list: () => Promise<SshConnection[]>
     save: (input: SshConnectionInput) => Promise<SshConnection[]>
@@ -1244,6 +1368,8 @@ export interface DesktopApi {
     gitCommitFileDiff: (path: string, commitHash: string, file: string) => Promise<string>
     gitWorkingTree: (path: string, includeIgnored: boolean) => Promise<RepositoryWorkingTreeFile[]>
     gitWorkingFileContent: (path: string, file: string) => Promise<string>
+    gitWorkingFile: (path: string, file: string) => Promise<RepositoryWorkingFile>
+    gitSaveWorkingFile: (input: RepositoryWorkingFileWriteInput) => Promise<RepositoryWorkingFile>
     gitWorkingFilePreview: (path: string, file: string) => Promise<RepositoryFilePreview>
     gitChangeAnalytics: (
       path: string,

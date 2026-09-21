@@ -1,7 +1,8 @@
 import { ipcMain } from 'electron'
 import { spawn } from 'node:child_process'
-import { readFile, realpath, stat } from 'node:fs/promises'
-import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
+import { readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import {
   askPassPath,
   markRepositorySynced,
@@ -21,6 +22,8 @@ import type {
   RepositoryChangeCommit,
   RepositoryAnalyticsRange,
   RepositoryWorkingTreeFile,
+  RepositoryWorkingFile,
+  RepositoryWorkingFileWriteInput,
   RepositoryBranch,
   RepositoryBranchState,
   RepositoryCheckoutStrategy,
@@ -203,6 +206,19 @@ const verifiedWorkingTreeFile = async (
   if (!fileStat.isFile()) throw new Error('Select a file to preview its contents.')
   if (fileStat.size > sizeLimit) throw new Error('This file is too large to display safely.')
   return { path: canonicalPath, size: fileStat.size }
+}
+
+const workingFileResult = async (path: string): Promise<RepositoryWorkingFile> => {
+  const [content, details] = await Promise.all([readFile(path), stat(path)])
+  if (content.subarray(0, Math.min(content.length, 8_192)).includes(0)) {
+    throw new Error('Binary files cannot be edited as text.')
+  }
+  return {
+    content: content.toString('utf8'),
+    etag: createHash('sha256').update(content).digest('hex'),
+    modifiedAt: details.mtime.toISOString(),
+    size: content.length,
+  }
 }
 
 const previewMimeTypes: Record<string, string> = {
@@ -735,6 +751,46 @@ export const registerRepositoryActionHandlers = (): void => {
         throw new Error('Binary files cannot be displayed as text.')
       }
       return content.toString('utf8')
+    },
+  )
+  ipcMain.handle(
+    'repositories:git-working-file',
+    async (_event, path: unknown, file: unknown): Promise<RepositoryWorkingFile> => {
+      const repositoryPath = await verifiedClonePath(path)
+      const target = await verifiedWorkingTreeFile(repositoryPath, file)
+      return await workingFileResult(target.path)
+    },
+  )
+  ipcMain.handle(
+    'repositories:git-save-working-file',
+    async (_event, value: unknown): Promise<RepositoryWorkingFile> => {
+      if (!value || typeof value !== 'object') throw new Error('Invalid file update.')
+      const input = value as Partial<RepositoryWorkingFileWriteInput>
+      if (typeof input.path !== 'string' || typeof input.file !== 'string' ||
+        typeof input.content !== 'string' || typeof input.expectedEtag !== 'string' ||
+        !/^[0-9a-f]{64}$/i.test(input.expectedEtag)) throw new Error('Invalid file update.')
+      const bytes = Buffer.byteLength(input.content, 'utf8')
+      if (bytes > 5_000_000) throw new Error('The edited file exceeds the 5 MB safety limit.')
+      const repositoryPath = await verifiedClonePath(input.path)
+      const target = await verifiedWorkingTreeFile(repositoryPath, input.file)
+      const current = await workingFileResult(target.path)
+      if (current.etag !== input.expectedEtag) {
+        throw new Error('LOCAL_FILE_CHANGED: This file changed on disk. Reload it before saving.')
+      }
+      const details = await stat(target.path)
+      const temporaryPath = resolve(dirname(target.path), `.${randomUUID()}.myrepos.tmp`)
+      try {
+        await writeFile(temporaryPath, input.content, { encoding: 'utf8', mode: details.mode & 0o7777 })
+        const latest = await workingFileResult(target.path)
+        if (latest.etag !== input.expectedEtag) {
+          throw new Error('LOCAL_FILE_CHANGED: This file changed on disk. Reload it before saving.')
+        }
+        await rename(temporaryPath, target.path)
+      } catch (error) {
+        await unlink(temporaryPath).catch(() => undefined)
+        throw error
+      }
+      return await workingFileResult(target.path)
     },
   )
   ipcMain.handle(

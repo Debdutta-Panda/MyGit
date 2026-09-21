@@ -65,6 +65,27 @@ const desktopApi: DesktopApi = {
       return () => ipcRenderer.removeListener('terminals:exit', listener)
     },
   },
+  localFolders: {
+    choose: () => ipcRenderer.invoke('local-folders:choose'),
+    list: (rootPath, relativePath = '') =>
+      ipcRenderer.invoke('local-folders:list', rootPath, relativePath),
+    upload: (input) => ipcRenderer.invoke('local-folders:upload', input),
+    onUploadProgress: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof callback>[0]): void => {
+        callback(progress)
+      }
+      ipcRenderer.on('local-folders:upload-progress', listener)
+      return () => ipcRenderer.removeListener('local-folders:upload-progress', listener)
+    },
+  },
+  remoteConnections: {
+    list: () => ipcRenderer.invoke('remote-connections:list'),
+    save: (input) => ipcRenderer.invoke('remote-connections:save', input),
+    remove: (id) => ipcRenderer.invoke('remote-connections:remove', id),
+    test: (id, trustHostKey = false) =>
+      ipcRenderer.invoke('remote-connections:test', id, trustHostKey),
+    choosePrivateKey: () => ipcRenderer.invoke('remote-connections:choose-private-key'),
+  },
   ssh: {
     list: () => ipcRenderer.invoke('ssh:list'),
     save: (input) => ipcRenderer.invoke('ssh:save', input),
@@ -183,6 +204,10 @@ const desktopApi: DesktopApi = {
       ipcRenderer.invoke('repositories:git-working-tree', path, includeIgnored),
     gitWorkingFileContent: (path, file) =>
       ipcRenderer.invoke('repositories:git-working-file-content', path, file),
+    gitWorkingFile: (path, file) =>
+      ipcRenderer.invoke('repositories:git-working-file', path, file),
+    gitSaveWorkingFile: (input) =>
+      ipcRenderer.invoke('repositories:git-save-working-file', input),
     gitWorkingFilePreview: (path, file) =>
       ipcRenderer.invoke('repositories:git-working-file-preview', path, file),
     gitChangeAnalytics: (path, range) =>
