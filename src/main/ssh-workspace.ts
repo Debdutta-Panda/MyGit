@@ -411,14 +411,16 @@ const apachePrivileged = async (
   const remoteCommand = options.remoteTimeoutSeconds
     ? [
         "if command -v timeout >/dev/null 2>&1; then",
-        `timeout --signal=TERM --kill-after=15s ${Math.trunc(options.remoteTimeoutSeconds)}s sh -c ${shellQuote(command)}`,
-        'status=$?',
-        `if [ "$status" = 124 ] || [ "$status" = 137 ]; then echo ${shellQuote(options.remoteTimeoutMessage ?? 'The remote operation reached its time limit.')} >&2; fi`,
-        'exit "$status"',
+        `  timeout --signal=TERM --kill-after=15s ${Math.trunc(options.remoteTimeoutSeconds)}s sh -c ${shellQuote(command)}`,
+        '  status=$?',
+        '  if [ "$status" = 124 ] || [ "$status" = 137 ]; then',
+        `    echo ${shellQuote(options.remoteTimeoutMessage ?? 'The remote operation reached its time limit.')} >&2`,
+        '  fi',
+        '  exit "$status"',
         'else',
         command,
         'fi',
-      ].join(' ')
+      ].join('\n')
     : command
   const elevated = privilege.root ? remoteCommand : `sudo -n sh -c ${shellQuote(remoteCommand)}`
   return input === undefined
