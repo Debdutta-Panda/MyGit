@@ -17,6 +17,13 @@ const errorMessage = (reason: unknown): string => reason instanceof Error
 const domainList = (value: string): string[] => value.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean)
 const certificateColor = (status: SshApacheSslCertificate['status']): string =>
   status === 'valid' ? 'teal' : status === 'expiring' ? 'yellow' : 'red'
+const sslErrorSummary = (value: string): string => {
+  if (/could not bind (?:tcp )?port 80/i.test(value)) {
+    return 'This certificate uses standalone renewal, but Apache is already using port 80.'
+  }
+  const line = value.split(/\r?\n/).map((item) => item.trim()).find(Boolean) ?? value
+  return line.length > 220 ? `${line.slice(0, 217)}...` : line
+}
 
 export function ApacheSslManager({ connection }: { connection: SshConnection }) {
   const [overview, setOverview] = useState<SshApacheSslOverview | null>(null)
@@ -82,26 +89,34 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
       <div><Group gap={7}><IconShieldCheck size={18} /><Text fw={750}>SSL management</Text></Group>
         <Text size="xs" c="dimmed">Certificates, HTTPS activation, renewal and diagnostics for Apache sites.</Text></div>
       <Group gap={6} wrap="nowrap">
-        {!overview?.certbotInstalled && <Button size="compact-xs" color="teal" loading={action === 'install'}
-          disabled={!overview?.canManage} onClick={() => void run('install', { kind: 'install-certbot', confirmation: 'install-certbot' })}>Install Certbot</Button>}
+        {overview && (!overview.certbotInstalled || !overview.apachePluginInstalled) && <Button size="compact-xs" color="teal" loading={action === 'install'}
+          disabled={!overview.canManage} onClick={() => void run('install', { kind: 'install-certbot', confirmation: 'install-certbot' })}>
+          {overview.certbotInstalled ? 'Install Apache plugin' : 'Install Certbot'}
+        </Button>}
         <Tooltip label="Detect SSL state again"><ActionIcon variant="subtle" color="gray" loading={loading} onClick={() => void load()}><IconRefresh size={16} /></ActionIcon></Tooltip>
       </Group>
     </header>
 
-    {error && <Alert color="red" icon={<IconAlertCircle size={16} />} withCloseButton onClose={() => setError(null)}>{error}</Alert>}
+    {error && <Alert color="red" icon={<IconAlertCircle size={16} />} withCloseButton onClose={() => setError(null)}>
+      <Text size="sm" fw={650}>{sslErrorSummary(error)}</Text>
+      {sslErrorSummary(error) !== error && <details className="apache-ssl-error-details">
+        <summary>Technical details</summary>
+        <pre>{error}</pre>
+      </details>}
+    </Alert>}
     {result && <Alert color="teal" icon={<IconCircleCheck size={16} />} withCloseButton onClose={() => setResult(null)}><pre className="ssh-web-output">{result}</pre></Alert>}
 
     <div className="apache-ssl-health">
-      <article data-ok={overview?.certbotInstalled || undefined}><IconCertificate size={18} /><span><small>Certbot</small><strong>{overview?.certbotInstalled ? overview.certbotVersion : 'Not installed'}</strong></span></article>
+      <article data-ok={overview?.certbotInstalled && overview?.apachePluginInstalled || undefined}><IconCertificate size={18} /><span><small>Certbot</small><strong>{overview?.certbotInstalled ? overview.certbotVersion : 'Not installed'}</strong><em>{overview?.certbotInstalled ? overview.apachePluginInstalled ? 'Apache plugin ready' : 'Apache plugin missing' : "Required for Let's Encrypt"}</em></span></article>
       <article data-ok={overview?.renewalEnabled && overview?.renewalActive || undefined}><IconClockShield size={18} /><span><small>Automatic renewal</small><strong>{overview?.renewalTimer ? overview.renewalEnabled && overview.renewalActive ? 'Active' : 'Inactive' : 'Not detected'}</strong><em>{overview?.nextRenewalAt || 'No next run available'}</em></span></article>
       <article data-ok={overview?.opensslInstalled || undefined}><IconShieldCheck size={18} /><span><small>Inventory</small><strong>{overview?.certificates.length ?? 0} certificates</strong><em>{overview?.sites.filter((site) => site.httpsEnabled).length ?? 0} HTTPS sites</em></span></article>
       <section className="apache-ssl-renew-controls">
         <Switch size="sm" label="Automatic renewal" checked={overview?.renewalEnabled === true}
-          disabled={!overview?.certbotInstalled || !overview?.canManage || Boolean(action)}
+          disabled={!overview?.certbotInstalled || !overview?.apachePluginInstalled || !overview?.canManage || Boolean(action)}
           onChange={(event) => void run('auto-renew', { kind: 'set-auto-renew', enabled: event.currentTarget.checked, confirmation: 'auto-renew' })} />
-        <Button size="compact-xs" variant="subtle" color="gray" loading={action === 'dry-run'} disabled={!overview?.certbotInstalled}
+        <Button size="compact-xs" variant="subtle" color="gray" loading={action === 'dry-run'} disabled={!overview?.certbotInstalled || !overview?.apachePluginInstalled}
           onClick={() => void run('dry-run', { kind: 'test-renewal' })}>Test renewal</Button>
-        <Button size="compact-xs" variant="light" color="teal" loading={action === 'renew-all'} disabled={!overview?.certbotInstalled || !overview?.canManage}
+        <Button size="compact-xs" variant="light" color="teal" loading={action === 'renew-all'} disabled={!overview?.certbotInstalled || !overview?.apachePluginInstalled || !overview?.canManage}
           onClick={() => void run('renew-all', { kind: 'renew', force: false, confirmation: 'renew' })}>Renew due certificates</Button>
       </section>
     </div>

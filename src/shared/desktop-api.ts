@@ -411,6 +411,7 @@ export interface SshApacheSslOverview {
   connectionId: string
   certbotInstalled: boolean
   certbotVersion: string | null
+  apachePluginInstalled: boolean
   opensslInstalled: boolean
   renewalTimer: string | null
   renewalEnabled: boolean | null

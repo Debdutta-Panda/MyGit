@@ -584,7 +584,7 @@ const apacheSslInspectionCommand = [
   'set +e',
   "b64(){ printf '%s' \"$1\" | base64 | tr -d '\\n'; }",
   "certbot_bin=$(command -v certbot 2>/dev/null || true); openssl_bin=$(command -v openssl 2>/dev/null || true)",
-  "certbot_version=''; [ -n \"$certbot_bin\" ] && certbot_version=$(certbot --version 2>&1 | head -n1); printf 'tool|%s|%s|%s\\n' \"$(b64 \"$certbot_bin\")\" \"$(b64 \"$certbot_version\")\" \"$(b64 \"$openssl_bin\")\"",
+  "certbot_version=''; apache_plugin=0; if [ -n \"$certbot_bin\" ]; then certbot_version=$(certbot --version 2>&1 | head -n1); certbot plugins 2>/dev/null | grep -Eq '(^|[[:space:]])apache([[:space:]]|$)' && apache_plugin=1; fi; printf 'tool|%s|%s|%s|%s\\n' \"$(b64 \"$certbot_bin\")\" \"$(b64 \"$certbot_version\")\" \"$(b64 \"$openssl_bin\")\" \"$apache_plugin\"",
   "timer=''; if command -v systemctl >/dev/null 2>&1; then for candidate in certbot.timer snap.certbot.renew.timer; do load=$(systemctl show \"$candidate\" -p LoadState --value 2>/dev/null || true); [ -n \"$load\" ] && [ \"$load\" != not-found ] && { timer=$candidate; break; }; done; fi",
   "timer_enabled=''; timer_active=''; timer_next=''; if [ -n \"$timer\" ]; then timer_enabled=$(systemctl is-enabled \"$timer\" 2>/dev/null || true); timer_active=$(systemctl is-active \"$timer\" 2>/dev/null || true); timer_next=$(systemctl list-timers \"$timer\" --no-legend --no-pager 2>/dev/null | head -n1); fi; printf 'timer|%s|%s|%s|%s\\n' \"$(b64 \"$timer\")\" \"$timer_enabled\" \"$timer_active\" \"$(b64 \"$timer_next\")\"",
   "for spec in '/etc/apache2/sites-available|0' '/etc/apache2/sites-enabled|1' '/etc/httpd/conf.d|1'; do directory=${spec%%|*}; enabled=${spec##*|}; [ -d \"$directory\" ] || continue; find \"$directory\" -mindepth 1 -maxdepth 1 \\( -type f -o -type l \\) -print 2>/dev/null | while IFS= read -r path; do target=$(readlink -f \"$path\" 2>/dev/null || printf '%s' \"$path\"); [ -f \"$target\" ] || continue; printf 'site|%s|%s|%s|%s\\n' \"$enabled\" \"$(b64 \"$(basename \"$path\")\")\" \"$(b64 \"$target\")\" \"$(base64 \"$target\" 2>/dev/null | tr -d '\\n')\"; done; done",
@@ -602,6 +602,7 @@ const apacheSslOverview = async (id: string): Promise<SshApacheSslOverview> =>
     const output = await exec(client, command)
     let certbotInstalled = false
     let certbotVersion: string | null = null
+    let apachePluginInstalled = false
     let opensslInstalled = false
     let renewalTimer: string | null = null
     let renewalEnabled: boolean | null = null
@@ -616,6 +617,7 @@ const apacheSslOverview = async (id: string): Promise<SshApacheSslOverview> =>
         certbotInstalled = Boolean(decoded(values[0]))
         certbotVersion = decoded(values[1]) || null
         opensslInstalled = Boolean(decoded(values[2]))
+        apachePluginInstalled = values[3] === '1'
       } else if (record === 'timer') {
         renewalTimer = decoded(values[0]) || null
         renewalEnabled = values[1] ? values[1] === 'enabled' : null
@@ -669,6 +671,7 @@ const apacheSslOverview = async (id: string): Promise<SshApacheSslOverview> =>
       connectionId: connection.id,
       certbotInstalled,
       certbotVersion,
+      apachePluginInstalled,
       opensslInstalled,
       renewalTimer,
       renewalEnabled,
@@ -773,15 +776,24 @@ const apacheSslAction = async (id: string, action: SshApacheSslAction): Promise<
   if (!action || typeof action.kind !== 'string') throw new Error('Invalid SSL action.')
   const output = await withClient(id, async (client) => {
     if (action.kind === 'test-renewal') {
-      return await apachePrivileged(client, "command -v certbot >/dev/null 2>&1 || { echo 'Certbot is not installed.' >&2; exit 1; }; certbot renew --dry-run --non-interactive")
+      return await apachePrivileged(client, [
+        'set -e',
+        "command -v certbot >/dev/null 2>&1 || { echo 'Certbot is not installed.' >&2; exit 1; }",
+        "certbot plugins 2>/dev/null | grep -Eq '(^|[[:space:]])apache([[:space:]]|$)' || { echo 'The Certbot Apache plugin is required. Install it from SSL management first.' >&2; exit 1; }",
+        apacheTestCommand,
+        'certbot renew --dry-run --non-interactive --apache',
+        apacheTestCommand,
+      ].join('; '))
     }
     if (action.kind === 'install-certbot') {
       if (action.confirmation !== 'install-certbot') throw new Error('Confirm Certbot installation.')
       return await apachePrivileged(client, [
         'set -e',
-        "command -v certbot >/dev/null 2>&1 && { certbot --version; exit 0; }",
+        "if command -v certbot >/dev/null 2>&1 && certbot plugins 2>/dev/null | grep -Eq '(^|[[:space:]])apache([[:space:]]|$)'; then certbot --version; echo 'Apache plugin is ready.'; exit 0; fi",
         "if command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y certbot python3-certbot-apache; elif command -v dnf >/dev/null 2>&1; then dnf install -y certbot python3-certbot-apache; elif command -v yum >/dev/null 2>&1; then yum install -y certbot python3-certbot-apache; else echo 'Supported package manager not found.' >&2; exit 1; fi",
         'certbot --version',
+        "certbot plugins 2>/dev/null | grep -Eq '(^|[[:space:]])apache([[:space:]]|$)' || { echo 'Certbot was installed but its Apache plugin is unavailable.' >&2; exit 1; }",
+        "echo 'Apache plugin is ready.'",
       ].join('; '))
     }
     if (action.kind === 'set-auto-renew') {
@@ -794,8 +806,31 @@ const apacheSslAction = async (id: string, action: SshApacheSslAction): Promise<
     if (action.kind === 'renew') {
       if (action.confirmation !== 'renew') throw new Error('Confirm certificate renewal.')
       const name = action.certificateName ? sslName(action.certificateName) : null
-      const command = ['certbot renew --non-interactive', name ? `--cert-name ${shellQuote(name)}` : '', action.force ? '--force-renewal' : ''].filter(Boolean).join(' ')
-      return await apachePrivileged(client, `command -v certbot >/dev/null 2>&1 || { echo 'Certbot is not installed.' >&2; exit 1; }; ${command}`)
+      const command = ['certbot renew --non-interactive --apache', name ? `--cert-name ${shellQuote(name)}` : '', action.force ? '--force-renewal' : ''].filter(Boolean).join(' ')
+      const renewalFiles = name
+        ? shellQuote(`/etc/letsencrypt/renewal/${name}.conf`)
+        : '/etc/letsencrypt/renewal/*.conf'
+      const migrateStandaloneRenewals = [
+        'if certbot help reconfigure >/dev/null 2>&1; then',
+        `for renewal in ${renewalFiles}; do`,
+        '[ -f "$renewal" ] || continue;',
+        "grep -Eq '^[[:space:]]*authenticator[[:space:]]*=[[:space:]]*standalone[[:space:]]*$' \"$renewal\" || continue;",
+        "certificate=$(basename \"$renewal\" .conf);",
+        "printf 'Changing %s renewal from standalone to Apache...\\n' \"$certificate\";",
+        'certbot reconfigure --non-interactive --cert-name "$certificate" --apache;',
+        'done;',
+        "else echo 'This Certbot version cannot save the Apache renewal method; upgrade to Certbot 2.3 or newer.' >&2;",
+        'fi',
+      ].join(' ')
+      return await apachePrivileged(client, [
+        'set -e',
+        "command -v certbot >/dev/null 2>&1 || { echo 'Certbot is not installed.' >&2; exit 1; }",
+        "certbot plugins 2>/dev/null | grep -Eq '(^|[[:space:]])apache([[:space:]]|$)' || { echo 'The Certbot Apache plugin is required. Install it from SSL management first.' >&2; exit 1; }",
+        apacheTestCommand,
+        migrateStandaloneRenewals,
+        command,
+        apacheTestCommand,
+      ].join('; '))
     }
     if (action.kind === 'issue') {
       if (action.confirmation !== 'issue') throw new Error('Confirm certificate issuance.')
