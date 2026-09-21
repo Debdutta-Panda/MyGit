@@ -18,6 +18,9 @@ const domainList = (value: string): string[] => value.split(/[\s,]+/).map((item)
 const certificateColor = (status: SshApacheSslCertificate['status']): string =>
   status === 'valid' ? 'teal' : status === 'expiring' ? 'yellow' : 'red'
 const sslErrorSummary = (value: string): string => {
+  if (/unable to find a virtual host listening on port 80/i.test(value)) {
+    return "Apache has no enabled HTTP virtual host for Let's Encrypt validation."
+  }
   if (/could not bind (?:tcp )?port 80/i.test(value)) {
     return 'This certificate uses standalone renewal, but Apache is already using port 80.'
   }
@@ -69,6 +72,10 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
   const selectedCertificate = useMemo(() => selectedSite?.certificatePath
     ? overview?.certificates.find((certificate) => certificate.certificatePath === selectedSite.certificatePath) ?? null
     : null, [overview, selectedSite])
+  const selectedHttpDomains = selectedSite?.serverNames.length
+    ? selectedSite.serverNames
+    : selectedCertificate?.domains ?? []
+  const hasHttpValidationHost = overview?.sites.some((site) => site.enabled && site.httpEnabled) ?? false
 
   const run = async (key: string, request: SshApacheSslAction): Promise<void> => {
     if (!window.desktop) return
@@ -120,14 +127,18 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
       <article data-ok={overview?.opensslInstalled || undefined}><IconShieldCheck size={18} /><span><small>Inventory</small><strong>{overview?.certificates.length ?? 0} certificates</strong><em>{overview?.sites.filter((site) => site.httpsEnabled).length ?? 0} HTTPS sites</em></span></article>
       <section className="apache-ssl-renew-controls">
         <Switch size="sm" label="Automatic renewal" checked={overview?.renewalEnabled === true}
-          disabled={!overview?.certbotInstalled || !overview?.apachePluginInstalled || !overview?.canManage || Boolean(action)}
+          disabled={!overview?.certbotInstalled || !overview?.apachePluginInstalled || !overview?.canManage || Boolean(action) || (!hasHttpValidationHost && overview?.renewalEnabled !== true)}
           onChange={(event) => void run('auto-renew', { kind: 'set-auto-renew', enabled: event.currentTarget.checked, confirmation: 'auto-renew' })} />
-        <Button size="compact-xs" variant="subtle" color="gray" loading={action === 'dry-run'} disabled={!overview?.certbotInstalled || !overview?.apachePluginInstalled}
+        <Button size="compact-xs" variant="subtle" color="gray" loading={action === 'dry-run'} disabled={!overview?.certbotInstalled || !overview?.apachePluginInstalled || !hasHttpValidationHost}
           onClick={() => void run('dry-run', { kind: 'test-renewal' })}>Test renewal</Button>
-        <Button size="compact-xs" variant="light" color="teal" loading={action === 'renew-all'} disabled={!overview?.certbotInstalled || !overview?.apachePluginInstalled || !overview?.canManage}
+        <Button size="compact-xs" variant="light" color="teal" loading={action === 'renew-all'} disabled={!overview?.certbotInstalled || !overview?.apachePluginInstalled || !hasHttpValidationHost || !overview?.canManage}
           onClick={() => void run('renew-all', { kind: 'renew', force: false, confirmation: 'renew' })}>Renew due certificates</Button>
       </section>
     </div>
+
+    {overview && !hasHttpValidationHost && <Alert color="yellow" icon={<IconAlertCircle size={16} />}>
+      Apache has no enabled port 80 virtual host. Select a site and enable HTTP validation before issuing, testing, or renewing certificates.
+    </Alert>}
 
     <div className="apache-ssl-site-layout">
       <aside className="apache-ssl-sites">
@@ -141,8 +152,11 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
 
       <main className="apache-ssl-site-detail">
         {!selectedSite ? <div className="ssh-web-empty"><Text size="sm">Select a site</Text></div> : <>
-          <header><div><Group gap={7}><Text fw={750}>{selectedSite.serverNames[0] || selectedSite.name}</Text><Badge size="xs" color={selectedSite.httpsEnabled ? 'teal' : 'gray'}>{selectedSite.httpsEnabled ? 'HTTPS enabled' : 'HTTP only'}</Badge>{selectedSite.redirectsToHttps && <Badge size="xs" color="blue">Redirects to HTTPS</Badge>}</Group><Text size="xs" c="dimmed">{selectedSite.path}</Text></div>
-            <Group gap={6}><Button size="compact-xs" variant="light" disabled={!overview?.canManage} onClick={() => prepareDialog('issue')}>Issue certificate</Button><Button size="compact-xs" variant="subtle" color="gray" disabled={!overview?.opensslInstalled || !overview?.canManage} onClick={() => prepareDialog('self-signed')}>Self-signed</Button><Button size="compact-xs" variant="subtle" color="gray" disabled={!overview?.canManage} onClick={() => prepareDialog('import')}>Import PEM</Button></Group></header>
+          <header><div><Group gap={7}><Text fw={750}>{selectedSite.serverNames[0] || selectedSite.name}</Text><Badge size="xs" color={selectedSite.httpsEnabled ? 'teal' : 'gray'}>{selectedSite.httpsEnabled ? 'HTTPS enabled' : 'HTTPS off'}</Badge><Badge size="xs" color={selectedSite.httpEnabled ? 'blue' : 'yellow'}>{selectedSite.httpEnabled ? 'HTTP validation ready' : 'No port 80 host'}</Badge>{selectedSite.redirectsToHttps && <Badge size="xs" color="blue">Redirects to HTTPS</Badge>}</Group><Text size="xs" c="dimmed">{selectedSite.path}</Text></div>
+            <Group gap={6}>
+              {(!selectedSite.httpEnabled || !selectedSite.enabled) && <Button size="compact-xs" color="blue" loading={action === 'enable-http-site'} disabled={!overview?.canManage || !selectedSite.documentRoot || selectedHttpDomains.length === 0} onClick={() => selectedSite.documentRoot && void run('enable-http-site', { kind: 'enable-http-site', sitePath: selectedSite.path, domains: selectedHttpDomains, documentRoot: selectedSite.documentRoot, confirmation: 'http-site' })}>{selectedSite.httpEnabled ? 'Enable site' : 'Enable HTTP validation'}</Button>}
+              <Button size="compact-xs" variant="light" disabled={!overview?.canManage || !selectedSite.httpEnabled || !selectedSite.enabled} onClick={() => prepareDialog('issue')}>Issue certificate</Button><Button size="compact-xs" variant="subtle" color="gray" disabled={!overview?.opensslInstalled || !overview?.canManage} onClick={() => prepareDialog('self-signed')}>Self-signed</Button><Button size="compact-xs" variant="subtle" color="gray" disabled={!overview?.canManage} onClick={() => prepareDialog('import')}>Import PEM</Button>
+            </Group></header>
           <div className="apache-ssl-site-facts">
             <section><small>Domains</small><strong>{selectedSite.serverNames.join(', ') || 'Not declared'}</strong></section>
             <section><small>Document root</small><code>{selectedSite.documentRoot || 'Not declared'}</code></section>
@@ -150,7 +164,7 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
             <section><small>Private key</small><code>{selectedSite.privateKeyPath || 'Not configured'}</code></section>
           </div>
           {selectedCertificate ? <div className="apache-ssl-certificate-card">
-            <Group justify="space-between" align="flex-start"><div><Group gap={7}><IconCertificate size={18} /><Text fw={720}>{selectedCertificate.name}</Text><Badge size="xs" color={certificateColor(selectedCertificate.status)}>{selectedCertificate.status}</Badge><Badge size="xs" variant="outline">{selectedCertificate.managedBy}</Badge></Group><Text size="xs" c="dimmed" mt={4}>{selectedCertificate.domains.join(', ') || 'No SAN domains reported'}</Text></div><Group gap={6}><Button size="compact-xs" variant="light" loading={action === `renew:${selectedCertificate.name}`} disabled={selectedCertificate.managedBy !== 'certbot' || !overview.canManage} onClick={() => void run(`renew:${selectedCertificate.name}`, { kind: 'renew', certificateName: selectedCertificate.name, force: true, confirmation: 'renew' })}>Renew now</Button><Tooltip label="Revoke certificate"><ActionIcon color="red" variant="subtle" disabled={selectedCertificate.managedBy !== 'certbot' || !overview.canManage} onClick={() => { setCertificateToRevoke(selectedCertificate); setDialog('revoke') }}><IconTrash size={16} /></ActionIcon></Tooltip></Group></Group>
+            <Group justify="space-between" align="flex-start"><div><Group gap={7}><IconCertificate size={18} /><Text fw={720}>{selectedCertificate.name}</Text><Badge size="xs" color={certificateColor(selectedCertificate.status)}>{selectedCertificate.status}</Badge><Badge size="xs" variant="outline">{selectedCertificate.managedBy}</Badge></Group><Text size="xs" c="dimmed" mt={4}>{selectedCertificate.domains.join(', ') || 'No SAN domains reported'}</Text></div><Group gap={6}><Button size="compact-xs" variant="light" loading={action === `renew:${selectedCertificate.name}`} disabled={selectedCertificate.managedBy !== 'certbot' || !overview.apachePluginInstalled || !selectedSite.httpEnabled || !selectedSite.enabled || !overview.canManage} onClick={() => void run(`renew:${selectedCertificate.name}`, { kind: 'renew', certificateName: selectedCertificate.name, force: true, confirmation: 'renew' })}>Renew now</Button><Tooltip label="Revoke certificate"><ActionIcon color="red" variant="subtle" disabled={selectedCertificate.managedBy !== 'certbot' || !overview.canManage} onClick={() => { setCertificateToRevoke(selectedCertificate); setDialog('revoke') }}><IconTrash size={16} /></ActionIcon></Tooltip></Group></Group>
             <div className="apache-ssl-certificate-meta"><span><small>Expires</small><strong>{selectedCertificate.expiresAt || 'Unknown'}</strong></span><span><small>Remaining</small><strong>{selectedCertificate.daysRemaining === null ? 'Unknown' : `${selectedCertificate.daysRemaining} days`}</strong></span><span><small>Issuer</small><strong>{selectedCertificate.issuer || 'Unknown'}</strong></span><span><small>Serial</small><code>{selectedCertificate.serialNumber || 'Unknown'}</code></span></div>
           </div> : <Alert color="yellow" icon={<IconAlertCircle size={16} />}>No readable certificate is linked to this site.</Alert>}
         </>}

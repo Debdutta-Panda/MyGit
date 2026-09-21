@@ -386,6 +386,7 @@ export interface SshApacheSslSite {
   enabled: boolean
   serverNames: string[]
   documentRoot: string | null
+  httpEnabled: boolean
   httpsEnabled: boolean
   redirectsToHttps: boolean
   certificatePath: string | null
@@ -426,6 +427,7 @@ export interface SshApacheSslOverview {
 
 export type SshApacheSslAction =
   | { kind: 'install-certbot'; confirmation: 'install-certbot' }
+  | { kind: 'enable-http-site'; sitePath: string; domains: string[]; documentRoot: string; confirmation: 'http-site' }
   | { kind: 'issue'; sitePath: string; domains: string[]; email: string; challenge: 'apache' | 'webroot'; webroot?: string; redirect: boolean; staging: boolean; confirmation: 'issue' }
   | { kind: 'renew'; certificateName?: string; force: boolean; confirmation: 'renew' }
   | { kind: 'test-renewal' }

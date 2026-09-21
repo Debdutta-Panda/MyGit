@@ -641,6 +641,7 @@ const apacheSslOverview = async (id: string): Promise<SshApacheSslOverview> =>
           enabled,
           serverNames,
           documentRoot: apacheDirective(source, 'DocumentRoot'),
+          httpEnabled: /<VirtualHost\s+[^>]*:80\b/i.test(source),
           httpsEnabled: /<VirtualHost\s+[^>]*:443\b/i.test(source) || /^\s*SSLEngine\s+on\b/im.test(source),
           redirectsToHttps: /^\s*Redirect\s+(?:permanent\s+)?\/\s+https:/im.test(source) || /RewriteRule\s+.+https:/i.test(source),
           certificatePath: apacheDirective(source, 'SSLCertificateFile'),
@@ -704,6 +705,26 @@ const sslVirtualHost = (
     `    SSLCertificateFile ${certificatePath}`,
     `    SSLCertificateKeyFile ${keyPath}`,
     ...(chainPath ? [`    SSLCertificateChainFile ${chainPath}`] : []),
+    '</VirtualHost>',
+    '',
+  ].join('\n')
+}
+
+const sslHttpVirtualHost = (
+  domains: string[],
+  documentRoot: string,
+): string => {
+  const [primary, ...aliases] = domains
+  return [
+    '',
+    '<VirtualHost *:80>',
+    `    ServerName ${primary}`,
+    ...(aliases.length ? [`    ServerAlias ${aliases.join(' ')}`] : []),
+    `    DocumentRoot ${documentRoot}`,
+    `    <Directory "${documentRoot}">`,
+    '        AllowOverride All',
+    '        Require all granted',
+    '    </Directory>',
     '</VirtualHost>',
     '',
   ].join('\n')
@@ -795,6 +816,36 @@ const apacheSslAction = async (id: string, action: SshApacheSslAction): Promise<
         "certbot plugins 2>/dev/null | grep -Eq '(^|[[:space:]])apache([[:space:]]|$)' || { echo 'Certbot was installed but its Apache plugin is unavailable.' >&2; exit 1; }",
         "echo 'Apache plugin is ready.'",
       ].join('; '))
+    }
+    if (action.kind === 'enable-http-site') {
+      if (action.confirmation !== 'http-site') throw new Error('Confirm HTTP validation host creation.')
+      const site = apacheSafePath(action.sitePath)
+      const domains = sslDomains(action.domains)
+      const documentRoot = sslWebPath(action.documentRoot)
+      const block = sslHttpVirtualHost(domains, documentRoot)
+      const reload = [
+        "svc=''",
+        "if command -v systemctl >/dev/null 2>&1; then for candidate in apache2 httpd; do systemctl show \"$candidate.service\" -p LoadState --value 2>/dev/null | grep -qv '^not-found$' && { svc=$candidate; break; }; done; fi",
+        "if [ -n \"$svc\" ]; then systemctl reload \"$svc.service\"; else control=$(command -v apache2ctl 2>/dev/null || command -v apachectl 2>/dev/null); [ -n \"$control\" ] && \"$control\" graceful; fi",
+      ].join('; ')
+      const command = [
+        'set -eu',
+        `site=${shellQuote(site)}`,
+        `document_root=${shellQuote(documentRoot)}`,
+        '[ -f "$site" ] || { echo "The selected Apache site file no longer exists." >&2; exit 1; }',
+        '[ -d "$document_root" ] || { echo "The document root does not exist." >&2; exit 1; }',
+        'had_http=0',
+        "grep -Eiq '<VirtualHost[[:space:]]+[^>]*:80([^0-9]|$)' \"$site\" && had_http=1",
+        'backup="$site.myrepos-$(date +%Y%m%d-%H%M%S).bak"',
+        'cp -a -- "$site" "$backup"',
+        `if [ "$had_http" = 0 ]; then printf '%s' ${shellQuote(block)} >> "$site"; fi`,
+        'enabled_here=0',
+        "case \"$site\" in /etc/apache2/sites-available/*) name=$(basename \"$site\"); if [ ! -e \"/etc/apache2/sites-enabled/$name\" ] && command -v a2ensite >/dev/null 2>&1; then a2ensite \"$name\" >/dev/null; enabled_here=1; fi;; esac",
+        `validation=$(${apacheTestCommand} 2>&1) || { cp -a -- "$backup" "$site"; [ "$enabled_here" = 1 ] && a2dissite "$(basename "$site")" >/dev/null 2>&1 || true; printf '%s\n' "$validation" >&2; exit 1; }`,
+        `reload_output=$(${reload} 2>&1) || { cp -a -- "$backup" "$site"; [ "$enabled_here" = 1 ] && a2dissite "$(basename "$site")" >/dev/null 2>&1 || true; ${reload} >/dev/null 2>&1 || true; printf '%s\n' "$reload_output" >&2; exit 1; }`,
+        "printf 'HTTP validation is enabled for this site.\\nBackup: %s\\n%s\\n' \"$backup\" \"$validation\"",
+      ].join('; ')
+      return await apachePrivileged(client, command)
     }
     if (action.kind === 'set-auto-renew') {
       if (action.confirmation !== 'auto-renew') throw new Error('Confirm the automatic renewal change.')
