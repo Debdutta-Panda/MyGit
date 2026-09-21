@@ -265,39 +265,54 @@ function SafeAutoPushCardCountdown({
     return () => window.clearInterval(timer)
   }, [state?.phase, state?.dueAt])
 
-  if (state?.phase !== 'countdown') return null
+  const isCountdown = state?.phase === 'countdown'
+  const isPushing = state?.phase === 'pushing'
+  const isPushed = state?.phase === 'pushed'
+  if (!isCountdown && !isPushing && !isPushed) return null
+
+  const label = isCountdown ? 'AUTO-PUSH' : isPushing ? 'PUSHING' : 'PUSHED'
 
   return <div
     className="repository-auto-push-countdown"
+    data-phase={state.phase}
     role="status"
     aria-live="polite"
-    aria-label={`Safe auto-push starts in ${remaining} seconds`}
+    aria-label={state.message}
+    title={state.message}
   >
-    <IconClock size={15} aria-hidden="true" />
-    <span className="repository-auto-push-countdown-label">AUTO-PUSH</span>
-    <strong>{remaining}</strong>
-    <span className="repository-auto-push-countdown-unit">s</span>
-    <Tooltip label="Cancel this scheduled push">
-      <ActionIcon
-        className="repository-auto-push-countdown-cancel"
-        size={22}
-        variant="subtle"
-        color="cyan"
-        aria-label="Cancel this scheduled push"
-        onClick={(event) => {
-          event.stopPropagation()
-          onCancel()
-        }}
-      >
-        <IconX size={14} />
-      </ActionIcon>
-    </Tooltip>
+    {isCountdown
+      ? <IconClock size={15} aria-hidden="true" />
+      : isPushing
+        ? <Loader size={14} color="cyan" aria-hidden="true" />
+        : <IconCloudCheck size={15} aria-hidden="true" />}
+    <span className="repository-auto-push-countdown-label">{label}</span>
+    {isCountdown && <>
+      <strong>{remaining}</strong>
+      <span className="repository-auto-push-countdown-unit">s</span>
+      <Tooltip label="Cancel this scheduled push">
+        <ActionIcon
+          className="repository-auto-push-countdown-cancel"
+          size={22}
+          variant="subtle"
+          color="cyan"
+          aria-label="Cancel this scheduled push"
+          onClick={(event) => {
+            event.stopPropagation()
+            onCancel()
+          }}
+        >
+          <IconX size={14} />
+        </ActionIcon>
+      </Tooltip>
+    </>}
+    {isPushing && <span className="repository-auto-push-activity">IN PROGRESS</span>}
+    {isPushed && <span className="repository-auto-push-activity">COMPLETE</span>}
     <Progress
       className="repository-auto-push-countdown-progress"
-      value={(15 - remaining) / 15 * 100}
-      color="cyan"
+      value={isCountdown ? (15 - remaining) / 15 * 100 : 100}
+      color={isPushed ? 'teal' : 'cyan'}
       size={4}
-      animated
+      animated={!isPushed}
     />
   </div>
 }

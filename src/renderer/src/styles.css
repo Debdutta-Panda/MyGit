@@ -3560,6 +3560,34 @@ textarea { font: inherit; }
   font-weight: 800;
 }
 
+.repository-auto-push-activity {
+  margin-left: auto;
+  color: #9eeeff;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.035em;
+  white-space: nowrap;
+}
+
+.repository-auto-push-countdown[data-phase='pushing'] {
+  border-color: #22d3ee;
+  background: #0a303d;
+  box-shadow: inset 2px 0 0 #67e8f9, 0 3px 10px rgba(0, 0, 0, 0.24);
+}
+
+.repository-auto-push-countdown[data-phase='pushed'] {
+  color: #a7f3d0;
+  border-color: #10b981;
+  background: #0b3029;
+  box-shadow: inset 2px 0 0 #34d399, 0 3px 10px rgba(0, 0, 0, 0.24);
+}
+
+.repository-auto-push-countdown[data-phase='pushed'] .repository-auto-push-countdown-label,
+.repository-auto-push-countdown[data-phase='pushed'] .repository-auto-push-activity,
+.repository-auto-push-countdown[data-phase='pushed'] > svg {
+  color: #a7f3d0;
+}
+
 .repository-auto-push-countdown-cancel {
   flex: 0 0 22px;
   margin-left: 1px;
