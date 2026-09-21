@@ -76,6 +76,7 @@ const desktopApi: DesktopApi = {
     saveCommandTemplates: (id, kind, templates) =>
       ipcRenderer.invoke('ssh:save-command-templates', id, kind, templates),
     serverOverview: (id) => ipcRenderer.invoke('ssh:server-overview', id),
+    apacheOverview: (id) => ipcRenderer.invoke('ssh:apache-overview', id),
     mysqlOverview: (id) => ipcRenderer.invoke('ssh:mysql-overview', id),
     mysqlAccessProfile: (id) => ipcRenderer.invoke('ssh:mysql-access-profile', id),
     saveMysqlAccess: (id, input) => ipcRenderer.invoke('ssh:save-mysql-access', id, input),

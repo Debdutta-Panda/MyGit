@@ -308,6 +308,20 @@ export interface SshMySqlOverview {
   fetchedAt: string
 }
 
+export interface SshApacheOverview {
+  connectionId: string
+  installed: boolean
+  executable: string | null
+  version: string | null
+  serviceName: string | null
+  serviceState: string
+  serviceEnabled: boolean | null
+  configDirectory: string | null
+  configFiles: string[]
+  documentRoots: string[]
+  fetchedAt: string
+}
+
 export type SshMySqlAccessMode = 'system' | 'password'
 
 export interface SshMySqlAccessProfile {
@@ -1025,6 +1039,7 @@ export interface DesktopApi {
       templates: SshCommandTemplate[],
     ) => Promise<SshCommandTemplate[]>
     serverOverview: (id: string) => Promise<SshServerOverview>
+    apacheOverview: (id: string) => Promise<SshApacheOverview>
     mysqlOverview: (id: string) => Promise<SshMySqlOverview>
     mysqlAccessProfile: (id: string) => Promise<SshMySqlAccessProfile | null>
     saveMysqlAccess: (id: string, input: SshMySqlAccessInput) => Promise<SshMySqlAccessProfile>

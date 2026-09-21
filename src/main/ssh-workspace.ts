@@ -13,6 +13,7 @@ import type {
   SshRemoteFileContent,
   SshRemoteFileWriteInput,
   SshServerOverview,
+  SshApacheOverview,
   SshMySqlOverview,
   SshMySqlAccessInput,
   SshMySqlDatabase,
@@ -308,6 +309,46 @@ const serverOverview = async (id: string): Promise<SshServerOverview> =>
       networkSentBytes: numberOrNull(network[1]),
       rebootRequired: value('reboot') === undefined ? null : value('reboot') === '1',
       partitions,
+      fetchedAt: new Date().toISOString(),
+    }
+  })
+
+const apacheOverview = async (id: string): Promise<SshApacheOverview> =>
+  await withClient(id, async (client, connection) => {
+    const output = await exec(client, [
+      "apache_bin=$(command -v apache2 2>/dev/null || command -v httpd 2>/dev/null || command -v apachectl 2>/dev/null || command -v apache2ctl 2>/dev/null || true)",
+      "printf 'executable|%s\\n' \"$apache_bin\"",
+      "version=''; [ -n \"$apache_bin\" ] && version=$(\"$apache_bin\" -v 2>/dev/null | head -n1 || true); printf 'version|%s\\n' \"$version\"",
+      "svc=''; if command -v systemctl >/dev/null 2>&1; then for candidate in apache2 httpd; do load=$(systemctl show \"$candidate.service\" -p LoadState --value 2>/dev/null || true); if [ -n \"$load\" ] && [ \"$load\" != not-found ]; then svc=$candidate; break; fi; done; fi; printf 'service|%s\\n' \"$svc\"",
+      "if [ -n \"$svc\" ]; then printf 'service_state|%s\\n' \"$(systemctl is-active \"$svc.service\" 2>/dev/null || true)\"; printf 'service_enabled|%s\\n' \"$(systemctl is-enabled \"$svc.service\" 2>/dev/null || true)\"; else printf 'service_state|not-found\\nservice_enabled|unknown\\n'; fi",
+      "config_dir=''; for candidate in /etc/apache2 /etc/httpd /usr/local/apache2/conf; do [ -d \"$candidate\" ] && { config_dir=$candidate; break; }; done; printf 'config_dir|%s\\n' \"$config_dir\"",
+      "for file in /etc/apache2/apache2.conf /etc/httpd/conf/httpd.conf /usr/local/apache2/conf/httpd.conf; do [ -f \"$file\" ] && printf 'config|%s\\n' \"$file\"; done",
+      "roots=''; for directory in /var/www/html /var/www /srv/http /usr/local/apache2/htdocs; do [ -d \"$directory\" ] && printf 'document_root|%s\\n' \"$directory\"; done",
+    ].join('; '))
+    const fields = new Map<string, string[]>()
+    const configFiles: string[] = []
+    const documentRoots = new Set<string>()
+    for (const line of output.split(/\r?\n/)) {
+      const [key, ...parts] = line.split('|')
+      const value = parts.join('|').trim()
+      if (key === 'config' && value) configFiles.push(value)
+      else if (key === 'document_root' && value) documentRoots.add(value)
+      else if (key) fields.set(key, parts)
+    }
+    const value = (key: string): string | null => fields.get(key)?.join('|').trim() || null
+    const enabled = value('service_enabled')
+    const executable = value('executable')
+    return {
+      connectionId: connection.id,
+      installed: Boolean(executable),
+      executable,
+      version: value('version'),
+      serviceName: value('service'),
+      serviceState: value('service_state') ?? 'unknown',
+      serviceEnabled: enabled === 'enabled' ? true : enabled === 'disabled' ? false : null,
+      configDirectory: value('config_dir'),
+      configFiles,
+      documentRoots: [...documentRoots],
       fetchedAt: new Date().toISOString(),
     }
   })
@@ -2238,6 +2279,7 @@ const downloadFile = async (
 
 export const registerSshWorkspaceHandlers = (): void => {
   ipcMain.handle('ssh:server-overview', (_event, id: string) => serverOverview(id))
+  ipcMain.handle('ssh:apache-overview', (_event, id: string) => apacheOverview(id))
   ipcMain.handle('ssh:mysql-overview', (_event, id: string) => mysqlOverview(id))
   ipcMain.handle('ssh:mysql-access-profile', (_event, id: string) => getMysqlAccessProfile(id))
   ipcMain.handle('ssh:save-mysql-access', (_event, id: string, input: SshMySqlAccessInput) => saveMysqlAccess(id, input))

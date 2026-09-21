@@ -40,8 +40,9 @@ import { SshUsersGroupsManager } from './SshUsersGroupsManager'
 import { SshCommandSnippets } from './SshCommandSnippets'
 import { SshScripts } from './SshScripts'
 import { SshDatabases } from './SshDatabases'
+import { SshWeb } from './SshWeb'
 
-type WorkspaceTab = 'overview' | 'files' | 'accounts' | 'snippets' | 'scripts' | 'services' | 'databases' | 'logs'
+type WorkspaceTab = 'overview' | 'files' | 'accounts' | 'snippets' | 'scripts' | 'services' | 'databases' | 'web' | 'logs'
 
 const formatBytes = (value: number | null): string => {
   if (value === null) return 'Unavailable'
@@ -241,6 +242,7 @@ export function SshServerWorkspace({
               ['scripts', 'Scripts'],
               ['services', 'Services'],
               ['databases', 'Databases'],
+              ['web', 'WEB'],
               ['logs', 'Logs'],
             ] as Array<[WorkspaceTab, string]>).map(([value, label]) => (
               <button type="button" key={value} data-active={tab === value || undefined} onClick={() => setTab(value)}>
@@ -416,6 +418,10 @@ export function SshServerWorkspace({
 
       {tab === 'databases' && (
         <SshDatabases connection={connection} />
+      )}
+
+      {tab === 'web' && (
+        <SshWeb connection={connection} />
       )}
 
       {(tab === 'services' || tab === 'logs') && (
