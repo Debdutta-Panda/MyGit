@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  ActionIcon, Alert, Badge, Button, Checkbox, Group, Loader, Modal, NumberInput,
+  ActionIcon, Alert, Badge, Button, Checkbox, CopyButton, Group, Loader, Modal, NumberInput,
   Select, Stack, Switch, Text, TextInput, Textarea, Tooltip,
 } from '@mantine/core'
 import {
-  IconAlertCircle, IconCertificate, IconCircleCheck, IconClockShield,
+  IconAlertCircle, IconCertificate, IconCircleCheck, IconClockShield, IconCopy,
   IconRefresh, IconShieldCheck, IconTrash,
 } from '@tabler/icons-react'
 import type {
@@ -31,6 +31,7 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
   const [loading, setLoading] = useState(false)
   const [action, setAction] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [errorDetailsOpened, setErrorDetailsOpened] = useState(false)
   const [result, setResult] = useState<string | null>(null)
   const [dialog, setDialog] = useState<'issue' | 'self-signed' | 'import' | 'revoke' | null>(null)
   const [certificateToRevoke, setCertificateToRevoke] = useState<SshApacheSslCertificate | null>(null)
@@ -54,7 +55,10 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
       setOverview(next)
       setSelectedPath((current) => current && next.sites.some((site) => site.path === current)
         ? current : next.sites[0]?.path ?? null)
-    } catch (reason) { setError(errorMessage(reason)) }
+    } catch (reason) {
+      setError(errorMessage(reason))
+      setErrorDetailsOpened(true)
+    }
     finally { setLoading(false) }
   }, [connection.id])
 
@@ -72,7 +76,10 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
     try {
       const response = await window.desktop.ssh.apacheSslAction(connection.id, request)
       setOverview(response.overview); setResult(response.output); setDialog(null)
-    } catch (reason) { setError(errorMessage(reason)) }
+    } catch (reason) {
+      setError(errorMessage(reason))
+      setErrorDetailsOpened(true)
+    }
     finally { setAction(null) }
   }
 
@@ -98,11 +105,12 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
     </header>
 
     {error && <Alert color="red" icon={<IconAlertCircle size={16} />} withCloseButton onClose={() => setError(null)}>
-      <Text size="sm" fw={650}>{sslErrorSummary(error)}</Text>
-      {sslErrorSummary(error) !== error && <details className="apache-ssl-error-details">
-        <summary>Technical details</summary>
-        <pre>{error}</pre>
-      </details>}
+      <Group justify="space-between" gap="sm" wrap="nowrap">
+        <Text size="sm" fw={650} lineClamp={2}>{sslErrorSummary(error)}</Text>
+        <Button size="compact-xs" variant="light" color="red" onClick={() => setErrorDetailsOpened(true)}>
+          View full error
+        </Button>
+      </Group>
     </Alert>}
     {result && <Alert color="teal" icon={<IconCircleCheck size={16} />} withCloseButton onClose={() => setResult(null)}><pre className="ssh-web-output">{result}</pre></Alert>}
 
@@ -165,6 +173,29 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
 
     <Modal opened={dialog === 'revoke'} onClose={() => setDialog(null)} title="Revoke certificate" size="sm" centered>
       <Stack gap="sm"><Alert color="red">Revocation cannot be undone. Existing clients will reject this certificate.</Alert><Text size="sm">Revoke <strong>{certificateToRevoke?.name}</strong>?</Text><Checkbox label="Also delete Certbot’s local certificate files" checked={deleteRevoked} onChange={(event) => setDeleteRevoked(event.currentTarget.checked)} /><Group justify="flex-end"><Button variant="subtle" color="gray" onClick={() => setDialog(null)}>Cancel</Button><Button color="red" loading={action === 'revoke'} onClick={() => certificateToRevoke && void run('revoke', { kind: 'revoke', certificateName: certificateToRevoke.name, deleteCertificate: deleteRevoked, confirmation: 'revoke' })}>Revoke certificate</Button></Group></Stack>
+    </Modal>
+
+    <Modal
+      opened={errorDetailsOpened && Boolean(error)}
+      onClose={() => setErrorDetailsOpened(false)}
+      title="SSL operation failed"
+      size="80%"
+      centered
+    >
+      <Stack gap="sm">
+        <Alert color="red" icon={<IconAlertCircle size={16} />}>
+          {error ? sslErrorSummary(error) : 'The SSL operation failed.'}
+        </Alert>
+        <pre className="apache-ssl-error-modal-output">{error}</pre>
+        <Group justify="flex-end">
+          <CopyButton value={error ?? ''}>
+            {({ copied, copy }) => <Button variant="light" color={copied ? 'teal' : 'gray'} leftSection={<IconCopy size={15} />} onClick={copy}>
+              {copied ? 'Copied' : 'Copy error'}
+            </Button>}
+          </CopyButton>
+          <Button onClick={() => setErrorDetailsOpened(false)}>Close</Button>
+        </Group>
+      </Stack>
     </Modal>
   </div>
 }
