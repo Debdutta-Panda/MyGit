@@ -402,22 +402,29 @@
 .apache-ssl-health strong { color: #d9e3e9; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .apache-ssl-health em { color: #778b98; font-size: 10px; font-style: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .apache-ssl-renew-controls { display: flex; align-items: center; gap: 6px; padding: 7px 9px; border: 1px solid #34424d; border-radius: 8px; background: #10181f; }
-.apache-ssl-site-layout { min-height: 360px; display: grid; grid-template-columns: minmax(220px, 27%) minmax(0, 1fr); overflow: hidden; border: 1px solid #34424d; border-radius: 9px; background: #0b1218; }
-.apache-ssl-sites { min-width: 0; border-right: 1px solid #34424d; background: #101920; }
+.apache-ssl-site-layout { height: clamp(380px, calc(100vh - 470px), 620px); min-height: 380px; display: grid; grid-template-columns: minmax(220px, 27%) minmax(0, 1fr); overflow: hidden; border: 1px solid #34424d; border-radius: 9px; background: #0b1218; }
+.apache-ssl-sites { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0,1fr); overflow: hidden; border-right: 1px solid #34424d; background: #101920; }
 .apache-ssl-sites > header { height: 36px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; border-bottom: 1px solid #2b3741; }
-.apache-ssl-sites > button { width: 100%; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 9px 10px; color: #c7d2d9; border: 0; border-bottom: 1px solid #25313a; background: transparent; text-align: left; cursor: pointer; }
-.apache-ssl-sites > button:hover { background: #16242c; }
-.apache-ssl-sites > button[data-active] { box-shadow: inset 3px 0 0 #20c997; background: #12312c; }
-.apache-ssl-sites button > span { min-width: 0; display: grid; gap: 2px; }
+.apache-ssl-site-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.apache-ssl-site-list > button { width: 100%; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 9px 10px; color: #c7d2d9; border: 0; border-bottom: 1px solid #25313a; background: transparent; text-align: left; cursor: pointer; }
+.apache-ssl-site-list > button:hover { background: #16242c; }
+.apache-ssl-site-list > button[data-active] { box-shadow: inset 3px 0 0 #20c997; background: #12312c; }
+.apache-ssl-site-list button > span { min-width: 0; display: grid; gap: 2px; }
 .apache-ssl-sites strong, .apache-ssl-sites small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .apache-ssl-sites strong { font-size: 12px; }
 .apache-ssl-sites small { color: #758895; font-size: 9px; }
-.apache-ssl-site-detail { min-width: 0; display: grid; align-content: start; gap: 10px; padding: 12px; }
+.apache-ssl-site-detail { min-width: 0; min-height: 0; display: grid; align-content: start; gap: 10px; padding: 12px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .apache-ssl-site-detail > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .apache-ssl-site-facts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1px; overflow: hidden; border: 1px solid #2e3b45; border-radius: 7px; background: #2e3b45; }
 .apache-ssl-site-facts section { min-width: 0; display: grid; gap: 4px; padding: 9px 10px; background: #101920; }
 .apache-ssl-site-facts strong, .apache-ssl-site-facts code { overflow: hidden; color: #cbd7de; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .apache-ssl-certificate-card { display: grid; gap: 10px; padding: 11px; border: 1px solid #176e5c; border-radius: 8px; background: #0d211d; }
+.apache-ssl-setup-step { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 10px 11px; border: 1px solid #2563a6; border-radius: 8px; background: #0d1d2a; }
+.apache-ssl-setup-step > div { min-width: 0; }
+.apache-ssl-certificate-empty { display: flex; align-items: center; gap: 9px; padding: 10px 11px; border: 1px dashed #3a4650; border-radius: 8px; color: #8798a5; background: #0d141a; }
+.apache-ssl-certificate-empty span { min-width: 0; display: grid; gap: 2px; }
+.apache-ssl-certificate-empty strong { color: #becad1; font-size: 11px; }
+.apache-ssl-certificate-empty small { font-size: 10px; }
 .apache-ssl-certificate-meta { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 7px; }
 .apache-ssl-certificate-meta > span { min-width: 0; display: grid; gap: 3px; padding: 7px 8px; border: 1px solid #27483f; border-radius: 6px; background: #0d1918; }
 .apache-ssl-certificate-meta strong, .apache-ssl-certificate-meta code { overflow: hidden; color: #c8d8d3; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
@@ -428,7 +435,7 @@
 .apache-ssl-pem-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; }
 .apache-ssl-pem-grid textarea { font: 10px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; }
 @media (max-width: 1100px) { .apache-ssl-health { grid-template-columns: repeat(2,minmax(0,1fr)); } .apache-ssl-site-layout { grid-template-columns: minmax(190px,32%) minmax(0,1fr); } .apache-ssl-certificate-meta { grid-template-columns: repeat(2,minmax(0,1fr)); } }
-@media (max-width: 780px) { .apache-ssl-site-layout, .apache-ssl-pem-grid { grid-template-columns: 1fr; } .apache-ssl-sites { border-right: 0; border-bottom: 1px solid #34424d; } .apache-ssl-site-detail > header { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 780px) { .apache-ssl-site-layout, .apache-ssl-pem-grid { grid-template-columns: 1fr; } .apache-ssl-site-layout { height: auto; max-height: none; } .apache-ssl-sites { max-height: 260px; border-right: 0; border-bottom: 1px solid #34424d; } .apache-ssl-site-detail > header { align-items: flex-start; flex-direction: column; } .apache-ssl-setup-step { grid-template-columns: auto minmax(0,1fr); } .apache-ssl-setup-step .mantine-Button-root { grid-column: 1 / -1; justify-self: end; } }
 .apache-gui-editor { height: min(68vh, 760px); min-height: 420px; padding-right: 5px; overflow: auto; }
 .apache-directive-row { padding: 8px; display: grid; grid-template-columns: minmax(170px, .55fr) minmax(260px, 1fr); align-items: center; gap: 12px; border-bottom: 1px solid #2a353e; }
 .apache-directive-row:hover { background: #101a22; }
