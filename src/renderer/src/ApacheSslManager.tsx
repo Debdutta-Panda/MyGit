@@ -53,6 +53,7 @@ const formatElapsed = (seconds: number): string => {
     ? [hours, minutes, remainder].map((value) => String(value).padStart(2, '0')).join(':')
     : [minutes, remainder].map((value) => String(value).padStart(2, '0')).join(':')
 }
+type SslOperationStatus = 'idle' | 'running' | 'completed' | 'failed'
 
 export function ApacheSslManager({ connection }: { connection: SshConnection }) {
   const [overview, setOverview] = useState<SshApacheSslOverview | null>(null)
@@ -62,6 +63,9 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
   const [operationStartedAt, setOperationStartedAt] = useState<number | null>(null)
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [operationOutput, setOperationOutput] = useState('')
+  const [operationOutputOpened, setOperationOutputOpened] = useState(false)
+  const [operationLabel, setOperationLabel] = useState('SSL operation')
+  const [operationStatus, setOperationStatus] = useState<SslOperationStatus>('idle')
   const [error, setError] = useState<string | null>(null)
   const [errorDetailsOpened, setErrorDetailsOpened] = useState(false)
   const [result, setResult] = useState<string | null>(null)
@@ -98,10 +102,7 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
 
   useEffect(() => { setOverview(null); setSelectedPath(null); void load() }, [load])
   useEffect(() => {
-    if (operationStartedAt === null) {
-      setElapsedSeconds(0)
-      return
-    }
+    if (operationStartedAt === null) return
     const update = (): void => setElapsedSeconds(Math.max(0, Math.floor((Date.now() - operationStartedAt) / 1000)))
     update()
     const timer = window.setInterval(update, 250)
@@ -112,9 +113,9 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
     setOperationOutput((current) => current + event.data)
   }), [])
   useEffect(() => {
-    if (!action) return
+    if (!action || !operationOutputOpened) return
     operationOutputRef.current?.scrollTo({ top: operationOutputRef.current.scrollHeight })
-  }, [action, operationOutput])
+  }, [action, operationOutput, operationOutputOpened])
 
   const selectedSite = useMemo(() => overview?.sites.find((site) => site.path === selectedPath) ?? null,
     [overview, selectedPath])
@@ -132,13 +133,19 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
     const runId = crypto.randomUUID()
     operationRunId.current = runId
     setOperationOutput('')
+    setElapsedSeconds(0)
+    setOperationLabel(sslActionDescription(key))
+    setOperationStatus('running')
+    setDialog(null)
+    setOperationOutputOpened(true)
     setAction(key); setOperationStartedAt(Date.now()); setError(null); setResult(null)
     try {
       const response = await window.desktop.ssh.apacheSslAction(connection.id, runId, request)
       setOverview(response.overview); setResult(response.output); setDialog(null)
+      setOperationStatus('completed')
     } catch (reason) {
       setError(errorMessage(reason))
-      setErrorDetailsOpened(true)
+      setOperationStatus('failed')
     }
     finally {
       if (operationRunId.current === runId) operationRunId.current = null
@@ -182,18 +189,12 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
     {activeOperation && <section className="apache-ssl-operation-progress" role="status" aria-live="polite">
       <Loader size={18} color="cyan" />
       <span><strong>{sslActionDescription(activeOperation)}</strong><small>{formatElapsed(elapsedSeconds)} elapsed · {formatElapsed(activeLimit)} maximum</small></span>
-      <Badge size="sm" color="cyan" variant="light">{formatElapsed(elapsedSeconds)}</Badge>
+      <Group gap={7} wrap="nowrap">
+        {action && <Button size="compact-xs" variant="light" color="cyan" leftSection={<IconTerminal2 size={13} />}
+          onClick={() => setOperationOutputOpened(true)}>View output</Button>}
+        <Badge size="lg" color="cyan" variant="filled">{formatElapsed(elapsedSeconds)}</Badge>
+      </Group>
       <Progress className="apache-ssl-operation-progress-bar" value={Math.min(100, elapsedSeconds / activeLimit * 100)} color="cyan" size={4} animated />
-      {action && <div className="apache-ssl-live-output">
-        <header><span><IconTerminal2 size={14} /> Live server output</span>
-          <CopyButton value={operationOutput}>{({ copied, copy }) =>
-            <Button size="compact-xs" variant="subtle" color={copied ? 'teal' : 'gray'} onClick={copy} disabled={!operationOutput}>
-              {copied ? 'Copied' : 'Copy'}
-            </Button>}
-          </CopyButton>
-        </header>
-        <pre ref={operationOutputRef}>{operationOutput || 'Connected. Waiting for the server to produce output...'}</pre>
-      </div>}
     </section>}
 
     <div className="apache-ssl-health">
@@ -270,6 +271,43 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
 
     <Modal opened={dialog === 'import'} onClose={() => setDialog(null)} title="Import PEM certificate" size="90%" centered>
       <Stack gap="sm"><Alert color="yellow">The private key is transmitted only for this operation, written with mode 0600, and never saved by MyRepos.</Alert><TextInput label="Primary domain" value={domains} onChange={(event) => setDomains(event.currentTarget.value)} autoFocus /><div className="apache-ssl-pem-grid"><Textarea label="Certificate" minRows={12} value={certificatePem} onChange={(event) => setCertificatePem(event.currentTarget.value)} /><Textarea label="Private key" minRows={12} value={privateKeyPem} onChange={(event) => setPrivateKeyPem(event.currentTarget.value)} /><Textarea label="Chain (optional)" minRows={12} value={chainPem} onChange={(event) => setChainPem(event.currentTarget.value)} /></div><Group justify="flex-end"><Button variant="subtle" color="gray" onClick={() => setDialog(null)}>Cancel</Button><Button loading={action === 'import'} onClick={() => selectedSite && void run('import', { kind: 'import', sitePath: selectedSite.path, commonName: domainList(domains)[0] ?? '', documentRoot: selectedSite.documentRoot ?? '', certificate: certificatePem, privateKey: privateKeyPem, chain: chainPem, confirmation: 'import' })}>Verify, import and configure</Button></Group></Stack>
+    </Modal>
+
+    <Modal opened={operationOutputOpened} onClose={() => setOperationOutputOpened(false)} size="80%" centered
+      title={<Group gap={8} wrap="nowrap"><IconTerminal2 size={18} /><Text fw={750}>{operationLabel}</Text>
+        <Badge size="sm" color={operationStatus === 'failed' ? 'red' : operationStatus === 'completed' ? 'teal' : 'cyan'}>
+          {operationStatus}
+        </Badge></Group>}>
+      <Stack gap="sm">
+        <section className="apache-ssl-operation-modal-status">
+          <div><small>Elapsed time</small><strong>{formatElapsed(elapsedSeconds)}</strong></div>
+          <Text size="sm" c="dimmed">{operationStatus === 'running'
+            ? 'Output is streaming directly from the server. You may hide this window while it continues.'
+            : operationStatus === 'completed' ? 'The server operation completed.' : 'The server operation failed.'}</Text>
+          {operationStatus === 'running' && <Loader size={22} color="cyan" />}
+        </section>
+        {operationStatus === 'failed' && error && <Alert color="red" icon={<IconAlertCircle size={16} />}>{sslErrorSummary(error)}</Alert>}
+        <pre ref={operationOutputRef} className="apache-ssl-live-modal-output" aria-live="polite">
+          {operationOutput || (operationStatus === 'running'
+            ? 'Connected. Waiting for the server to produce output...'
+            : '(The command produced no terminal output.)')}
+        </pre>
+        <Group justify="space-between">
+          <Text size="xs" c="dimmed">{operationStatus === 'running' ? 'This operation continues if the window is hidden.' : 'Terminal output is retained until the next SSL action.'}</Text>
+          <Group gap={7}>
+            {operationStatus === 'failed' && error && <Button size="compact-sm" variant="light" color="red"
+              onClick={() => { setOperationOutputOpened(false); setErrorDetailsOpened(true) }}>View full error</Button>}
+            <CopyButton value={operationOutput}>{({ copied, copy }) =>
+              <Button size="compact-sm" variant="default" leftSection={<IconCopy size={14} />} onClick={copy} disabled={!operationOutput}>
+                {copied ? 'Copied' : 'Copy output'}
+              </Button>}
+            </CopyButton>
+            <Button size="compact-sm" onClick={() => setOperationOutputOpened(false)}>
+              {operationStatus === 'running' ? 'Hide' : 'Close'}
+            </Button>
+          </Group>
+        </Group>
+      </Stack>
     </Modal>
 
     <Modal opened={dialog === 'revoke'} onClose={() => setDialog(null)} title="Revoke certificate" size="sm" centered>
