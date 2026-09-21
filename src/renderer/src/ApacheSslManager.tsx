@@ -27,6 +27,19 @@ const sslErrorSummary = (value: string): string => {
   const line = value.split(/\r?\n/).map((item) => item.trim()).find(Boolean) ?? value
   return line.length > 220 ? `${line.slice(0, 217)}...` : line
 }
+const sslActionDescription = (key: string): string => {
+  if (key === 'install') return 'Installing Certbot and the Apache plugin'
+  if (key === 'dry-run') return 'Testing certificate renewal'
+  if (key === 'renew-all') return 'Renewing due certificates'
+  if (key.startsWith('renew:')) return 'Renewing the selected certificate'
+  if (key === 'issue') return 'Requesting and configuring the certificate'
+  if (key === 'enable-http-site') return 'Configuring Apache HTTP validation'
+  if (key === 'auto-renew') return 'Updating automatic renewal'
+  if (key === 'revoke') return 'Revoking the certificate'
+  if (key === 'self-signed') return 'Generating the self-signed certificate'
+  if (key === 'import') return 'Verifying and importing certificate material'
+  return 'Running SSL operation'
+}
 
 export function ApacheSslManager({ connection }: { connection: SshConnection }) {
   const [overview, setOverview] = useState<SshApacheSslOverview | null>(null)
@@ -121,6 +134,11 @@ export function ApacheSslManager({ connection }: { connection: SshConnection }) 
       </Group>
     </Alert>}
     {result && <Alert color="teal" icon={<IconCircleCheck size={16} />} withCloseButton onClose={() => setResult(null)}><pre className="ssh-web-output">{result}</pre></Alert>}
+    {action && <section className="apache-ssl-operation-progress" role="status" aria-live="polite">
+      <Loader size={18} color="cyan" />
+      <span><strong>{sslActionDescription(action)}</strong><small>Keep this connection open. Certbot operations can take several minutes.</small></span>
+      <Badge size="sm" color="cyan" variant="light">WORKING</Badge>
+    </section>}
 
     <div className="apache-ssl-health">
       <article data-ok={overview?.certbotInstalled && overview?.apachePluginInstalled || undefined}><IconCertificate size={18} /><span><small>Certbot</small><strong>{overview?.certbotInstalled ? overview.certbotVersion : 'Not installed'}</strong><em>{overview?.certbotInstalled ? overview.apachePluginInstalled ? 'Apache plugin ready' : 'Apache plugin missing' : "Required for Let's Encrypt"}</em></span></article>

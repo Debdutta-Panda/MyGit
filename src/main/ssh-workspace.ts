@@ -129,7 +129,16 @@ const withClient = async <Result>(
   }
 }
 
-const exec = async (client: Client, command: string): Promise<string> =>
+interface RemoteExecOptions {
+  timeoutMs?: number
+  timeoutMessage?: string
+}
+
+const exec = async (
+  client: Client,
+  command: string,
+  options: RemoteExecOptions = {},
+): Promise<string> =>
   await new Promise<string>((resolve, reject) => {
     client.exec(command, (error, stream) => {
       if (error) {
@@ -156,8 +165,8 @@ const exec = async (client: Client, command: string): Promise<string> =>
       }
       const timeout = setTimeout(() => {
         stream.close()
-        finish(new Error('The server operation timed out.'))
-      }, 20_000)
+        finish(new Error(options.timeoutMessage ?? 'The server operation timed out.'))
+      }, options.timeoutMs ?? 20_000)
       stream.on('data', (chunk: Buffer) => { stdout = append(stdout, chunk) })
       stream.stderr.on('data', (chunk: Buffer) => { stderr = append(stderr, chunk) })
       stream.once('close', (code: number | null) => {
@@ -168,7 +177,12 @@ const exec = async (client: Client, command: string): Promise<string> =>
     })
   })
 
-const execInput = async (client: Client, command: string, input: string): Promise<string> =>
+const execInput = async (
+  client: Client,
+  command: string,
+  input: string,
+  options: RemoteExecOptions = {},
+): Promise<string> =>
   await new Promise<string>((resolve, reject) => {
     client.exec(command, (error, stream) => {
       if (error) { reject(error); return }
@@ -190,7 +204,10 @@ const execInput = async (client: Client, command: string, input: string): Promis
         }
         return current + chunk.toString('utf8')
       }
-      const timeout = setTimeout(() => { stream.close(); finish(new Error('The server operation timed out.')) }, 20_000)
+      const timeout = setTimeout(() => {
+        stream.close()
+        finish(new Error(options.timeoutMessage ?? 'The server operation timed out.'))
+      }, options.timeoutMs ?? 20_000)
       stream.on('data', (chunk: Buffer) => { stdout = append(stdout, chunk) })
       stream.stderr.on('data', (chunk: Buffer) => { stderr = append(stderr, chunk) })
       stream.once('close', (code: number | null) => code && code !== 0
@@ -381,11 +398,18 @@ const apacheConfigName = (requestedName: string): string => {
   return name
 }
 
-const apachePrivileged = async (client: Client, command: string, input?: string): Promise<string> => {
+const apachePrivileged = async (
+  client: Client,
+  command: string,
+  input?: string,
+  options: RemoteExecOptions = {},
+): Promise<string> => {
   const privilege = await accountPrivilege(client)
   if (!privilege.canManage) throw new Error('Root or passwordless sudo is required for Apache changes.')
   const elevated = privilege.root ? command : `sudo -n sh -c ${shellQuote(command)}`
-  return input === undefined ? await exec(client, elevated) : await execInput(client, elevated, input)
+  return input === undefined
+    ? await exec(client, elevated, options)
+    : await execInput(client, elevated, input, options)
 }
 
 const apacheTestCommand = [
@@ -795,6 +819,10 @@ const writeApacheSslMaterial = async (
 
 const apacheSslAction = async (id: string, action: SshApacheSslAction): Promise<SshApacheSslActionResult> => {
   if (!action || typeof action.kind !== 'string') throw new Error('Invalid SSL action.')
+  const certbotOptions: RemoteExecOptions = {
+    timeoutMs: 15 * 60_000,
+    timeoutMessage: 'The SSL operation timed out after 15 minutes. Check the Certbot log before retrying.',
+  }
   const output = await withClient(id, async (client) => {
     if (action.kind === 'test-renewal') {
       return await apachePrivileged(client, [
@@ -804,7 +832,7 @@ const apacheSslAction = async (id: string, action: SshApacheSslAction): Promise<
         apacheTestCommand,
         'certbot renew --dry-run --non-interactive --apache',
         apacheTestCommand,
-      ].join('; '))
+      ].join('; '), undefined, certbotOptions)
     }
     if (action.kind === 'install-certbot') {
       if (action.confirmation !== 'install-certbot') throw new Error('Confirm Certbot installation.')
@@ -815,7 +843,7 @@ const apacheSslAction = async (id: string, action: SshApacheSslAction): Promise<
         'certbot --version',
         "certbot plugins 2>/dev/null | grep -Eq '(^|[[:space:]])apache([[:space:]]|$)' || { echo 'Certbot was installed but its Apache plugin is unavailable.' >&2; exit 1; }",
         "echo 'Apache plugin is ready.'",
-      ].join('; '))
+      ].join('; '), undefined, certbotOptions)
     }
     if (action.kind === 'enable-http-site') {
       if (action.confirmation !== 'http-site') throw new Error('Confirm HTTP validation host creation.')
@@ -881,7 +909,7 @@ const apacheSslAction = async (id: string, action: SshApacheSslAction): Promise<
         migrateStandaloneRenewals,
         command,
         apacheTestCommand,
-      ].join('; '))
+      ].join('; '), undefined, certbotOptions)
     }
     if (action.kind === 'issue') {
       if (action.confirmation !== 'issue') throw new Error('Confirm certificate issuance.')
@@ -893,13 +921,13 @@ const apacheSslAction = async (id: string, action: SshApacheSslAction): Promise<
       const domainArgs = domains.map((domain) => `-d ${shellQuote(domain)}`).join(' ')
       const redirectFlag = action.challenge === 'apache' ? action.redirect ? '--redirect' : '--no-redirect' : ''
       const command = `certbot ${challenge} --non-interactive --agree-tos --email ${shellQuote(action.email.trim())} ${domainArgs} ${redirectFlag} ${action.staging ? '--staging' : ''}`
-      return await apachePrivileged(client, `set -e; command -v certbot >/dev/null 2>&1 || { echo 'Certbot is not installed.' >&2; exit 1; }; ${apacheTestCommand}; ${command}; ${apacheTestCommand}`)
+      return await apachePrivileged(client, `set -e; command -v certbot >/dev/null 2>&1 || { echo 'Certbot is not installed.' >&2; exit 1; }; ${apacheTestCommand}; ${command}; ${apacheTestCommand}`, undefined, certbotOptions)
     }
     if (action.kind === 'revoke') {
       if (action.confirmation !== 'revoke') throw new Error('Confirm certificate revocation.')
       const name = sslName(action.certificateName)
       const remove = action.deleteCertificate ? `; certbot delete --non-interactive --cert-name ${shellQuote(name)}` : ''
-      return await apachePrivileged(client, `certbot revoke --non-interactive --cert-path ${shellQuote(`/etc/letsencrypt/live/${name}/cert.pem`)}${remove}`)
+      return await apachePrivileged(client, `certbot revoke --non-interactive --cert-path ${shellQuote(`/etc/letsencrypt/live/${name}/cert.pem`)}${remove}`, undefined, certbotOptions)
     }
     return await writeApacheSslMaterial(client, action)
   })

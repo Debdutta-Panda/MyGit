@@ -401,6 +401,10 @@
 .apache-ssl-health small, .apache-ssl-site-facts small, .apache-ssl-certificate-meta small { color: #758795; font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
 .apache-ssl-health strong { color: #d9e3e9; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .apache-ssl-health em { color: #778b98; font-size: 10px; font-style: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apache-ssl-operation-progress { min-height: 48px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 8px 11px; border: 1px solid #176e78; border-radius: 8px; background: #0b242a; }
+.apache-ssl-operation-progress span { min-width: 0; display: grid; gap: 2px; }
+.apache-ssl-operation-progress strong { color: #b9eff5; font-size: 12px; }
+.apache-ssl-operation-progress small { color: #7f9da3; font-size: 10px; }
 .apache-ssl-renew-controls { display: flex; align-items: center; gap: 6px; padding: 7px 9px; border: 1px solid #34424d; border-radius: 8px; background: #10181f; }
 .apache-ssl-site-layout { height: clamp(380px, calc(100vh - 470px), 620px); min-height: 380px; display: grid; grid-template-columns: minmax(220px, 27%) minmax(0, 1fr); overflow: hidden; border: 1px solid #34424d; border-radius: 9px; background: #0b1218; }
 .apache-ssl-sites { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0,1fr); overflow: hidden; border-right: 1px solid #34424d; background: #101920; }
