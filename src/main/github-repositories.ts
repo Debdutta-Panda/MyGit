@@ -33,6 +33,20 @@ import type {
 const GITHUB_API_VERSION = '2022-11-28'
 const repositoryNamePattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 
+const repositoryDialogDefaultPath = (): string => {
+  const row = getDatabase().prepare(`
+    SELECT last_repository_directory FROM app_settings WHERE id = 1
+  `).get() as { last_repository_directory: string | null } | undefined
+  const savedPath = row?.last_repository_directory
+  return savedPath && existsSync(savedPath) ? savedPath : app.getPath('documents')
+}
+
+const rememberRepositoryDialogPath = (path: string): void => {
+  getDatabase().prepare(`
+    UPDATE app_settings SET last_repository_directory = ? WHERE id = 1
+  `).run(path)
+}
+
 interface CloneRecord {
   id: string
   accountId: number
@@ -508,7 +522,7 @@ const addLocalRepository = async (
   const options: Electron.OpenDialogOptions = {
     title: initializePlainFolder ? 'Choose project folder to publish' : 'Add local repository',
     buttonLabel: initializePlainFolder ? 'Use this folder' : 'Add repository',
-    defaultPath: app.getPath('documents'),
+    defaultPath: repositoryDialogDefaultPath(),
     message: initializePlainFolder
       ? 'Select a project folder. MyRepos will initialize Git before publishing.'
       : 'Select a local GitHub repository folder.',
@@ -520,6 +534,7 @@ const addLocalRepository = async (
   if (selection.canceled || !selection.filePaths[0]) return null
 
   const path = resolve(selection.filePaths[0])
+  rememberRepositoryDialogPath(dirname(path))
   if (!(await isGitRepository(path))) {
     if (!initializePlainFolder) {
       throw new Error('The selected folder is not a Git repository. Use Publish folder instead.')
@@ -869,7 +884,7 @@ export const cloneRepository = async (
   const options: Electron.OpenDialogOptions = {
     title: `Clone ${fullName}`,
     buttonLabel: 'Choose folder',
-    defaultPath: app.getPath('documents'),
+    defaultPath: repositoryDialogDefaultPath(),
     properties: ['openDirectory', 'createDirectory'],
   }
   const selection = ownerWindow
@@ -878,6 +893,7 @@ export const cloneRepository = async (
   if (selection.canceled || !selection.filePaths[0]) return null
 
   const parent = resolve(selection.filePaths[0])
+  rememberRepositoryDialogPath(parent)
   const requestedFolderName = cloneOptions.folderName?.trim() || basename(fullName)
   if (!/^[^/\\]{1,180}$/.test(requestedFolderName) || requestedFolderName === '.' ||
     requestedFolderName === '..') throw new Error('Enter a valid destination folder name.')
@@ -927,7 +943,7 @@ export const locateRepository = async (
   const options: Electron.OpenDialogOptions = {
     title: `Locate ${fullName}`,
     buttonLabel: 'Use repository',
-    defaultPath: app.getPath('documents'),
+    defaultPath: repositoryDialogDefaultPath(),
     message: 'Select the cloned repository folder itself.',
     properties: ['openDirectory'],
   }
@@ -937,6 +953,7 @@ export const locateRepository = async (
   if (selection.canceled || !selection.filePaths[0]) return null
 
   const path = resolve(selection.filePaths[0])
+  rememberRepositoryDialogPath(dirname(path))
   if (!(await isGitRepository(path))) {
     throw new Error('The selected folder is not a Git repository.')
   }

@@ -233,9 +233,29 @@ const desktopApi: DesktopApi = {
     gitUnstage: (path, files) => ipcRenderer.invoke('repositories:git-unstage', path, files),
     gitCommit: (path, message) => ipcRenderer.invoke('repositories:git-commit', path, message),
     gitFetch: (path) => ipcRenderer.invoke('repositories:git-fetch', path),
-    gitPull: (path) => ipcRenderer.invoke('repositories:git-pull', path),
+    gitPull: (path, options) => ipcRenderer.invoke('repositories:git-pull', path, options),
     gitPush: (path) => ipcRenderer.invoke('repositories:git-push', path),
     gitBranches: (path) => ipcRenderer.invoke('repositories:git-branches', path),
+    gitMergePreview: (path, targetRef) =>
+      ipcRenderer.invoke('repositories:git-merge-preview', path, targetRef),
+    gitMerge: (path, targetRef, mode) =>
+      ipcRenderer.invoke('repositories:git-merge', path, targetRef, mode),
+    gitRebase: (path, targetRef, autoStash) =>
+      ipcRenderer.invoke('repositories:git-rebase', path, targetRef, autoStash),
+    gitInteractiveRebasePreview: (path, targetRef) =>
+      ipcRenderer.invoke('repositories:git-interactive-rebase-preview', path, targetRef),
+    gitInteractiveRebase: (path, targetRef, plan, autoStash) =>
+      ipcRenderer.invoke('repositories:git-interactive-rebase', path, targetRef, plan, autoStash),
+    gitConflictVersions: (path, file) =>
+      ipcRenderer.invoke('repositories:git-conflict-versions', path, file),
+    gitResolveConflict: (input) =>
+      ipcRenderer.invoke('repositories:git-resolve-conflict', input),
+    gitOperationAction: (path, action) =>
+      ipcRenderer.invoke('repositories:git-operation-action', path, action),
+    gitCherryPick: (path, commits) =>
+      ipcRenderer.invoke('repositories:git-cherry-pick', path, commits),
+    gitRevert: (path, commits, mainline) =>
+      ipcRenderer.invoke('repositories:git-revert', path, commits, mainline),
     gitCheckout: (path, target, strategy) =>
       ipcRenderer.invoke('repositories:git-checkout', path, target, strategy),
     gitCreateBranch: (path, name, startPoint, checkout) =>

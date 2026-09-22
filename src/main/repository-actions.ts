@@ -1,8 +1,8 @@
-import { ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
-import { dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { mkdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import {
   askPassPath,
   markRepositorySynced,
@@ -29,6 +29,16 @@ import type {
   RepositoryCheckoutStrategy,
   RepositoryCheckoutTarget,
   RepositoryGitDetails,
+  RepositoryOperationKind,
+  RepositoryOperationState,
+  RepositoryMergeMode,
+  RepositoryMergePreview,
+  RepositoryConflictResolutionInput,
+  RepositoryConflictVersions,
+  RepositoryOperationAction,
+  RepositoryPullOptions,
+  RepositoryRebasePlanItem,
+  RepositoryRebasePreview,
 } from '../shared/desktop-api'
 
 interface GitRunOptions {
@@ -98,6 +108,46 @@ const runGit = async (
   })
 })
 
+const runGitBuffer = async (
+  repositoryPath: string,
+  args: string[],
+  outputLimit = 5_500_000,
+): Promise<Buffer> => await new Promise((resolvePromise, reject) => {
+  const git = spawn('git', ['-C', repositoryPath, ...args], {
+    shell: false,
+    windowsHide: true,
+    env: process.env,
+  })
+  const chunks: Buffer[] = []
+  let length = 0
+  let stderr = ''
+  let outputTooLarge = false
+  const timer = setTimeout(() => {
+    git.kill()
+    reject(new Error('The Git operation timed out.'))
+  }, 30_000)
+  git.stdout.on('data', (chunk: Buffer) => {
+    length += chunk.length
+    if (length > outputLimit) {
+      outputTooLarge = true
+      git.kill()
+    } else chunks.push(chunk)
+  })
+  git.stderr.on('data', (chunk: Buffer) => {
+    stderr = `${stderr}${chunk.toString()}`.slice(-30_000)
+  })
+  git.once('error', (error) => {
+    clearTimeout(timer)
+    reject(error)
+  })
+  git.once('close', (code) => {
+    clearTimeout(timer)
+    if (outputTooLarge) reject(new Error('The Git object is too large to display.'))
+    else if (code === 0) resolvePromise(Buffer.concat(chunks))
+    else reject(new Error(stderr.trim() || `Git exited with code ${code ?? 'unknown'}.`))
+  })
+})
+
 const changedFiles = async (repositoryPath: string): Promise<RepositoryChangedFile[]> => {
   const output = await runGit(
     repositoryPath,
@@ -132,13 +182,592 @@ const changedFiles = async (repositoryPath: string): Promise<RepositoryChangedFi
   return files
 }
 
+const pathExists = async (path: string): Promise<boolean> => {
+  try {
+    await stat(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const readPositiveInteger = async (path: string): Promise<number | null> => {
+  try {
+    const value = Number((await readFile(path, 'utf8')).trim())
+    return Number.isInteger(value) && value > 0 ? value : null
+  } catch {
+    return null
+  }
+}
+
+const repositoryOperationState = async (
+  repositoryPath: string,
+  files?: RepositoryChangedFile[],
+): Promise<RepositoryOperationState> => {
+  const names = [
+    'rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD',
+    'REVERT_HEAD', 'BISECT_LOG',
+  ] as const
+  const gitDirectory = (await runGit(repositoryPath, [
+    'rev-parse', '--path-format=absolute', '--git-dir',
+  ])).trim()
+  const paths = Object.fromEntries(names.map((name) => [
+    name,
+    resolve(gitDirectory, name),
+  ])) as Record<(typeof names)[number], string>
+  const present = Object.fromEntries(await Promise.all(names.map(async (name) => [
+    name,
+    await pathExists(paths[name]),
+  ]))) as Record<(typeof names)[number], boolean>
+
+  let kind: RepositoryOperationKind = 'none'
+  if (present['rebase-merge']) kind = 'rebase'
+  else if (present['rebase-apply']) {
+    kind = await pathExists(resolve(paths['rebase-apply'], 'applying')) ? 'am' : 'rebase'
+  } else if (present.MERGE_HEAD) kind = 'merge'
+  else if (present.CHERRY_PICK_HEAD) kind = 'cherry-pick'
+  else if (present.REVERT_HEAD) kind = 'revert'
+  else if (present.BISECT_LOG) kind = 'bisect'
+
+  const operationFiles = files ?? (kind === 'none' ? [] : await changedFiles(repositoryPath))
+  const conflictedFiles = operationFiles
+    .filter((file) => file.conflicted)
+    .map((file) => file.path)
+  const rebaseDirectory = present['rebase-merge'] ? paths['rebase-merge']
+    : present['rebase-apply'] ? paths['rebase-apply'] : null
+  const currentStep = rebaseDirectory
+    ? await readPositiveInteger(resolve(rebaseDirectory, present['rebase-merge'] ? 'msgnum' : 'next'))
+    : null
+  const totalSteps = rebaseDirectory
+    ? await readPositiveInteger(resolve(rebaseDirectory, present['rebase-merge'] ? 'end' : 'last'))
+    : null
+  let originalHead: string | null = null
+  if (kind !== 'none') {
+    const value = (await runGit(repositoryPath, ['rev-parse', '--verify', 'ORIG_HEAD'], {
+      successCodes: [0, 128],
+    })).trim()
+    originalHead = /^[a-f0-9]{40,64}$/i.test(value) ? value : null
+  }
+
+  return {
+    kind,
+    conflictedFiles,
+    canContinue: kind !== 'none' && kind !== 'bisect' && conflictedFiles.length === 0,
+    canSkip: kind === 'rebase' || kind === 'cherry-pick' || kind === 'revert' || kind === 'am',
+    canAbort: kind !== 'none',
+    currentStep,
+    totalSteps,
+    originalHead,
+  }
+}
+
+const assertNoGitOperation = async (repositoryPath: string, action: string): Promise<void> => {
+  const operation = await repositoryOperationState(repositoryPath)
+  if (operation.kind !== 'none') {
+    throw new Error(`Cannot ${action} while a ${operation.kind} operation is in progress.`)
+  }
+}
+
+const createRecoveryRef = async (repositoryPath: string, label: string): Promise<string> => {
+  const safeLabel = label.replace(/[^a-z0-9-]+/gi, '-').replace(/^-|-$/g, '').toLowerCase()
+  const reference = `refs/myrepos/recovery/${Date.now()}-${safeLabel || 'operation'}`
+  await runGit(repositoryPath, ['update-ref', reference, 'HEAD'])
+  return reference
+}
+
+const mergeTarget = async (
+  repositoryPath: string,
+  targetRef: unknown,
+): Promise<{ state: RepositoryBranchState; target: RepositoryBranch }> => {
+  if (typeof targetRef !== 'string' || targetRef.length === 0 || targetRef.length > 1_000) {
+    throw new Error('Choose a valid branch to merge.')
+  }
+  const state = await repositoryBranchState(repositoryPath)
+  if (!state.currentBranch) throw new Error('Create or checkout a branch before merging.')
+  const target = state.branches.find((branch) => branch.ref === targetRef)
+  if (!target) throw new Error('The selected merge branch no longer exists.')
+  if (target.current) throw new Error('The selected branch is already checked out.')
+  return { state, target }
+}
+
+const mergePreview = async (
+  repositoryPath: string,
+  targetRef: unknown,
+): Promise<RepositoryMergePreview> => {
+  await assertNoGitOperation(repositoryPath, 'preview a merge')
+  const { state, target } = await mergeTarget(repositoryPath, targetRef)
+  const [aheadText, behindText, filesText] = await Promise.all([
+    runGit(repositoryPath, ['rev-list', '--count', `${target.ref}..HEAD`]),
+    runGit(repositoryPath, ['rev-list', '--count', `HEAD..${target.ref}`]),
+    runGit(repositoryPath, ['diff', '--name-only', '-z', `HEAD...${target.ref}`]),
+  ])
+  const ahead = Number(aheadText.trim())
+  const behind = Number(behindText.trim())
+  const files = filesText.split('\0').filter(Boolean)
+  return {
+    currentBranch: state.currentBranch!,
+    target,
+    outcome: behind === 0 ? 'already-merged' : ahead === 0 ? 'fast-forward' : 'merge-commit',
+    commitCount: Number.isFinite(behind) ? behind : 0,
+    fileCount: files.length,
+    files: files.slice(0, 100),
+  }
+}
+
+const mergeBranch = async (
+  repositoryPath: string,
+  targetRef: unknown,
+  mode: unknown,
+): Promise<RepositoryGitDetails> => {
+  await assertNoGitOperation(repositoryPath, 'merge branches')
+  if (mode !== 'auto' && mode !== 'no-ff') throw new Error('Choose a valid merge mode.')
+  const selectedMode: RepositoryMergeMode = mode
+  const { target } = await mergeTarget(repositoryPath, targetRef)
+  const dirty = (await runGit(repositoryPath, [
+    'status', '--porcelain=v1', '--untracked-files=normal',
+  ])).trim()
+  if (dirty) throw new Error('Commit, stash, or discard local changes before merging.')
+
+  try {
+    await runGit(repositoryPath, [
+      'merge',
+      ...(selectedMode === 'no-ff' ? ['--no-ff'] : ['--ff']),
+      '--no-edit',
+      target.ref,
+    ], { timeoutMs: 120_000 })
+  } catch (error) {
+    const operation = await repositoryOperationState(repositoryPath)
+    if (operation.kind === 'merge' && operation.conflictedFiles.length > 0) {
+      return await refreshedDetails(repositoryPath)
+    }
+    throw error
+  }
+  return await refreshedDetails(repositoryPath)
+}
+
+const rebaseBranch = async (
+  repositoryPath: string,
+  targetRef: unknown,
+  autoStashValue: unknown,
+): Promise<RepositoryGitDetails> => {
+  await assertNoGitOperation(repositoryPath, 'rebase')
+  if (typeof autoStashValue !== 'boolean') throw new Error('Choose a valid auto-stash option.')
+  const { target } = await mergeTarget(repositoryPath, targetRef)
+  const dirty = Boolean((await runGit(repositoryPath, [
+    'status', '--porcelain=v1', '--untracked-files=normal',
+  ])).trim())
+  if (dirty && !autoStashValue) {
+    throw new Error('Commit or stash local changes, or enable auto-stash before rebasing.')
+  }
+  await createRecoveryRef(repositoryPath, `rebase-${target.name}`)
+  try {
+    await runGit(repositoryPath, [
+      'rebase',
+      ...(autoStashValue ? ['--autostash'] : []),
+      target.ref,
+    ], {
+      env: { ...process.env, GIT_EDITOR: ':', GIT_SEQUENCE_EDITOR: ':' },
+      timeoutMs: 120_000,
+    })
+  } catch (error) {
+    const operation = await repositoryOperationState(repositoryPath)
+    if (operation.kind === 'rebase') return await refreshedDetails(repositoryPath)
+    throw error
+  }
+  return await refreshedDetails(repositoryPath)
+}
+
+const interactiveRebasePreview = async (
+  repositoryPath: string,
+  targetRef: unknown,
+): Promise<RepositoryRebasePreview> => {
+  await assertNoGitOperation(repositoryPath, 'preview an interactive rebase')
+  const { state, target } = await mergeTarget(repositoryPath, targetRef)
+  const output = await runGit(repositoryPath, [
+    'log', '--reverse', '--format=%H%x00%h%x00%s%x1e', `${target.ref}..HEAD`,
+  ])
+  const items = output.split('\x1e').flatMap((record): RepositoryRebasePlanItem[] => {
+    const [hash, shortHash, subject] = record.replace(/^\r?\n|\r?\n$/g, '').split('\0')
+    return hash && shortHash ? [{
+      action: 'pick',
+      hash,
+      shortHash,
+      subject: subject ?? '',
+    }] : []
+  })
+  let publishedCount = 0
+  try {
+    await runGit(repositoryPath, ['rev-parse', '--verify', '@{upstream}'])
+    const unpushed = new Set((await runGit(repositoryPath, [
+      'rev-list', '@{upstream}..HEAD',
+    ])).split(/\r?\n/).filter(Boolean))
+    publishedCount = items.filter((item) => !unpushed.has(item.hash)).length
+  } catch {
+    // A branch without an upstream has no known published commits.
+  }
+  return { currentBranch: state.currentBranch!, target, items, publishedCount }
+}
+
+const sequenceEditorPath = async (): Promise<string> => {
+  const directory = join(app.getPath('userData'), 'git-helpers')
+  await mkdir(directory, { recursive: true })
+  const helper = join(directory, 'rebase-sequence-editor.cjs')
+  await writeFile(helper, [
+    "const fs = require('node:fs')",
+    "const target = process.argv[2]",
+    "if (!target) process.exit(2)",
+    "fs.writeFileSync(target, Buffer.from(process.env.MYREPOS_REBASE_TODO || '', 'base64'))",
+    '',
+  ].join('\n'), 'utf8')
+  return helper
+}
+
+const interactiveRebase = async (
+  repositoryPath: string,
+  targetRef: unknown,
+  planValue: unknown,
+  autoStashValue: unknown,
+): Promise<RepositoryGitDetails> => {
+  await assertNoGitOperation(repositoryPath, 'start an interactive rebase')
+  if (!Array.isArray(planValue) || planValue.length === 0 || planValue.length > 200 ||
+    typeof autoStashValue !== 'boolean') throw new Error('Choose a valid rebase plan.')
+  const preview = await interactiveRebasePreview(repositoryPath, targetRef)
+  const expected = new Set(preview.items.map((item) => item.hash))
+  const plan = planValue as Array<Partial<RepositoryRebasePlanItem>>
+  if (plan.some((item) =>
+    !item.hash || !expected.has(item.hash) ||
+    !['pick', 'squash', 'fixup', 'drop'].includes(item.action ?? '')) ||
+    new Set(plan.map((item) => item.hash)).size !== expected.size ||
+    plan.length !== expected.size) throw new Error('The rebase plan no longer matches this branch.')
+  const firstRetained = plan.find((item) => item.action !== 'drop')
+  if (firstRetained?.action === 'squash' || firstRetained?.action === 'fixup') {
+    throw new Error('The first retained commit must use Pick.')
+  }
+  const dirty = Boolean((await runGit(repositoryPath, [
+    'status', '--porcelain=v1', '--untracked-files=normal',
+  ])).trim())
+  if (dirty && !autoStashValue) {
+    throw new Error('Commit or stash local changes, or enable auto-stash before rebasing.')
+  }
+  await createRecoveryRef(repositoryPath, 'interactive-rebase')
+  const helper = await sequenceEditorPath()
+  const todo = plan.map((item) => `${item.action} ${item.hash} ${item.subject ?? ''}`).join('\n') + '\n'
+  const editorCommand = `"${process.execPath.replaceAll('"', '\\"')}" "${helper.replaceAll('"', '\\"')}"`
+  try {
+    await runGit(repositoryPath, [
+      'rebase', '-i',
+      ...(autoStashValue ? ['--autostash'] : []),
+      preview.target.ref,
+    ], {
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        GIT_SEQUENCE_EDITOR: editorCommand,
+        GIT_EDITOR: ':',
+        MYREPOS_REBASE_TODO: Buffer.from(todo, 'utf8').toString('base64'),
+      },
+      timeoutMs: 120_000,
+    })
+  } catch (error) {
+    const operation = await repositoryOperationState(repositoryPath)
+    if (operation.kind === 'rebase') return await refreshedDetails(repositoryPath)
+    throw error
+  }
+  return await refreshedDetails(repositoryPath)
+}
+
+const pullRepository = async (
+  repositoryPath: string,
+  optionsValue: unknown,
+): Promise<RepositoryGitDetails> => {
+  await assertNoGitOperation(repositoryPath, 'pull')
+  const candidate = optionsValue && typeof optionsValue === 'object'
+    ? optionsValue as Partial<RepositoryPullOptions>
+    : { strategy: 'ff-only', autoStash: false }
+  if (!['ff-only', 'merge', 'rebase'].includes(candidate.strategy ?? '') ||
+    typeof candidate.autoStash !== 'boolean') {
+    throw new Error('Choose valid pull options.')
+  }
+  const options = candidate as RepositoryPullOptions
+  const dirty = Boolean((await runGit(repositoryPath, [
+    'status', '--porcelain=v1', '--untracked-files=normal',
+  ])).trim())
+  if (dirty && !options.autoStash && options.strategy !== 'ff-only') {
+    throw new Error('Commit or stash local changes, or enable auto-stash before pulling.')
+  }
+  const env = await authenticatedEnvironment(repositoryPath)
+  await runGit(repositoryPath, ['-c', 'credential.helper=', 'fetch', '--prune', 'origin'], {
+    env,
+    timeoutMs: 120_000,
+  })
+  await runGit(repositoryPath, ['rev-parse', '--verify', '@{upstream}'])
+  if (options.strategy !== 'ff-only') await createRecoveryRef(repositoryPath, `pull-${options.strategy}`)
+  const command = options.strategy === 'rebase'
+    ? ['rebase', ...(options.autoStash ? ['--autostash'] : []), '@{upstream}']
+    : ['merge',
+        ...(options.strategy === 'ff-only' ? ['--ff-only'] : ['--no-edit']),
+        ...(options.autoStash ? ['--autostash'] : []),
+        '@{upstream}']
+  try {
+    await runGit(repositoryPath, command, {
+      env: { ...env, GIT_EDITOR: ':', GIT_SEQUENCE_EDITOR: ':' },
+      timeoutMs: 120_000,
+    })
+  } catch (error) {
+    const operation = await repositoryOperationState(repositoryPath)
+    if (operation.kind !== 'none') return await refreshedDetails(repositoryPath)
+    throw error
+  }
+  const details = await refreshedDetails(repositoryPath)
+  if (details.status.clean && details.status.ahead === 0 && details.status.behind === 0) {
+    await markRepositorySynced(repositoryPath)
+  }
+  return details
+}
+
+const conflictVersions = async (
+  repositoryPath: string,
+  fileValue: unknown,
+): Promise<RepositoryConflictVersions> => {
+  const file = validatedFile(fileValue)
+  const details = await repositoryDetails(repositoryPath)
+  const changed = details.files.find((item) => item.path === file && item.conflicted)
+  if (!changed) throw new Error('This file is no longer conflicted.')
+  const unmerged = await runGit(repositoryPath, ['ls-files', '-u', '-z', '--', file])
+  const stages = new Map(unmerged.split('\0').filter(Boolean).flatMap((record) => {
+    const match = record.match(/^(\d+) ([a-f0-9]+) (\d)\t/)
+    return match ? [[match[3], { mode: match[1], object: match[2] }] as const] : []
+  }))
+  const modes = [...stages.values()].map((stage) => stage.mode)
+  const specialKind = modes.includes('160000') ? 'submodule'
+    : modes.includes('120000') ? 'symlink' : null
+  const readStage = async (stage: '1' | '2' | '3'): Promise<{
+    exists: boolean
+    content: string | null
+    binary: boolean
+  }> => {
+    const entry = stages.get(stage)
+    if (!entry) return { exists: false, content: null, binary: false }
+    const buffer = await runGitBuffer(repositoryPath, ['cat-file', '-p', entry.object])
+    let content: string | null = null
+    let binary = buffer.includes(0)
+    if (!binary) {
+      try {
+        content = new TextDecoder('utf-8', { fatal: true }).decode(buffer)
+      } catch {
+        binary = true
+      }
+    }
+    return { exists: true, content: binary || specialKind ? null : content, binary }
+  }
+  const [baseStage, currentStage, incomingStage] = await Promise.all([
+    readStage('1'),
+    readStage('2'),
+    readStage('3'),
+  ])
+  const binary = [baseStage, currentStage, incomingStage].some((stage) => stage.binary)
+  const kind: RepositoryConflictVersions['kind'] = specialKind ?? (binary ? 'binary' : 'text')
+  return {
+    path: file,
+    status: `${changed.indexStatus}${changed.worktreeStatus}`,
+    kind,
+    baseExists: baseStage.exists,
+    currentExists: currentStage.exists,
+    incomingExists: incomingStage.exists,
+    base: baseStage.content,
+    current: currentStage.content,
+    incoming: incomingStage.content,
+    binary: kind !== 'text',
+  }
+}
+
+const safeConflictPath = async (repositoryPath: string, fileValue: unknown): Promise<string> => {
+  const file = validatedFile(fileValue)
+  const root = await realpath(repositoryPath)
+  const candidate = resolve(root, file)
+  const relativePath = relative(root, candidate)
+  if (!relativePath || isAbsolute(relativePath) ||
+    relativePath.startsWith(`..${sep}`) || relativePath === '..') {
+    throw new Error('The selected file is outside this repository.')
+  }
+  const canonicalParent = await realpath(dirname(candidate))
+  const parentRelative = relative(root, canonicalParent)
+  if (isAbsolute(parentRelative) || parentRelative.startsWith(`..${sep}`) || parentRelative === '..') {
+    throw new Error('The selected file is linked outside this repository.')
+  }
+  try {
+    const canonicalCandidate = await realpath(candidate)
+    const candidateRelative = relative(root, canonicalCandidate)
+    if (isAbsolute(candidateRelative) ||
+      candidateRelative.startsWith(`..${sep}`) || candidateRelative === '..') {
+      throw new Error('The selected file is linked outside this repository.')
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('linked outside')) throw error
+    // A deleted side may require recreating the file inside its verified parent.
+  }
+  return candidate
+}
+
+const resolveConflict = async (
+  inputValue: unknown,
+): Promise<RepositoryGitDetails> => {
+  if (!inputValue || typeof inputValue !== 'object') throw new Error('Invalid conflict resolution.')
+  const input = inputValue as Partial<RepositoryConflictResolutionInput>
+  if (typeof input.path !== 'string' || typeof input.file !== 'string' ||
+    !['current', 'incoming', 'both', 'delete', 'content'].includes(input.resolution ?? '')) {
+    throw new Error('Invalid conflict resolution.')
+  }
+  const repositoryPath = await verifiedClonePath(input.path)
+  const versions = await conflictVersions(repositoryPath, input.file)
+  const resolution = input.resolution!
+  if (resolution === 'delete') {
+    await runGit(repositoryPath, ['rm', '-f', '--', versions.path])
+  } else if (resolution === 'current' || resolution === 'incoming') {
+    const available = resolution === 'current' ? versions.currentExists : versions.incomingExists
+    if (!available) throw new Error(`The ${resolution} side deleted this file. Choose Delete instead.`)
+    await runGit(repositoryPath, [
+      'checkout', resolution === 'current' ? '--ours' : '--theirs', '--', versions.path,
+    ])
+    await runGit(repositoryPath, ['add', '--', versions.path])
+  } else {
+    if (versions.kind !== 'text') {
+      throw new Error(`${versions.kind} conflicts must use Current, Incoming, or Delete.`)
+    }
+    const content = resolution === 'both'
+      ? [versions.current, versions.incoming].filter((value): value is string => value !== null)
+        .map((value) => value.endsWith('\n') ? value : `${value}\n`).join('')
+      : input.content
+    if (typeof content !== 'string') throw new Error('Enter the resolved file content.')
+    if (Buffer.byteLength(content, 'utf8') > 5_000_000) {
+      throw new Error('The resolved file exceeds the 5 MB safety limit.')
+    }
+    await writeFile(await safeConflictPath(repositoryPath, versions.path), content, 'utf8')
+    await runGit(repositoryPath, ['add', '--', versions.path])
+  }
+  return await refreshedDetails(repositoryPath)
+}
+
+const runOperationAction = async (
+  repositoryPath: string,
+  actionValue: unknown,
+): Promise<RepositoryGitDetails> => {
+  if (actionValue !== 'continue' && actionValue !== 'skip' && actionValue !== 'abort') {
+    throw new Error('Invalid Git operation action.')
+  }
+  const action: RepositoryOperationAction = actionValue
+  const operation = await repositoryOperationState(repositoryPath)
+  if (operation.kind === 'none') throw new Error('There is no active Git operation.')
+  if (action === 'continue' && operation.conflictedFiles.length > 0) {
+    throw new Error('Resolve every conflicted file before continuing.')
+  }
+  if (action === 'skip' && !operation.canSkip) {
+    throw new Error(`A ${operation.kind} operation cannot skip this step.`)
+  }
+
+  const commands: Record<Exclude<typeof operation.kind, 'none' | 'bisect'>,
+    Record<RepositoryOperationAction, string[] | null>> = {
+    merge: {
+      continue: ['commit', '--no-edit'],
+      skip: null,
+      abort: ['merge', '--abort'],
+    },
+    rebase: {
+      continue: ['rebase', '--continue'],
+      skip: ['rebase', '--skip'],
+      abort: ['rebase', '--abort'],
+    },
+    'cherry-pick': {
+      continue: ['cherry-pick', '--continue'],
+      skip: ['cherry-pick', '--skip'],
+      abort: ['cherry-pick', '--abort'],
+    },
+    revert: {
+      continue: ['revert', '--continue'],
+      skip: ['revert', '--skip'],
+      abort: ['revert', '--abort'],
+    },
+    am: {
+      continue: ['am', '--continue'],
+      skip: ['am', '--skip'],
+      abort: ['am', '--abort'],
+    },
+  }
+  if (operation.kind === 'bisect') {
+    if (action !== 'abort') throw new Error('Bisect only supports reset from this screen.')
+    await runGit(repositoryPath, ['bisect', 'reset'])
+  } else {
+    const command = commands[operation.kind][action]
+    if (!command) throw new Error(`A ${operation.kind} operation cannot ${action}.`)
+    await runGit(repositoryPath, command, {
+      env: { ...process.env, GIT_EDITOR: ':', GIT_SEQUENCE_EDITOR: ':' },
+      timeoutMs: 120_000,
+    })
+  }
+  return await refreshedDetails(repositoryPath)
+}
+
+const historyOperation = async (
+  repositoryPath: string,
+  kind: 'cherry-pick' | 'revert',
+  commitsValue: unknown,
+  mainlineValue?: unknown,
+): Promise<RepositoryGitDetails> => {
+  await assertNoGitOperation(repositoryPath, kind)
+  if (!Array.isArray(commitsValue) || commitsValue.length === 0 || commitsValue.length > 100) {
+    throw new Error('Choose between 1 and 100 commits.')
+  }
+  const commits = commitsValue.map(validatedCommitHash)
+  const dirty = Boolean((await runGit(repositoryPath, [
+    'status', '--porcelain=v1', '--untracked-files=normal',
+  ])).trim())
+  if (dirty) throw new Error(`Commit or stash local changes before starting a ${kind}.`)
+  await createRecoveryRef(repositoryPath, kind)
+
+  try {
+    if (kind === 'cherry-pick') {
+      await runGit(repositoryPath, ['cherry-pick', ...commits], {
+        env: { ...process.env, GIT_EDITOR: ':' },
+        timeoutMs: 120_000,
+      })
+    } else {
+      for (const commit of commits) {
+        const parentLine = (await runGit(repositoryPath, [
+          'rev-list', '--parents', '-n', '1', commit,
+        ])).trim()
+        const parentCount = Math.max(0, parentLine.split(/\s+/).length - 1)
+        const mainline = Number.isInteger(mainlineValue) && Number(mainlineValue) > 0
+          ? Number(mainlineValue)
+          : 1
+        if (parentCount > 1 && mainline > parentCount) {
+          throw new Error(`Merge commit ${commit.slice(0, 7)} has only ${parentCount} parents.`)
+        }
+        await runGit(repositoryPath, [
+          'revert', '--no-edit',
+          ...(parentCount > 1 ? ['-m', String(mainline)] : []),
+          commit,
+        ], {
+          env: { ...process.env, GIT_EDITOR: ':' },
+          timeoutMs: 120_000,
+        })
+      }
+    }
+  } catch (error) {
+    const operation = await repositoryOperationState(repositoryPath)
+    if (operation.kind === kind) return await refreshedDetails(repositoryPath)
+    throw error
+  }
+  return await refreshedDetails(repositoryPath)
+}
+
 const repositoryDetails = async (path: unknown): Promise<RepositoryGitDetails> => {
   const repositoryPath = await verifiedClonePath(path)
   const [status, files] = await Promise.all([
     readRepositoryStatus(repositoryPath),
     changedFiles(repositoryPath),
   ])
-  return { status, files }
+  const operation = await repositoryOperationState(repositoryPath, files)
+  return { status, files, operation }
 }
 
 const validatedFiles = (files: unknown): string[] => {
@@ -532,6 +1161,7 @@ const checkoutTarget = async (
   targetValue: unknown,
   strategyValue: unknown,
 ): Promise<RepositoryBranchState> => {
+  await assertNoGitOperation(repositoryPath, 'switch branches')
   const target = validatedCheckoutTarget(targetValue)
   const strategy = validatedCheckoutStrategy(strategyValue)
   const state = await repositoryBranchState(repositoryPath)
@@ -1012,16 +1642,11 @@ export const registerRepositoryActionHandlers = (): void => {
     })
     return await refreshedDetails(repositoryPath)
   })
-  ipcMain.handle('repositories:git-pull', async (_event, path: unknown) => {
-    const repositoryPath = await verifiedClonePath(path)
-    await runGit(repositoryPath, ['-c', 'credential.helper=', 'pull', '--ff-only'], {
-      env: await authenticatedEnvironment(repositoryPath),
-      timeoutMs: 120_000,
-    })
-    return await refreshedDetails(repositoryPath)
-  })
+  ipcMain.handle('repositories:git-pull', async (_event, path: unknown, options: unknown) =>
+    pullRepository(await verifiedClonePath(path), options))
   ipcMain.handle('repositories:git-push', async (_event, path: unknown) => {
     const repositoryPath = await verifiedClonePath(path)
+    await assertNoGitOperation(repositoryPath, 'push')
     const env = await authenticatedEnvironment(repositoryPath)
     let hasUpstream = true
     try {
@@ -1061,6 +1686,55 @@ export const registerRepositoryActionHandlers = (): void => {
     return await repositoryBranchState(repositoryPath)
   })
   ipcMain.handle(
+    'repositories:git-merge-preview',
+    async (_event, path: unknown, targetRef: unknown) =>
+      mergePreview(await verifiedClonePath(path), targetRef),
+  )
+  ipcMain.handle(
+    'repositories:git-merge',
+    async (_event, path: unknown, targetRef: unknown, mode: unknown) =>
+      mergeBranch(await verifiedClonePath(path), targetRef, mode),
+  )
+  ipcMain.handle(
+    'repositories:git-rebase',
+    async (_event, path: unknown, targetRef: unknown, autoStash: unknown) =>
+      rebaseBranch(await verifiedClonePath(path), targetRef, autoStash),
+  )
+  ipcMain.handle(
+    'repositories:git-interactive-rebase-preview',
+    async (_event, path: unknown, targetRef: unknown) =>
+      interactiveRebasePreview(await verifiedClonePath(path), targetRef),
+  )
+  ipcMain.handle(
+    'repositories:git-interactive-rebase',
+    async (_event, path: unknown, targetRef: unknown, plan: unknown, autoStash: unknown) =>
+      interactiveRebase(await verifiedClonePath(path), targetRef, plan, autoStash),
+  )
+  ipcMain.handle(
+    'repositories:git-conflict-versions',
+    async (_event, path: unknown, file: unknown) =>
+      conflictVersions(await verifiedClonePath(path), file),
+  )
+  ipcMain.handle(
+    'repositories:git-resolve-conflict',
+    async (_event, input: unknown) => resolveConflict(input),
+  )
+  ipcMain.handle(
+    'repositories:git-operation-action',
+    async (_event, path: unknown, action: unknown) =>
+      runOperationAction(await verifiedClonePath(path), action),
+  )
+  ipcMain.handle(
+    'repositories:git-cherry-pick',
+    async (_event, path: unknown, commits: unknown) =>
+      historyOperation(await verifiedClonePath(path), 'cherry-pick', commits),
+  )
+  ipcMain.handle(
+    'repositories:git-revert',
+    async (_event, path: unknown, commits: unknown, mainline: unknown) =>
+      historyOperation(await verifiedClonePath(path), 'revert', commits, mainline),
+  )
+  ipcMain.handle(
     'repositories:git-checkout',
     async (_event, path: unknown, target: unknown, strategy: unknown) => {
       const repositoryPath = await verifiedClonePath(path)
@@ -1071,6 +1745,7 @@ export const registerRepositoryActionHandlers = (): void => {
     'repositories:git-create-branch',
     async (_event, path: unknown, nameValue: unknown, startPointValue: unknown, checkoutValue: unknown) => {
       const repositoryPath = await verifiedClonePath(path)
+      await assertNoGitOperation(repositoryPath, 'create a branch')
       const name = await validatedBranchName(repositoryPath, nameValue)
       const startPoint = await validatedStartPoint(repositoryPath, startPointValue)
       if (checkoutValue !== true && checkoutValue !== false) throw new Error('Invalid branch option.')
@@ -1089,6 +1764,7 @@ export const registerRepositoryActionHandlers = (): void => {
     'repositories:git-rename-branch',
     async (_event, path: unknown, oldNameValue: unknown, newNameValue: unknown) => {
       const repositoryPath = await verifiedClonePath(path)
+      await assertNoGitOperation(repositoryPath, 'rename a branch')
       const oldName = await validatedBranchName(repositoryPath, oldNameValue)
       const newName = await validatedBranchName(repositoryPath, newNameValue)
       const state = await repositoryBranchState(repositoryPath)
@@ -1107,6 +1783,7 @@ export const registerRepositoryActionHandlers = (): void => {
     'repositories:git-delete-branch',
     async (_event, path: unknown, nameValue: unknown, forceValue: unknown) => {
       const repositoryPath = await verifiedClonePath(path)
+      await assertNoGitOperation(repositoryPath, 'delete a branch')
       const name = await validatedBranchName(repositoryPath, nameValue)
       if (forceValue !== true && forceValue !== false) throw new Error('Invalid branch deletion option.')
       const state = await repositoryBranchState(repositoryPath)
@@ -1124,6 +1801,7 @@ export const registerRepositoryActionHandlers = (): void => {
     'repositories:git-delete-remote-branch',
     async (_event, path: unknown, remoteValue: unknown, nameValue: unknown) => {
       const repositoryPath = await verifiedClonePath(path)
+      await assertNoGitOperation(repositoryPath, 'delete a remote branch')
       if (typeof remoteValue !== 'string' || !remoteValue || remoteValue.length > 240) {
         throw new Error('Choose a valid remote branch.')
       }
@@ -1148,6 +1826,7 @@ export const registerRepositoryActionHandlers = (): void => {
   )
   ipcMain.handle('repositories:git-pop-stash', async (_event, path: unknown) => {
     const repositoryPath = await verifiedClonePath(path)
+    await assertNoGitOperation(repositoryPath, 'restore a stash')
     const state = await repositoryBranchState(repositoryPath)
     if (state.stashCount === 0) throw new Error('There are no stashed changes to restore.')
     await runGit(repositoryPath, ['stash', 'pop'])
