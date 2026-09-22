@@ -3081,7 +3081,7 @@ export function App() {
   }
 
   const openConflictCenter = (file?: string): void => {
-    const target = file ?? gitDetails?.operation.conflictedFiles[0]
+    const target = file ?? gitDetails?.operation?.conflictedFiles[0]
     if (!target) return
     setConflictCenterOpen(true)
     void loadConflict(target)
@@ -3135,7 +3135,7 @@ export function App() {
   ): Promise<void> => {
     if (!window.desktop || !gitRepository?.localPath) return
     if (action === 'abort' && !window.confirm(
-      `Abort the active ${gitDetails?.operation.kind ?? 'Git'} operation and restore its starting state?`,
+      `Abort the active ${gitDetails?.operation?.kind ?? 'Git'} operation and restore its starting state?`,
     )) return
     setGitAction(`operation:${action}`)
     setGitError(null)
@@ -6938,7 +6938,7 @@ export function App() {
                                 ? 'red'
                                 : gitDetails?.status.clean ? 'teal' : 'orange'}
                               leftSection={<IconGitBranch size={12} />}
-                              disabled={Boolean(gitAction) || gitDetails?.operation.kind !== 'none'}
+                              disabled={Boolean(gitAction) || (gitDetails?.operation?.kind ?? 'none') !== 'none'}
                               onClick={() => openBranchManager()}
                             >
                               {gitDetails?.status.branch ?? (branchState
@@ -6968,7 +6968,7 @@ export function App() {
                               size="compact-xs"
                               variant="light"
                               loading={gitAction === 'pull'}
-                              disabled={Boolean(gitAction) || gitDetails?.operation.kind !== 'none'}
+                              disabled={Boolean(gitAction) || (gitDetails?.operation?.kind ?? 'none') !== 'none'}
                               onClick={openPullDialog}
                             >
                               Pull
@@ -6976,7 +6976,7 @@ export function App() {
                             <Button
                               size="compact-xs"
                               loading={gitAction === 'push'}
-                              disabled={Boolean(gitAction) || gitDetails?.operation.kind !== 'none'}
+                              disabled={Boolean(gitAction) || (gitDetails?.operation?.kind ?? 'none') !== 'none'}
                               onClick={() => void runGitAction('push', () =>
                                 window.desktop!.repositories.gitPush(gitRepository.localPath!),
                               )}
@@ -6990,7 +6990,7 @@ export function App() {
                           <Alert color="red" icon={<IconAlertCircle size={17} />}>{gitError}</Alert>
                         )}
 
-                        {gitDetails?.operation.kind !== 'none' && (
+                        {gitDetails && gitDetails.operation.kind !== 'none' && (
                           <Alert
                             color="orange"
                             icon={<IconGitMerge size={17} />}
@@ -7546,7 +7546,7 @@ export function App() {
                                           disabled={
                                             Boolean(gitAction) ||
                                             Boolean(branchAction) ||
-                                            gitDetails?.operation.kind !== 'none'
+                                            (gitDetails?.operation?.kind ?? 'none') !== 'none'
                                           }
                                           onClick={() => void runCommitOperation('cherry-pick', selectedCommitHash)}
                                         >
@@ -7560,7 +7560,7 @@ export function App() {
                                           disabled={
                                             Boolean(gitAction) ||
                                             Boolean(branchAction) ||
-                                            gitDetails?.operation.kind !== 'none'
+                                            (gitDetails?.operation?.kind ?? 'none') !== 'none'
                                           }
                                           onClick={() => void runCommitOperation('revert', selectedCommitHash)}
                                         >
@@ -11226,7 +11226,7 @@ export function App() {
                               size="compact-xs"
                               variant="subtle"
                               leftSection={<IconGitMerge size={13} />}
-                              disabled={Boolean(branchAction) || gitDetails?.operation.kind !== 'none'}
+                              disabled={Boolean(branchAction) || (gitDetails?.operation?.kind ?? 'none') !== 'none'}
                               loading={branchAction === `merge-preview:${branch.ref}`}
                               onClick={() => void requestMerge(branch)}
                             >
@@ -11498,7 +11498,7 @@ export function App() {
           <Paper p="xs" radius="md" withBorder style={{ overflow: 'auto' }}>
             <Text size="xs" fw={750} mb="xs">Conflicted files</Text>
             <Stack gap={3}>
-              {(gitDetails?.operation.conflictedFiles ?? []).map((file) => (
+              {(gitDetails?.operation?.conflictedFiles ?? []).map((file) => (
                 <Button
                   key={file}
                   size="compact-xs"
