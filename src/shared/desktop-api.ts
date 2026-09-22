@@ -1304,6 +1304,16 @@ export interface DesktopApi {
     chrome: string
     node: string
   }
+  diagnostics: {
+    reportRendererError: (details: {
+      kind: string
+      message: string
+      stack?: string
+      componentStack?: string
+      url?: string
+    }) => void
+    crashLogPath: () => Promise<string>
+  }
   windowControls: {
     minimize: () => Promise<void>
     toggleMaximize: () => Promise<boolean>

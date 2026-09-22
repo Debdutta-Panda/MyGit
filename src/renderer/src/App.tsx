@@ -970,6 +970,26 @@ const gitOperationLabel = (kind: RepositoryGitDetails['operation']['kind']): str
   none: 'Git',
 })[kind]
 
+const normalizeGitDetails = (details: RepositoryGitDetails): RepositoryGitDetails => {
+  const operation = (details as RepositoryGitDetails & {
+    operation?: RepositoryGitDetails['operation']
+  }).operation
+  if (operation) return details
+  return {
+    ...details,
+    operation: {
+      kind: 'none',
+      conflictedFiles: details.files.filter((file) => file.conflicted).map((file) => file.path),
+      canContinue: false,
+      canSkip: false,
+      canAbort: false,
+      currentStep: null,
+      totalSteps: null,
+      originalHead: null,
+    },
+  }
+}
+
 const loadPullOptions = (path: string): { strategy: RepositoryPullStrategy; autoStash: boolean } => {
   try {
     const value = JSON.parse(localStorage.getItem(`myrepos:pull:${path}`) ?? '{}') as {
@@ -1773,7 +1793,9 @@ export function App() {
         }
         workingTreeRefreshTimerRef.current = window.setTimeout(() => {
           setWorkingTreeRefreshVersion((version) => version + 1)
-          void window.desktop!.repositories.gitDetails(status.path).then(setGitDetails).catch(() => undefined)
+          void window.desktop!.repositories.gitDetails(status.path)
+            .then((details) => setGitDetails(normalizeGitDetails(details)))
+            .catch(() => undefined)
         }, 350)
       }
     })
@@ -2771,7 +2793,7 @@ export function App() {
   }
 
   const applyGitDetails = (details: RepositoryGitDetails): void => {
-    setGitDetails(details)
+    setGitDetails(normalizeGitDetails(details))
     setGitStatuses((current) => ({ ...current, [details.status.path]: details.status }))
   }
 

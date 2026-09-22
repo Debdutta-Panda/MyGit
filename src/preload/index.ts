@@ -8,6 +8,10 @@ const desktopApi: DesktopApi = {
     chrome: process.versions.chrome,
     node: process.versions.node,
   },
+  diagnostics: {
+    reportRendererError: (details) => ipcRenderer.send('diagnostics:renderer-error', details),
+    crashLogPath: () => ipcRenderer.invoke('diagnostics:crash-log-path'),
+  },
   windowControls: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
     toggleMaximize: () => ipcRenderer.invoke('window:toggle-maximize'),
