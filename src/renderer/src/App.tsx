@@ -5672,7 +5672,7 @@ export function App() {
                       ? gitStatuses[repository.localPath]
                       : undefined
                     const changeCount = gitStatus
-                      ? gitStatus.staged + gitStatus.unstaged + gitStatus.untracked + gitStatus.conflicts
+                      ? gitStatus.changedFiles + gitStatus.untracked
                       : 0
                     const assignment = organizationAssignments[repositoryKey]
                     const repositoryAccount = accounts.find((account) =>
@@ -5966,20 +5966,6 @@ export function App() {
                                     </span>
                                   </Tooltip>
                                 )}
-                                {gitStatus.unstaged > 0 && (
-                                  <Tooltip label={gitStatus.unstaged + ' modified files'}>
-                                    <span className="repository-count-status" data-tone="warning">
-                                      <IconFileCode size={12} />{gitStatus.unstaged}
-                                    </span>
-                                  </Tooltip>
-                                )}
-                                {gitStatus.untracked > 0 && (
-                                  <Tooltip label={gitStatus.untracked + ' untracked files'}>
-                                    <span className="repository-count-status" data-tone="warning">
-                                      <IconPlus size={12} />{gitStatus.untracked}
-                                    </span>
-                                  </Tooltip>
-                                )}
                                 {gitStatus.conflicts > 0 && (
                                   <Tooltip label={gitStatus.conflicts + ' conflicts'}>
                                     <span className="repository-count-status" data-tone="danger">
@@ -6001,6 +5987,15 @@ export function App() {
                                     </span>
                                   </Tooltip>
                                 )}
+                                {!gitStatus.clean && <Tooltip label={`Unique tracked files changed: ${gitStatus.changedFiles}. Line totals compare tracked text files with HEAD; untracked and binary file contents are excluded${gitStatus.binaryFiles ? ` (${gitStatus.binaryFiles} binary)` : ''}.`}>
+                                  <span className="repository-change-metrics">
+                                    <span><small>Changed</small><b>{gitStatus.changedFiles}</b></span>
+                                    <span><small>Untracked</small><b>{gitStatus.untracked}</b></span>
+                                    <span data-tone="positive"><small>Added</small><b>+{gitStatus.additions}</b></span>
+                                    <span data-tone="negative"><small>Deleted</small><b>-{gitStatus.deletions}</b></span>
+                                    <span><small>Churn</small><b>{gitStatus.churn}</b></span>
+                                  </span>
+                                </Tooltip>}
                                 {gitStatus.clean && !gitStatus.upstream &&
                                   gitStatus.ahead === 0 && gitStatus.behind === 0 && (
                                   <Tooltip label="Working tree clean">

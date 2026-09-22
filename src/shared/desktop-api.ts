@@ -940,6 +940,11 @@ export interface RepositoryGitStatus {
   unstaged: number
   untracked: number
   conflicts: number
+  changedFiles: number
+  additions: number
+  deletions: number
+  churn: number
+  binaryFiles: number
   clean: boolean
   error: string | null
 }

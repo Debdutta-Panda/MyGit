@@ -8,7 +8,56 @@ import { reconsiderAutoPush, stopAllAutoPush } from './repository-auto-push'
 const watchers = new Map<string, FSWatcher>()
 const refreshTimers = new Map<string, NodeJS.Timeout>()
 
-export const readRepositoryStatus = async (repositoryPath: string): Promise<RepositoryGitStatus> =>
+interface RepositoryLineChanges {
+  additions: number
+  deletions: number
+  churn: number
+  binaryFiles: number
+}
+
+const readRepositoryLineChanges = async (repositoryPath: string): Promise<RepositoryLineChanges> =>
+  await new Promise((resolvePromise) => {
+    const git = spawn('git', ['-C', repositoryPath, 'diff', '--numstat', 'HEAD', '--'], {
+      shell: false,
+      windowsHide: true,
+    })
+    let output = ''
+    let settled = false
+    const finish = (result: RepositoryLineChanges): void => {
+      if (settled) return
+      settled = true
+      resolvePromise(result)
+    }
+    git.stdout.on('data', (chunk: Buffer) => {
+      output = `${output}${chunk.toString()}`.slice(-2_000_000)
+    })
+    git.once('error', () => finish({ additions: 0, deletions: 0, churn: 0, binaryFiles: 0 }))
+    git.once('close', (code) => {
+      if (code !== 0) {
+        finish({ additions: 0, deletions: 0, churn: 0, binaryFiles: 0 })
+        return
+      }
+      let additions = 0
+      let deletions = 0
+      let binaryFiles = 0
+      for (const line of output.split('\n')) {
+        if (!line) continue
+        const [added, deleted] = line.split('\t', 3)
+        if (added === '-' || deleted === '-') {
+          binaryFiles += 1
+          continue
+        }
+        additions += Number.parseInt(added, 10) || 0
+        deletions += Number.parseInt(deleted, 10) || 0
+      }
+      finish({ additions, deletions, churn: additions + deletions, binaryFiles })
+    })
+  })
+
+const readRepositoryStatusSummary = async (repositoryPath: string): Promise<Omit<
+  RepositoryGitStatus,
+  'additions' | 'deletions' | 'churn' | 'binaryFiles'
+>> =>
   await new Promise((resolvePromise) => {
     const git = spawn(
       'git',
@@ -35,6 +84,7 @@ export const readRepositoryStatus = async (repositoryPath: string): Promise<Repo
         unstaged: 0,
         untracked: 0,
         conflicts: 0,
+        changedFiles: 0,
         clean: false,
         error: 'Git status is unavailable.',
       })
@@ -51,6 +101,7 @@ export const readRepositoryStatus = async (repositoryPath: string): Promise<Repo
           unstaged: 0,
           untracked: 0,
           conflicts: 0,
+          changedFiles: 0,
           clean: false,
           error: errorOutput.trim() || 'Unable to read Git status.',
         })
@@ -65,6 +116,7 @@ export const readRepositoryStatus = async (repositoryPath: string): Promise<Repo
       let unstaged = 0
       let untracked = 0
       let conflicts = 0
+      let changedFiles = 0
 
       for (const line of output.split('\n')) {
         if (line.startsWith('# branch.head ')) {
@@ -79,10 +131,14 @@ export const readRepositoryStatus = async (repositoryPath: string): Promise<Repo
             behind = Number(match[2])
           }
         } else if (line.startsWith('1 ') || line.startsWith('2 ')) {
+          changedFiles += 1
           const state = line.split(' ', 3)[1] ?? '..'
           if (state[0] !== '.') staged += 1
           if (state[1] !== '.') unstaged += 1
-        } else if (line.startsWith('u ')) conflicts += 1
+        } else if (line.startsWith('u ')) {
+          conflicts += 1
+          changedFiles += 1
+        }
         else if (line.startsWith('? ')) untracked += 1
       }
 
@@ -96,11 +152,20 @@ export const readRepositoryStatus = async (repositoryPath: string): Promise<Repo
         unstaged,
         untracked,
         conflicts,
+        changedFiles,
         clean: staged + unstaged + untracked + conflicts === 0,
         error: null,
       })
     })
   })
+
+export const readRepositoryStatus = async (repositoryPath: string): Promise<RepositoryGitStatus> => {
+  const [status, lineChanges] = await Promise.all([
+    readRepositoryStatusSummary(repositoryPath),
+    readRepositoryLineChanges(repositoryPath),
+  ])
+  return { ...status, ...lineChanges }
+}
 
 export const refreshRepositoryStatus = async (repositoryPath: string): Promise<void> => {
   broadcastStatus(await readRepositoryStatus(repositoryPath))
