@@ -8,8 +8,49 @@ import { reconsiderAutoPush, stopAllAutoPush } from './repository-auto-push'
 const watchers = new Map<string, FSWatcher>()
 const refreshTimers = new Map<string, NodeJS.Timeout>()
 
+interface RepositoryDiffStats {
+  additions: number
+  deletions: number
+}
+
+const emptyDiffStats = (): RepositoryDiffStats => ({ additions: 0, deletions: 0 })
+
+const readRepositoryDiffStats = async (repositoryPath: string): Promise<RepositoryDiffStats> =>
+  await new Promise((resolvePromise) => {
+    const git = spawn(
+      'git',
+      [
+        '-C', repositoryPath, 'diff', '--no-ext-diff', '--no-textconv',
+        '--ignore-submodules=dirty', '--numstat', 'HEAD', '--',
+      ],
+      { shell: false, windowsHide: true },
+    )
+    let output = ''
+
+    git.stdout.on('data', (chunk: Buffer) => {
+      output = `${output}${chunk.toString()}`.slice(-5_000_000)
+    })
+    git.once('error', () => resolvePromise(emptyDiffStats()))
+    git.once('close', (code) => {
+      if (code !== 0) {
+        resolvePromise(emptyDiffStats())
+        return
+      }
+      let additions = 0
+      let deletions = 0
+      for (const line of output.split(/\r?\n/)) {
+        const [added, deleted] = line.split('\t', 2)
+        if (!added || !deleted || added === '-' || deleted === '-') continue
+        additions += Number.parseInt(added, 10) || 0
+        deletions += Number.parseInt(deleted, 10) || 0
+      }
+      resolvePromise({ additions, deletions })
+    })
+  })
+
 export const readRepositoryStatus = async (repositoryPath: string): Promise<RepositoryGitStatus> =>
   await new Promise((resolvePromise) => {
+    const diffStatsPromise = readRepositoryDiffStats(repositoryPath)
     const git = spawn(
       'git',
       ['-C', repositoryPath, 'status', '--porcelain=v2', '--branch', '--untracked-files=normal'],
@@ -35,6 +76,11 @@ export const readRepositoryStatus = async (repositoryPath: string): Promise<Repo
         unstaged: 0,
         untracked: 0,
         conflicts: 0,
+        changedFiles: 0,
+        additions: 0,
+        deletions: 0,
+        netLines: 0,
+        churn: 0,
         clean: false,
         error: 'Git status is unavailable.',
       })
@@ -51,6 +97,11 @@ export const readRepositoryStatus = async (repositoryPath: string): Promise<Repo
           unstaged: 0,
           untracked: 0,
           conflicts: 0,
+          changedFiles: 0,
+          additions: 0,
+          deletions: 0,
+          netLines: 0,
+          churn: 0,
           clean: false,
           error: errorOutput.trim() || 'Unable to read Git status.',
         })
@@ -65,6 +116,7 @@ export const readRepositoryStatus = async (repositoryPath: string): Promise<Repo
       let unstaged = 0
       let untracked = 0
       let conflicts = 0
+      let changedFiles = 0
 
       for (const line of output.split('\n')) {
         if (line.startsWith('# branch.head ')) {
@@ -79,14 +131,20 @@ export const readRepositoryStatus = async (repositoryPath: string): Promise<Repo
             behind = Number(match[2])
           }
         } else if (line.startsWith('1 ') || line.startsWith('2 ')) {
+          changedFiles += 1
           const state = line.split(' ', 3)[1] ?? '..'
           if (state[0] !== '.') staged += 1
           if (state[1] !== '.') unstaged += 1
-        } else if (line.startsWith('u ')) conflicts += 1
-        else if (line.startsWith('? ')) untracked += 1
+        } else if (line.startsWith('u ')) {
+          conflicts += 1
+          changedFiles += 1
+        } else if (line.startsWith('? ')) {
+          untracked += 1
+          changedFiles += 1
+        }
       }
 
-      resolvePromise({
+      void diffStatsPromise.then(({ additions, deletions }) => resolvePromise({
         path: repositoryPath,
         branch,
         upstream,
@@ -96,9 +154,14 @@ export const readRepositoryStatus = async (repositoryPath: string): Promise<Repo
         unstaged,
         untracked,
         conflicts,
+        changedFiles,
+        additions,
+        deletions,
+        netLines: additions - deletions,
+        churn: additions + deletions,
         clean: staged + unstaged + untracked + conflicts === 0,
         error: null,
-      })
+      }))
     })
   })
 

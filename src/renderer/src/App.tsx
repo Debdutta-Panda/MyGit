@@ -226,6 +226,11 @@ const DeferredFeature = ({ children }: { children: ReactNode }) => (
   </Suspense>
 )
 
+const compactRepositoryMetric = new Intl.NumberFormat(undefined, {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+})
+
 function SafeAutoPushStatus({ state }: { state: RepositoryAutoPushState | undefined }) {
   const calculateRemaining = (): number => state?.phase === 'countdown' && state.dueAt
     ? Math.max(0, Math.ceil((new Date(state.dueAt).getTime() - Date.now()) / 1000))
@@ -6441,6 +6446,30 @@ export function App() {
                                       <IconCircleCheck size={13} />
                                     </span>
                                   </Tooltip>
+                                )}
+                                {!gitStatus.clean && (
+                                  <span
+                                    className='repository-change-metrics'
+                                    aria-label={`${gitStatus.changedFiles ?? changeCount} changed files, ${gitStatus.netLines ?? 0} net lines, ${gitStatus.additions ?? 0} additions, ${gitStatus.deletions ?? 0} deletions, ${gitStatus.churn ?? 0} lines of churn`}
+                                  >
+                                    <Tooltip label='Changed files, including untracked files'>
+                                      <span><b>Files</b>{compactRepositoryMetric.format(gitStatus.changedFiles ?? changeCount)}</span>
+                                    </Tooltip>
+                                    <Tooltip label='Net line change in tracked files'>
+                                      <span data-tone={(gitStatus.netLines ?? 0) >= 0 ? 'positive' : 'negative'}>
+                                        <b>Lines</b>{(gitStatus.netLines ?? 0) >= 0 ? '+' : '-'}{compactRepositoryMetric.format(Math.abs(gitStatus.netLines ?? 0))}
+                                      </span>
+                                    </Tooltip>
+                                    <Tooltip label='Added lines in tracked files'>
+                                      <span data-tone='positive'><b>Add</b>+{compactRepositoryMetric.format(gitStatus.additions ?? 0)}</span>
+                                    </Tooltip>
+                                    <Tooltip label='Deleted lines in tracked files'>
+                                      <span data-tone='negative'><b>Del</b>-{compactRepositoryMetric.format(gitStatus.deletions ?? 0)}</span>
+                                    </Tooltip>
+                                    <Tooltip label='Line churn (additions + deletions) in tracked files'>
+                                      <span><b>Churn</b>{compactRepositoryMetric.format(gitStatus.churn ?? 0)}</span>
+                                    </Tooltip>
+                                  </span>
                                 )}
                               </>
                             )}
