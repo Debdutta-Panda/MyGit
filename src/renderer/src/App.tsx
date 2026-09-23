@@ -49,8 +49,6 @@ import xmlLogo from 'devicon/icons/xml/xml-original.svg'
 import yamlLogo from 'devicon/icons/yaml/yaml-original.svg'
 import { FileIcon, FolderIcon } from '@react-symbols/icons/utils'
 import { marked } from 'marked'
-import { SshConnectionsPage } from './SshConnectionsPage'
-import { LocalFoldersPage } from './LocalFoldersPage'
 import {
   ActionIcon,
   Alert,
@@ -202,7 +200,6 @@ import type {
   WorkspaceProvisionResult,
 } from '../../shared/desktop-api'
 import myReposIcon from './assets/myrepos-icon.png'
-import { SqlSchemaPreview } from './SqlSchemaPreview'
 import { RepositorySortMenu } from './RepositorySortMenu'
 import { useDialogAutofocus } from './useDialogAutofocus'
 import type { PortfolioAnalyticsRepository } from './RepositoryPortfolioAnalytics'
@@ -218,6 +215,15 @@ const LazyRepositoryPortfolioAnalytics = lazy(async () => ({
 }))
 const LazyTerminalPanel = lazy(async () => ({
   default: (await import('./TerminalPanel')).TerminalPanel,
+}))
+const LazySshConnectionsPage = lazy(async () => ({
+  default: (await import('./SshConnectionsPage')).SshConnectionsPage,
+}))
+const LazyLocalFoldersPage = lazy(async () => ({
+  default: (await import('./LocalFoldersPage')).LocalFoldersPage,
+}))
+const LazySqlSchemaPreview = lazy(async () => ({
+  default: (await import('./SqlSchemaPreview')).SqlSchemaPreview,
 }))
 
 const DeferredFeature = ({ children }: { children: ReactNode }) => (
@@ -346,6 +352,9 @@ const RepositoryPortfolioAnalytics = (
   props: ComponentProps<typeof LazyRepositoryPortfolioAnalytics>
 ) => (
   <DeferredFeature><LazyRepositoryPortfolioAnalytics {...props} /></DeferredFeature>
+)
+const SqlSchemaPreview = (props: ComponentProps<typeof LazySqlSchemaPreview>) => (
+  <DeferredFeature><LazySqlSchemaPreview {...props} /></DeferredFeature>
 )
 
 type AuthorizationState = 'idle' | 'starting' | 'waiting'
@@ -1351,7 +1360,6 @@ export function App() {
   const gitPanelRequestRef = useRef(0)
   const historySelectionRequestRef = useRef(0)
   const workingTreeRefreshTimerRef = useRef<number | null>(null)
-  const automaticInsightScanPathsRef = useRef(new Set<string>())
   const [connectOpen, setConnectOpen] = useState(false)
   const [authorizationState, setAuthorizationState] = useState<AuthorizationState>('idle')
   const [authorization, setAuthorization] = useState<GitHubDeviceAuthorization | null>(null)
@@ -1577,8 +1585,15 @@ export function App() {
     const handleTerminalShortcut = (event: KeyboardEvent): void => {
       if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.key !== '`') return
       event.preventDefault()
-      setTerminalMounted(true)
-      setTerminalVisible((visible) => !visible)
+      setTerminalVisible((visible) => {
+        if (visible) {
+          setTerminalMounted(false)
+          setTerminalRequest(null)
+        } else {
+          setTerminalMounted(true)
+        }
+        return !visible
+      })
     }
     window.addEventListener('keydown', handleTerminalShortcut)
     return () => window.removeEventListener('keydown', handleTerminalShortcut)
@@ -1825,26 +1840,6 @@ export function App() {
     return unsubscribe
   }, [])
 
-  useEffect(() => {
-    if (!window.desktop) return
-    let cancelled = false
-    const pending = repositories.filter((repository) => repository.localPath &&
-      localStorage.getItem(`myrepos:insights-mode:${repository.localPath}`) === 'automatic' &&
-      !automaticInsightScanPathsRef.current.has(repository.localPath))
-    for (const repository of pending) automaticInsightScanPathsRef.current.add(repository.localPath!)
-    void (async () => {
-      for (const repository of pending) {
-        if (cancelled || !repository.localPath) return
-        try {
-          const result = await window.desktop!.repositories.scanInsights(repository.localPath)
-          if (!cancelled) setInsightsCache((current) => ({ ...current, [repository.localPath!]: result }))
-        } catch {
-          // Background automatic scans remain quiet; opening Insights shows actionable errors.
-        }
-      }
-    })()
-    return () => { cancelled = true }
-  }, [repositories])
 
   useEffect(() => {
     if (activeView !== 'repositories' || !selectedAccountId || !window.desktop) return
@@ -4215,12 +4210,18 @@ export function App() {
 
   const scanRepositoryInsights = async (repository: GitHubRepository): Promise<void> => {
     if (!window.desktop || !repository.localPath) return
+    const repositoryPath = repository.localPath
     setInsightsLoading(true)
     setInsightsError(null)
     try {
-      const result = await window.desktop.repositories.scanInsights(repository.localPath)
+      const result = await window.desktop.repositories.scanInsights(repositoryPath)
       setInsightsResult(result)
-      setInsightsCache((current) => ({ ...current, [repository.localPath!]: result }))
+      setInsightsCache((current) => {
+        const entries = Object.entries(current)
+          .filter(([path]) => path !== repositoryPath)
+        entries.push([repositoryPath, result])
+        return Object.fromEntries(entries.slice(-4))
+      })
     } catch (error) {
       setInsightsError(errorMessage(error))
     } finally {
@@ -5428,15 +5429,22 @@ export function App() {
               Save settings
             </Button>
           )}
-          <Tooltip label={`${terminalVisible ? 'Hide' : 'Show'} terminal (Ctrl+\`)`}>
+          <Tooltip label={`${terminalVisible ? 'Close' : 'Show'} terminal (Ctrl+\`)`}>
             <ActionIcon
               className="workspace-menu-button"
               variant={terminalVisible ? 'light' : 'subtle'}
               color={terminalVisible ? 'teal' : 'gray'}
-              aria-label={`${terminalVisible ? 'Hide' : 'Show'} terminal`}
+              aria-label={`${terminalVisible ? 'Close' : 'Show'} terminal`}
               onClick={() => {
-                setTerminalMounted(true)
-                setTerminalVisible((visible) => !visible)
+                setTerminalVisible((visible) => {
+                  if (visible) {
+                    setTerminalMounted(false)
+                    setTerminalRequest(null)
+                  } else {
+                    setTerminalMounted(true)
+                  }
+                  return !visible
+                })
               }}
             >
               <IconTerminal2 size={18} />
@@ -8221,18 +8229,22 @@ export function App() {
               </div>
             </div>
           ) : activeView === 'local-folders' ? (
-            <LocalFoldersPage />
+            <DeferredFeature>
+              <LazyLocalFoldersPage />
+            </DeferredFeature>
           ) : activeView === 'ssh' ? (
-            <SshConnectionsPage onOpenTerminal={(connection, initialInput) => {
-              setTerminalMounted(true)
-              setTerminalVisible(true)
-              setTerminalRequest({
-                id: Date.now(),
-                kind: 'ssh',
-                sshConnectionId: connection.id,
-                initialInput,
-              })
-            }} />
+            <DeferredFeature>
+              <LazySshConnectionsPage onOpenTerminal={(connection, initialInput) => {
+                setTerminalMounted(true)
+                setTerminalVisible(true)
+                setTerminalRequest({
+                  id: Date.now(),
+                  kind: 'ssh',
+                  sshConnectionId: connection.id,
+                  initialInput,
+                })
+              }} />
+            </DeferredFeature>
           ) : activeOrganizationKind && activeOrganizationCopy ? (
             <div className="organization-management-content">
               <section className="intro-row">
@@ -8726,7 +8738,11 @@ export function App() {
                 (workspaceTarget?.type === 'folder' ? workspaceTarget.path : null)}
               request={terminalRequest}
               onRequestHandled={() => setTerminalRequest(null)}
-              onClose={() => setTerminalVisible(false)}
+              onClose={() => {
+                setTerminalVisible(false)
+                setTerminalMounted(false)
+                setTerminalRequest(null)
+              }}
             />
           </Suspense>
         )}

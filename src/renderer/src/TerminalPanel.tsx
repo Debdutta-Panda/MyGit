@@ -80,7 +80,7 @@ function TerminalViewport({
       minimumContrastRatio: 4.5,
       overviewRulerWidth: 0,
       rightClickSelectsWord: true,
-      scrollback: 10_000,
+      scrollback: 2_000,
       smoothScrollDuration: 80,
       theme: {
         background: '#0c1117',
@@ -237,7 +237,9 @@ export function TerminalPanel({
 }) {
   const panelRef = useRef<HTMLElement>(null)
   const controllersRef = useRef(new Map<string, TerminalController>())
+  const sessionIdsRef = useRef(new Set<string>())
   const creatingRef = useRef(false)
+  const disposedRef = useRef(false)
   const [height, setHeight] = useState(() => Number(localStorage.getItem('myrepos:terminal-height')) || 310)
   const [profiles, setProfiles] = useState<TerminalProfile[]>([])
   const [selectedProfile, setSelectedProfile] = useState<string | null>(null)
@@ -265,6 +267,18 @@ export function TerminalPanel({
     })
   }, [])
 
+  useEffect(() => {
+    disposedRef.current = false
+    return () => {
+      disposedRef.current = true
+      for (const id of sessionIdsRef.current) {
+        void window.desktop?.terminals.kill(id).catch(() => undefined)
+      }
+      sessionIdsRef.current.clear()
+      controllersRef.current.clear()
+    }
+  }, [])
+
   const createSession = async (
     profileId = selectedProfile,
     requestedCwd = cwd,
@@ -282,6 +296,11 @@ export function TerminalPanel({
         cols: 100,
         rows: 30,
       })
+      if (disposedRef.current) {
+        await window.desktop.terminals.kill(session.id).catch(() => undefined)
+        return null
+      }
+      sessionIdsRef.current.add(session.id)
       setSessions((current) => [...current, session])
       setActiveId(session.id)
       return session
@@ -336,6 +355,7 @@ export function TerminalPanel({
 
   const closeSession = async (id: string): Promise<void> => {
     await window.desktop?.terminals.kill(id).catch(() => undefined)
+    sessionIdsRef.current.delete(id)
     controllersRef.current.delete(id)
     if (splitPair?.includes(id)) setSplitPair(null)
     setSessions((current) => {
@@ -500,8 +520,8 @@ export function TerminalPanel({
               <IconPlayerStop size={15} />
             </ActionIcon>
           </Tooltip>
-          <Tooltip label="Hide terminal (Ctrl+`)">
-            <ActionIcon size="sm" variant="subtle" color="gray" aria-label="Hide terminal" onClick={onClose}>
+          <Tooltip label="Close terminal (Ctrl+`)">
+            <ActionIcon size="sm" variant="subtle" color="gray" aria-label="Close terminal" onClick={onClose}>
               <IconX size={15} />
             </ActionIcon>
           </Tooltip>

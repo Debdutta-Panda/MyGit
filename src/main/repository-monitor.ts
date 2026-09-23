@@ -7,6 +7,26 @@ import { reconsiderAutoPush, stopAllAutoPush } from './repository-auto-push'
 
 const watchers = new Map<string, FSWatcher>()
 const refreshTimers = new Map<string, NodeJS.Timeout>()
+const refreshesInFlight = new Set<string>()
+const refreshesPending = new Set<string>()
+
+const ignoredWatchDirectories = new Set([
+  '.cache',
+  '.next',
+  '.venv',
+  'build',
+  'coverage',
+  'dist',
+  'node_modules',
+  'out',
+])
+
+const ignoreWatchEvent = (filename: string | Buffer | null): boolean => {
+  if (!filename) return false
+  const segments = filename.toString().toLowerCase().split(/[\\/]+/)
+  return segments.includes('.git') ||
+    segments.some((segment) => ignoredWatchDirectories.has(segment))
+}
 
 interface RepositoryDiffStats {
   additions: number
@@ -185,9 +205,9 @@ export const startAutoPushMonitoring = (): void => {
     const rows = getDatabase().prepare(`
       SELECT local_path FROM working_copies WHERE auto_push_mode = 'idle'
     `).all() as unknown as Array<{ local_path: string }>
-    await Promise.allSettled(rows.map(async (row) => {
+    for (const row of rows) {
       broadcastStatus(await readRepositoryStatus(row.local_path))
-    }))
+    }
   }
   void scan()
   autoPushInitialTimer = setTimeout(() => {
@@ -206,20 +226,39 @@ export const stopAutoPushMonitoring = (): void => {
   stopAllAutoPush()
 }
 
+const runRepositoryRefresh = async (repositoryPath: string): Promise<void> => {
+  if (refreshesInFlight.has(repositoryPath)) {
+    refreshesPending.add(repositoryPath)
+    return
+  }
+  refreshesInFlight.add(repositoryPath)
+  try {
+    broadcastStatus(await readRepositoryStatus(repositoryPath))
+  } finally {
+    refreshesInFlight.delete(repositoryPath)
+    if (refreshesPending.delete(repositoryPath) && watchers.has(repositoryPath)) {
+      scheduleRefresh(repositoryPath)
+    }
+  }
+}
+
 const scheduleRefresh = (repositoryPath: string): void => {
   const existingTimer = refreshTimers.get(repositoryPath)
   if (existingTimer) clearTimeout(existingTimer)
   refreshTimers.set(repositoryPath, setTimeout(() => {
     refreshTimers.delete(repositoryPath)
-    void readRepositoryStatus(repositoryPath).then(broadcastStatus)
-  }, 350))
+    void runRepositoryRefresh(repositoryPath)
+  }, 500))
 }
 
 const createWatcher = (repositoryPath: string): FSWatcher => {
+  const changed = (_eventType: string, filename: string | Buffer | null): void => {
+    if (!ignoreWatchEvent(filename)) scheduleRefresh(repositoryPath)
+  }
   try {
-    return watch(repositoryPath, { recursive: true }, () => scheduleRefresh(repositoryPath))
+    return watch(repositoryPath, { recursive: true }, changed)
   } catch {
-    return watch(repositoryPath, () => scheduleRefresh(repositoryPath))
+    return watch(repositoryPath, changed)
   }
 }
 
@@ -235,6 +274,7 @@ export const monitorRepositories = async (
     const timer = refreshTimers.get(path)
     if (timer) clearTimeout(timer)
     refreshTimers.delete(path)
+    refreshesPending.delete(path)
   }
 
   for (const path of requestedPaths) {
@@ -247,5 +287,7 @@ export const monitorRepositories = async (
     watchers.set(path, watcher)
   }
 
-  return await Promise.all([...requestedPaths].map(readRepositoryStatus))
+  const statuses: RepositoryGitStatus[] = []
+  for (const path of requestedPaths) statuses.push(await readRepositoryStatus(path))
+  return statuses
 }

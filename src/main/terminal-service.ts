@@ -37,7 +37,7 @@ interface ManagedTerminal {
 const sessions = new Map<string, ManagedTerminal>()
 const ownersWithCleanup = new Set<number>()
 let sessionSequence = 0
-const maximumBufferLength = 1_000_000
+const maximumBufferLength = 250_000
 
 const executableOnPath = async (name: string): Promise<string | null> => {
   const extensions = platform() === 'win32'

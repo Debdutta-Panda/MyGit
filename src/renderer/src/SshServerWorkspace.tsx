@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActionIcon,
   Alert,
@@ -35,15 +35,28 @@ import type {
   SshConnection,
   SshServerOverview,
 } from '../../shared/desktop-api'
-import { SshRemoteFileManager } from './SshRemoteFileManager'
-import { SshUsersGroupsManager } from './SshUsersGroupsManager'
-import { SshCommandSnippets } from './SshCommandSnippets'
-import { SshScripts } from './SshScripts'
-import { SshDatabases } from './SshDatabases'
-import { SshWeb } from './SshWeb'
 import { RemoteConnectionsPanel } from './RemoteConnectionsPanel'
 
 type WorkspaceTab = 'overview' | 'files' | 'accounts' | 'snippets' | 'scripts' | 'services' | 'databases' | 'web' | 'transfers' | 'logs'
+
+const SshRemoteFileManager = lazy(async () => ({
+  default: (await import('./SshRemoteFileManager')).SshRemoteFileManager,
+}))
+const SshUsersGroupsManager = lazy(async () => ({
+  default: (await import('./SshUsersGroupsManager')).SshUsersGroupsManager,
+}))
+const SshCommandSnippets = lazy(async () => ({
+  default: (await import('./SshCommandSnippets')).SshCommandSnippets,
+}))
+const SshScripts = lazy(async () => ({
+  default: (await import('./SshScripts')).SshScripts,
+}))
+const SshDatabases = lazy(async () => ({
+  default: (await import('./SshDatabases')).SshDatabases,
+}))
+const SshWeb = lazy(async () => ({
+  default: (await import('./SshWeb')).SshWeb,
+}))
 
 const formatBytes = (value: number | null): string => {
   if (value === null) return 'Unavailable'
@@ -402,6 +415,9 @@ export function SshServerWorkspace({
         )
       )}
 
+      <Suspense fallback={
+        <div className="ssh-workspace-loading"><Loader size="sm" /><Text size="sm">Loading tool...</Text></div>
+      }>
       {tab === 'files' && (
         <SshRemoteFileManager connection={connection} onOpenTerminal={onOpenTerminal} />
       )}
@@ -429,6 +445,7 @@ export function SshServerWorkspace({
       {tab === 'transfers' && (
         <RemoteConnectionsPanel sshConnections={[connection]} serverConnection={connection} />
       )}
+      </Suspense>
 
       {(tab === 'services' || tab === 'logs') && (
         <section className="ssh-module-skeleton">

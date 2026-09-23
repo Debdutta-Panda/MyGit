@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import {
   ActionIcon,
   Alert,
@@ -41,8 +41,11 @@ import type {
   SshVaultStatus,
 } from '../../shared/desktop-api'
 import './ssh-connections.css'
-import { SshServerWorkspace } from './SshServerWorkspace'
 import { RemoteConnectionsPanel } from './RemoteConnectionsPanel'
+
+const SshServerWorkspace = lazy(async () => ({
+  default: (await import('./SshServerWorkspace')).SshServerWorkspace,
+}))
 
 interface ConnectionDraft {
   id: string | null
@@ -239,11 +242,13 @@ export function SshConnectionsPage({
 
   if (workspaceConnection) {
     return (
-      <SshServerWorkspace
-        connection={workspaceConnection}
-        onBack={() => setWorkspaceConnection(null)}
-        onOpenTerminal={(command) => onOpenTerminal(workspaceConnection, command)}
-      />
+      <Suspense fallback={<div className="ssh-workspace-loading"><Loader size="sm" /></div>}>
+        <SshServerWorkspace
+          connection={workspaceConnection}
+          onBack={() => setWorkspaceConnection(null)}
+          onOpenTerminal={(command) => onOpenTerminal(workspaceConnection, command)}
+        />
+      </Suspense>
     )
   }
 

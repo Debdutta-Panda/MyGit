@@ -31,6 +31,17 @@ if (squirrelStartup) app.quit()
 const appIconPath = join(process.cwd(), 'build', 'icon.png')
 
 app.setName('MyRepos')
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+if (!hasSingleInstanceLock) app.quit()
+
+app.on('second-instance', () => {
+  const existingWindow = BrowserWindow.getAllWindows()[0]
+  if (!existingWindow || existingWindow.isDestroyed()) return
+  if (existingWindow.isMinimized()) existingWindow.restore()
+  existingWindow.show()
+  existingWindow.focus()
+})
+
 initializeCrashRecorder()
 
 const createWindow = (): void => {
@@ -105,6 +116,7 @@ const registerWindowHandlers = (): void => {
 }
 
 app.whenReady().then(async () => {
+  if (!hasSingleInstanceLock) return
   await initializeDatabase()
   Menu.setApplicationMenu(null)
   if (process.platform === 'darwin') app.dock.setIcon(appIconPath)
