@@ -17,6 +17,11 @@ import { registerSshWorkspaceHandlers } from './ssh-workspace'
 import { startAutoPushMonitoring, stopAutoPushMonitoring } from './repository-monitor'
 import { registerLocalFolderHandlers } from './local-folders'
 import { registerRemoteConnectionHandlers } from './remote-connections'
+import {
+  getCrashLogPath,
+  initializeCrashRecorder,
+  registerWindowCrashRecorder,
+} from './crash-recorder'
 
 // Squirrel invokes the application briefly while installing, updating, and uninstalling. Its
 // startup helper creates/removes shortcuts and exits before normal application initialization.
@@ -26,6 +31,7 @@ if (squirrelStartup) app.quit()
 const appIconPath = join(process.cwd(), 'build', 'icon.png')
 
 app.setName('MyRepos')
+initializeCrashRecorder()
 
 const createWindow = (): void => {
   const mainWindow = new BrowserWindow({
@@ -52,6 +58,7 @@ const createWindow = (): void => {
       sandbox: true,
     },
   })
+  registerWindowCrashRecorder(mainWindow)
 
   mainWindow.once('ready-to-show', () => mainWindow.show())
   mainWindow.on('maximize', () => {
@@ -71,9 +78,6 @@ const createWindow = (): void => {
     if (url !== currentUrl) event.preventDefault()
   })
 
-  mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    console.error('[renderer-gone]', details.reason, details.exitCode)
-  })
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
@@ -97,6 +101,7 @@ const registerWindowHandlers = (): void => {
   })
   ipcMain.handle('window:close', (event) => { windowFromEvent(event).close() })
   ipcMain.handle('window:is-maximized', (event) => windowFromEvent(event).isMaximized())
+  ipcMain.handle('diagnostics:crash-log-path', () => getCrashLogPath())
 }
 
 app.whenReady().then(async () => {

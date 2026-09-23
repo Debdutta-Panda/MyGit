@@ -1703,43 +1703,34 @@ textarea { font: inherit; }
 }
 
 .repository-change-metrics {
-  min-width: 0;
   display: inline-flex;
+  min-width: 0;
   align-items: center;
-  gap: 2px;
-  padding-left: 5px;
-  border-left: 1px solid #455260;
+  gap: 4px;
+  padding-left: 7px;
+  border-left: 1px solid #42505f;
 }
 
 .repository-change-metrics > span {
-  height: 21px;
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   gap: 3px;
-  padding: 0 5px;
-  border-radius: 5px;
-  background: rgba(9, 14, 19, .48);
+  color: #c8d2dc;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.repository-change-metrics small {
-  color: #778795;
+.repository-change-metrics b {
+  color: #788797;
   font-size: 8px;
-  font-weight: 700;
+  font-weight: 800;
+  letter-spacing: .035em;
   text-transform: uppercase;
 }
 
-.repository-change-metrics b { color: #d4dde3; font-size: 10px; }
-.repository-change-metrics [data-tone='positive'] b { color: #63e6be; }
-.repository-change-metrics [data-tone='negative'] b { color: #ff8787; }
-
-.repository-card--grid .repository-change-metrics {
-  max-width: 100%;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.repository-card--grid .repository-change-metrics::-webkit-scrollbar { display: none; }
+.repository-change-metrics [data-tone='positive'] { color: #63e6be; }
+.repository-change-metrics [data-tone='negative'] { color: #ff83ae; }
 
 .git-loading {
   min-height: 150px;

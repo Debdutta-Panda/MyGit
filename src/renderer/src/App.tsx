@@ -179,6 +179,15 @@ import type {
   RepositoryFileRevision,
   RepositoryGitDetails,
   RepositoryGitStatus,
+  RepositoryMergeMode,
+  RepositoryMergePreview,
+  RepositoryConflictVersions,
+  RepositoryConflictResolution,
+  RepositoryOperationAction,
+  RepositoryPullStrategy,
+  RepositoryRebasePlanAction,
+  RepositoryRebasePlanItem,
+  RepositoryRebasePreview,
   RepositoryOrganization,
   RepositoryOrganizationEntry,
   RepositoryAutoPushState,
@@ -216,6 +225,11 @@ const DeferredFeature = ({ children }: { children: ReactNode }) => (
     {children}
   </Suspense>
 )
+
+const compactRepositoryMetric = new Intl.NumberFormat(undefined, {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+})
 
 function SafeAutoPushStatus({ state }: { state: RepositoryAutoPushState | undefined }) {
   const calculateRemaining = (): number => state?.phase === 'countdown' && state.dueAt
@@ -951,6 +965,77 @@ const errorMessage = (error: unknown): string => {
     .replace(/^Error: /, '')
 }
 
+const gitOperationLabel = (kind: RepositoryGitDetails['operation']['kind']): string => ({
+  merge: 'Merge',
+  rebase: 'Rebase',
+  'cherry-pick': 'Cherry-pick',
+  revert: 'Revert',
+  am: 'Patch application',
+  bisect: 'Bisect',
+  none: 'Git',
+})[kind]
+
+const normalizeGitDetails = (details: RepositoryGitDetails): RepositoryGitDetails => {
+  const operation = (details as RepositoryGitDetails & {
+    operation?: RepositoryGitDetails['operation']
+  }).operation
+  if (operation) return details
+  return {
+    ...details,
+    operation: {
+      kind: 'none',
+      conflictedFiles: details.files.filter((file) => file.conflicted).map((file) => file.path),
+      canContinue: false,
+      canSkip: false,
+      canAbort: false,
+      currentStep: null,
+      totalSteps: null,
+      originalHead: null,
+    },
+  }
+}
+
+const loadPullOptions = (path: string): { strategy: RepositoryPullStrategy; autoStash: boolean } => {
+  try {
+    const value = JSON.parse(localStorage.getItem(`myrepos:pull:${path}`) ?? '{}') as {
+      strategy?: unknown
+      autoStash?: unknown
+    }
+    return {
+      strategy: value.strategy === 'merge' || value.strategy === 'rebase'
+        ? value.strategy
+        : 'ff-only',
+      autoStash: value.autoStash === true,
+    }
+  } catch {
+    return { strategy: 'ff-only', autoStash: false }
+  }
+}
+
+interface DraftConflictHunk {
+  start: number
+  end: number
+  current: string
+  base: string | null
+  incoming: string
+}
+
+const parseDraftConflictHunks = (content: string): DraftConflictHunk[] => {
+  const pattern = /^<<<<<<<[^\r\n]*\r?\n([\s\S]*?)(?:^\|\|\|\|\|\|\|[^\r\n]*\r?\n([\s\S]*?))?^=======[^\r\n]*\r?\n([\s\S]*?)^>>>>>>>[^\r\n]*(?:\r?\n|$)/gm
+  return [...content.matchAll(pattern)].map((match) => ({
+    start: match.index,
+    end: match.index + match[0].length,
+    current: match[1] ?? '',
+    base: match[2] ?? null,
+    incoming: match[3] ?? '',
+  }))
+}
+
+const joinConflictSides = (current: string, incoming: string): string =>
+  [current, incoming]
+    .map((value) => value && !value.endsWith('\n') ? `${value}\n` : value)
+    .join('')
+
 const normalizeEditorText = (value: string): string => value.replace(/\r\n?/g, '\n')
 
 const editorTextForSave = (value: string, lineEnding: 'lf' | 'crlf'): string =>
@@ -1411,6 +1496,27 @@ export function App() {
   const [checkoutTarget, setCheckoutTarget] = useState<RepositoryCheckoutTarget | null>(null)
   const [checkoutStrategy, setCheckoutStrategy] =
     useState<RepositoryCheckoutStrategy>('require-clean')
+  const [mergeTarget, setMergeTarget] = useState<RepositoryBranch | null>(null)
+  const [mergePreview, setMergePreview] = useState<RepositoryMergePreview | null>(null)
+  const [mergeMode, setMergeMode] = useState<RepositoryMergeMode>('auto')
+  const [mergeError, setMergeError] = useState<string | null>(null)
+  const [conflictCenterOpen, setConflictCenterOpen] = useState(false)
+  const [conflictFile, setConflictFile] = useState<string | null>(null)
+  const [conflictVersions, setConflictVersions] = useState<RepositoryConflictVersions | null>(null)
+  const [conflictDraft, setConflictDraft] = useState('')
+  const [conflictVersionTab, setConflictVersionTab] = useState<string | null>('current')
+  const [conflictAction, setConflictAction] = useState<string | null>(null)
+  const [conflictError, setConflictError] = useState<string | null>(null)
+  const [conflictHunkIndex, setConflictHunkIndex] = useState(0)
+  const [pullDialogOpen, setPullDialogOpen] = useState(false)
+  const [pullStrategy, setPullStrategy] = useState<RepositoryPullStrategy>('ff-only')
+  const [pullAutoStash, setPullAutoStash] = useState(false)
+  const [pullError, setPullError] = useState<string | null>(null)
+  const [interactiveRebaseTarget, setInteractiveRebaseTarget] = useState<RepositoryBranch | null>(null)
+  const [interactiveRebasePreview, setInteractiveRebasePreview] =
+    useState<RepositoryRebasePreview | null>(null)
+  const [interactiveRebasePlan, setInteractiveRebasePlan] = useState<RepositoryRebasePlanItem[]>([])
+  const [interactiveRebaseError, setInteractiveRebaseError] = useState<string | null>(null)
   const [relativeTimeNow, setRelativeTimeNow] = useState(Date.now())
   const [windowMaximized, setWindowMaximized] = useState(false)
   const platform =
@@ -1418,6 +1524,12 @@ export function App() {
     (navigator.userAgent.includes('Macintosh') ? 'darwin' : 'unknown')
 
   useEffect(() => window.desktop?.localFolders.onUploadProgress(setRepositoryUploadProgress), [])
+
+  useEffect(() => {
+    if (!cloneResult) return
+    const timeout = window.setTimeout(() => setCloneResult(null), 15_000)
+    return () => window.clearTimeout(timeout)
+  }, [cloneResult])
 
   useEffect(() => {
     if (!repositoryUploadContext) return
@@ -1686,7 +1798,9 @@ export function App() {
         }
         workingTreeRefreshTimerRef.current = window.setTimeout(() => {
           setWorkingTreeRefreshVersion((version) => version + 1)
-          void window.desktop!.repositories.gitDetails(status.path).then(setGitDetails).catch(() => undefined)
+          void window.desktop!.repositories.gitDetails(status.path)
+            .then((details) => setGitDetails(normalizeGitDetails(details)))
+            .catch(() => undefined)
         }, 350)
       }
     })
@@ -1940,6 +2054,7 @@ export function App() {
       label: `${branch.kind === 'remote' ? `${branch.remote}/` : ''}${branch.name}`,
     })),
   ].filter((option, index, items) => items.findIndex((item) => item.value === option.value) === index)
+  const conflictHunks = parseDraftConflictHunks(conflictDraft)
   const selectedFileRevision = fileHistoryRevisions.find((revision) =>
     revision.hash === fileHistoryRevisionHash) ?? null
   const compareFileRevision = fileHistoryRevisions.find((revision) =>
@@ -2683,7 +2798,7 @@ export function App() {
   }
 
   const applyGitDetails = (details: RepositoryGitDetails): void => {
-    setGitDetails(details)
+    setGitDetails(normalizeGitDetails(details))
     setGitStatuses((current) => ({ ...current, [details.status.path]: details.status }))
   }
 
@@ -2889,6 +3004,319 @@ export function App() {
     setCheckoutTarget(target)
     setCheckoutStrategy(gitDetails?.status.clean ? 'require-clean' : 'carry')
     setBranchError(null)
+  }
+
+  const requestMerge = async (target: RepositoryBranch): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath) return
+    setMergeTarget(target)
+    setMergePreview(null)
+    setMergeMode('auto')
+    setMergeError(null)
+    setBranchAction(`merge-preview:${target.ref}`)
+    try {
+      setMergePreview(await window.desktop.repositories.gitMergePreview(
+        gitRepository.localPath,
+        target.ref,
+      ))
+    } catch (error) {
+      setMergeError(errorMessage(error))
+    } finally {
+      setBranchAction(null)
+    }
+  }
+
+  const executeMerge = async (): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath || !mergeTarget) return
+    setBranchAction(`merge:${mergeTarget.ref}`)
+    setMergeError(null)
+    try {
+      const details = await window.desktop.repositories.gitMerge(
+        gitRepository.localPath,
+        mergeTarget.ref,
+        mergeMode,
+      )
+      applyGitDetails(details)
+      setBranchState(await window.desktop.repositories.gitBranches(gitRepository.localPath))
+      setGitHistory(await window.desktop.repositories.gitHistory(gitRepository.localPath))
+      if (details.operation.kind === 'merge') {
+        setBranchManagerOpen(false)
+        setBranchNotice(null)
+      } else {
+        setBranchNotice(`Merged ${mergeTarget.kind === 'remote'
+          ? `${mergeTarget.remote}/${mergeTarget.name}`
+          : mergeTarget.name} into ${mergePreview?.currentBranch ?? 'the current branch'}.`)
+      }
+      setMergeTarget(null)
+      setMergePreview(null)
+    } catch (error) {
+      setMergeError(errorMessage(error))
+      try {
+        applyGitDetails(await window.desktop.repositories.gitDetails(gitRepository.localPath))
+      } catch {
+        // Keep the merge error visible.
+      }
+    } finally {
+      setBranchAction(null)
+    }
+  }
+
+  const loadConflict = async (file: string): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath) return
+    setConflictFile(file)
+    setConflictVersions(null)
+    setConflictError(null)
+    setConflictAction('loading')
+    try {
+      const [versions, workingContent] = await Promise.all([
+        window.desktop.repositories.gitConflictVersions(gitRepository.localPath, file),
+        window.desktop.repositories.gitWorkingFileContent(gitRepository.localPath, file)
+          .catch(() => null),
+      ])
+      setConflictVersions(versions)
+      setConflictDraft(workingContent ?? versions.current ?? versions.incoming ?? '')
+      setConflictHunkIndex(0)
+      setConflictVersionTab(versions.currentExists
+        ? 'current'
+        : versions.incomingExists ? 'incoming' : 'base')
+    } catch (error) {
+      setConflictError(errorMessage(error))
+    } finally {
+      setConflictAction(null)
+    }
+  }
+
+  const openConflictCenter = (file?: string): void => {
+    const target = file ?? gitDetails?.operation?.conflictedFiles[0]
+    if (!target) return
+    setConflictCenterOpen(true)
+    void loadConflict(target)
+  }
+
+  const resolveSelectedConflict = async (
+    resolution: RepositoryConflictResolution,
+  ): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath || !conflictFile) return
+    setConflictAction(`resolve:${resolution}`)
+    setConflictError(null)
+    try {
+      const details = await window.desktop.repositories.gitResolveConflict({
+        path: gitRepository.localPath,
+        file: conflictFile,
+        resolution,
+        ...(resolution === 'content' ? { content: conflictDraft } : {}),
+      })
+      applyGitDetails(details)
+      const next = details.operation.conflictedFiles.find((file) => file !== conflictFile)
+        ?? details.operation.conflictedFiles[0]
+      if (next) await loadConflict(next)
+      else {
+        setConflictCenterOpen(false)
+        setConflictFile(null)
+        setConflictVersions(null)
+      }
+    } catch (error) {
+      setConflictError(errorMessage(error))
+    } finally {
+      setConflictAction(null)
+    }
+  }
+
+  const resolveDraftConflictHunk = (choice: 'current' | 'incoming' | 'both'): void => {
+    const hunks = parseDraftConflictHunks(conflictDraft)
+    const index = Math.min(conflictHunkIndex, Math.max(0, hunks.length - 1))
+    const hunk = hunks[index]
+    if (!hunk) return
+    const replacement = choice === 'current'
+      ? hunk.current
+      : choice === 'incoming'
+        ? hunk.incoming
+        : joinConflictSides(hunk.current, hunk.incoming)
+    setConflictDraft(`${conflictDraft.slice(0, hunk.start)}${replacement}${conflictDraft.slice(hunk.end)}`)
+    setConflictHunkIndex(Math.min(index, Math.max(0, hunks.length - 2)))
+  }
+
+  const runRepositoryOperationAction = async (
+    action: RepositoryOperationAction,
+  ): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath) return
+    if (action === 'abort' && !window.confirm(
+      `Abort the active ${gitDetails?.operation?.kind ?? 'Git'} operation and restore its starting state?`,
+    )) return
+    setGitAction(`operation:${action}`)
+    setGitError(null)
+    try {
+      const details = await window.desktop.repositories.gitOperationAction(
+        gitRepository.localPath,
+        action,
+      )
+      applyGitDetails(details)
+      setGitHistory(await window.desktop.repositories.gitHistory(gitRepository.localPath))
+      setBranchState(await window.desktop.repositories.gitBranches(gitRepository.localPath))
+    } catch (error) {
+      setGitError(errorMessage(error))
+      try {
+        applyGitDetails(await window.desktop.repositories.gitDetails(gitRepository.localPath))
+      } catch {
+        // Keep the operation error visible.
+      }
+    } finally {
+      setGitAction(null)
+    }
+  }
+
+  const openPullDialog = (): void => {
+    if (!gitRepository?.localPath) return
+    const options = loadPullOptions(gitRepository.localPath)
+    setPullStrategy(options.strategy)
+    setPullAutoStash(options.autoStash)
+    setPullError(null)
+    setPullDialogOpen(true)
+  }
+
+  const executePull = async (): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath) return
+    setGitAction('pull')
+    setPullError(null)
+    try {
+      const details = await window.desktop.repositories.gitPull(gitRepository.localPath, {
+        strategy: pullStrategy,
+        autoStash: pullAutoStash,
+      })
+      localStorage.setItem(`myrepos:pull:${gitRepository.localPath}`, JSON.stringify({
+        strategy: pullStrategy,
+        autoStash: pullAutoStash,
+      }))
+      applyGitDetails(details)
+      setGitHistory(await window.desktop.repositories.gitHistory(gitRepository.localPath))
+      setPullDialogOpen(false)
+    } catch (error) {
+      setPullError(errorMessage(error))
+      try {
+        applyGitDetails(await window.desktop.repositories.gitDetails(gitRepository.localPath))
+      } catch {
+        // Keep the pull error visible.
+      }
+    } finally {
+      setGitAction(null)
+    }
+  }
+
+  const rebaseOntoBranch = async (target: RepositoryBranch): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath) return
+    const label = target.kind === 'remote' ? `${target.remote}/${target.name}` : target.name
+    if (!window.confirm(`Rebase the current branch onto ${label}? A recovery reference will be created first.`)) return
+    const options = loadPullOptions(gitRepository.localPath)
+    setBranchAction(`rebase:${target.ref}`)
+    setBranchError(null)
+    try {
+      const details = await window.desktop.repositories.gitRebase(
+        gitRepository.localPath,
+        target.ref,
+        options.autoStash,
+      )
+      applyGitDetails(details)
+      setBranchState(await window.desktop.repositories.gitBranches(gitRepository.localPath))
+      setGitHistory(await window.desktop.repositories.gitHistory(gitRepository.localPath))
+      if (details.operation.kind === 'rebase') setBranchManagerOpen(false)
+      else setBranchNotice(`Rebased the current branch onto ${label}.`)
+    } catch (error) {
+      setBranchError(errorMessage(error))
+    } finally {
+      setBranchAction(null)
+    }
+  }
+
+  const runCommitOperation = async (
+    kind: 'cherry-pick' | 'revert',
+    commitHash: string,
+  ): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath) return
+    const verb = kind === 'cherry-pick' ? 'Cherry-pick' : 'Revert'
+    if (!window.confirm(
+      `${verb} commit ${commitHash.slice(0, 7)} on ${gitDetails?.status.branch ?? 'the current checkout'}? A recovery reference will be created first.`,
+    )) return
+    setGitAction(`${kind}:${commitHash}`)
+    setGitError(null)
+    try {
+      const details = kind === 'cherry-pick'
+        ? await window.desktop.repositories.gitCherryPick(gitRepository.localPath, [commitHash])
+        : await window.desktop.repositories.gitRevert(gitRepository.localPath, [commitHash], 1)
+      applyGitDetails(details)
+      setGitHistory(await window.desktop.repositories.gitHistory(gitRepository.localPath))
+    } catch (error) {
+      setGitError(errorMessage(error))
+      try {
+        applyGitDetails(await window.desktop.repositories.gitDetails(gitRepository.localPath))
+      } catch {
+        // Keep the commit-operation error visible.
+      }
+    } finally {
+      setGitAction(null)
+    }
+  }
+
+  const openInteractiveRebase = async (target: RepositoryBranch): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath) return
+    setInteractiveRebaseTarget(target)
+    setInteractiveRebasePreview(null)
+    setInteractiveRebasePlan([])
+    setInteractiveRebaseError(null)
+    setBranchAction(`rebase-preview:${target.ref}`)
+    try {
+      const preview = await window.desktop.repositories.gitInteractiveRebasePreview(
+        gitRepository.localPath,
+        target.ref,
+      )
+      setInteractiveRebasePreview(preview)
+      setInteractiveRebasePlan(preview.items)
+    } catch (error) {
+      setInteractiveRebaseError(errorMessage(error))
+    } finally {
+      setBranchAction(null)
+    }
+  }
+
+  const moveInteractiveRebaseItem = (index: number, offset: -1 | 1): void => {
+    setInteractiveRebasePlan((current) => {
+      const targetIndex = index + offset
+      if (targetIndex < 0 || targetIndex >= current.length) return current
+      const next = [...current]
+      const [item] = next.splice(index, 1)
+      next.splice(targetIndex, 0, item)
+      return next
+    })
+  }
+
+  const startInteractiveRebase = async (): Promise<void> => {
+    if (!window.desktop || !gitRepository?.localPath || !interactiveRebaseTarget) return
+    setBranchAction('interactive-rebase')
+    setInteractiveRebaseError(null)
+    try {
+      const options = loadPullOptions(gitRepository.localPath)
+      const details = await window.desktop.repositories.gitInteractiveRebase(
+        gitRepository.localPath,
+        interactiveRebaseTarget.ref,
+        interactiveRebasePlan,
+        options.autoStash,
+      )
+      applyGitDetails(details)
+      setGitHistory(await window.desktop.repositories.gitHistory(gitRepository.localPath))
+      setBranchState(await window.desktop.repositories.gitBranches(gitRepository.localPath))
+      setInteractiveRebaseTarget(null)
+      setInteractiveRebasePreview(null)
+      setInteractiveRebasePlan([])
+      if (details.operation.kind === 'rebase') setBranchManagerOpen(false)
+      else setBranchNotice('Interactive rebase completed.')
+    } catch (error) {
+      setInteractiveRebaseError(errorMessage(error))
+      try {
+        applyGitDetails(await window.desktop.repositories.gitDetails(gitRepository.localPath))
+      } catch {
+        // Keep the interactive rebase error visible.
+      }
+    } finally {
+      setBranchAction(null)
+    }
   }
 
   const createBranch = async (): Promise<void> => {
@@ -5581,6 +6009,16 @@ export function App() {
                           <IconFolderOpen size={17} />
                         </ActionIcon>
                       </Tooltip>
+                      <Tooltip label="Dismiss">
+                        <ActionIcon
+                          variant="subtle"
+                          color="gray"
+                          aria-label="Dismiss repository notification"
+                          onClick={() => setCloneResult(null)}
+                        >
+                          <IconX size={17} />
+                        </ActionIcon>
+                      </Tooltip>
                     </Group>
                   </Group>
                 </Alert>
@@ -6003,6 +6441,30 @@ export function App() {
                                       <IconCircleCheck size={13} />
                                     </span>
                                   </Tooltip>
+                                )}
+                                {!gitStatus.clean && (
+                                  <span
+                                    className='repository-change-metrics'
+                                    aria-label={`${gitStatus.changedFiles ?? changeCount} changed files, ${gitStatus.netLines ?? 0} net lines, ${gitStatus.additions ?? 0} additions, ${gitStatus.deletions ?? 0} deletions, ${gitStatus.churn ?? 0} lines of churn`}
+                                  >
+                                    <Tooltip label='Changed files, including untracked files'>
+                                      <span><b>Files</b>{compactRepositoryMetric.format(gitStatus.changedFiles ?? changeCount)}</span>
+                                    </Tooltip>
+                                    <Tooltip label='Net line change in tracked files'>
+                                      <span data-tone={(gitStatus.netLines ?? 0) >= 0 ? 'positive' : 'negative'}>
+                                        <b>Lines</b>{(gitStatus.netLines ?? 0) >= 0 ? '+' : '-'}{compactRepositoryMetric.format(Math.abs(gitStatus.netLines ?? 0))}
+                                      </span>
+                                    </Tooltip>
+                                    <Tooltip label='Added lines in tracked files'>
+                                      <span data-tone='positive'><b>Add</b>+{compactRepositoryMetric.format(gitStatus.additions ?? 0)}</span>
+                                    </Tooltip>
+                                    <Tooltip label='Deleted lines in tracked files'>
+                                      <span data-tone='negative'><b>Del</b>-{compactRepositoryMetric.format(gitStatus.deletions ?? 0)}</span>
+                                    </Tooltip>
+                                    <Tooltip label='Line churn (additions + deletions) in tracked files'>
+                                      <span><b>Churn</b>{compactRepositoryMetric.format(gitStatus.churn ?? 0)}</span>
+                                    </Tooltip>
+                                  </span>
                                 )}
                               </>
                             )}
@@ -6500,6 +6962,7 @@ export function App() {
                                 ? 'red'
                                 : gitDetails?.status.clean ? 'teal' : 'orange'}
                               leftSection={<IconGitBranch size={12} />}
+                              disabled={Boolean(gitAction) || (gitDetails?.operation?.kind ?? 'none') !== 'none'}
                               onClick={() => openBranchManager()}
                             >
                               {gitDetails?.status.branch ?? (branchState
@@ -6529,17 +6992,15 @@ export function App() {
                               size="compact-xs"
                               variant="light"
                               loading={gitAction === 'pull'}
-                              disabled={Boolean(gitAction)}
-                              onClick={() => void runGitAction('pull', () =>
-                                window.desktop!.repositories.gitPull(gitRepository.localPath!),
-                              )}
+                              disabled={Boolean(gitAction) || (gitDetails?.operation?.kind ?? 'none') !== 'none'}
+                              onClick={openPullDialog}
                             >
                               Pull
                             </Button>
                             <Button
                               size="compact-xs"
                               loading={gitAction === 'push'}
-                              disabled={Boolean(gitAction)}
+                              disabled={Boolean(gitAction) || (gitDetails?.operation?.kind ?? 'none') !== 'none'}
                               onClick={() => void runGitAction('push', () =>
                                 window.desktop!.repositories.gitPush(gitRepository.localPath!),
                               )}
@@ -6551,6 +7012,67 @@ export function App() {
 
                         {gitError && (
                           <Alert color="red" icon={<IconAlertCircle size={17} />}>{gitError}</Alert>
+                        )}
+
+                        {gitDetails && gitDetails.operation.kind !== 'none' && (
+                          <Alert
+                            color="orange"
+                            icon={<IconGitMerge size={17} />}
+                            title={`${gitOperationLabel(gitDetails.operation.kind)} in progress`}
+                          >
+                            {gitDetails.operation.currentStep && gitDetails.operation.totalSteps
+                              ? `Step ${gitDetails.operation.currentStep} of ${gitDetails.operation.totalSteps}. `
+                              : ''}
+                            {gitDetails.operation.conflictedFiles.length > 0
+                              ? `${gitDetails.operation.conflictedFiles.length} conflicted ${gitDetails.operation.conflictedFiles.length === 1 ? 'file remains' : 'files remain'}.`
+                              : gitDetails.operation.canContinue
+                                ? 'All conflicts are resolved and the operation is ready to continue.'
+                                : 'MyRepos detected an active Git operation.'}
+                            {' Pull, push, and branch switching are paused until it is completed or aborted.'}
+                            <Group gap="xs" mt="sm">
+                              {gitDetails.operation.conflictedFiles.length > 0 && (
+                                <Button
+                                  size="compact-xs"
+                                  color="red"
+                                  variant="light"
+                                  disabled={Boolean(gitAction)}
+                                  onClick={() => openConflictCenter()}
+                                >
+                                  Resolve conflicts
+                                </Button>
+                              )}
+                              <Button
+                                size="compact-xs"
+                                variant="light"
+                                loading={gitAction === 'operation:continue'}
+                                disabled={Boolean(gitAction) || !gitDetails.operation.canContinue}
+                                onClick={() => void runRepositoryOperationAction('continue')}
+                              >
+                                Continue
+                              </Button>
+                              {gitDetails.operation.canSkip && (
+                                <Button
+                                  size="compact-xs"
+                                  variant="subtle"
+                                  loading={gitAction === 'operation:skip'}
+                                  disabled={Boolean(gitAction)}
+                                  onClick={() => void runRepositoryOperationAction('skip')}
+                                >
+                                  Skip
+                                </Button>
+                              )}
+                              <Button
+                                size="compact-xs"
+                                variant="subtle"
+                                color="red"
+                                loading={gitAction === 'operation:abort'}
+                                disabled={Boolean(gitAction)}
+                                onClick={() => void runRepositoryOperationAction('abort')}
+                              >
+                                Abort
+                              </Button>
+                            </Group>
+                          </Alert>
                         )}
 
                         {gitPanelLoading ? (
@@ -7040,6 +7562,34 @@ export function App() {
                                         >
                                           New branch here
                                         </Button>
+                                        <Button
+                                          size="compact-xs"
+                                          variant="subtle"
+                                          color="teal"
+                                          loading={gitAction === `cherry-pick:${selectedCommitHash}`}
+                                          disabled={
+                                            Boolean(gitAction) ||
+                                            Boolean(branchAction) ||
+                                            (gitDetails?.operation?.kind ?? 'none') !== 'none'
+                                          }
+                                          onClick={() => void runCommitOperation('cherry-pick', selectedCommitHash)}
+                                        >
+                                          Cherry-pick
+                                        </Button>
+                                        <Button
+                                          size="compact-xs"
+                                          variant="subtle"
+                                          color="orange"
+                                          loading={gitAction === `revert:${selectedCommitHash}`}
+                                          disabled={
+                                            Boolean(gitAction) ||
+                                            Boolean(branchAction) ||
+                                            (gitDetails?.operation?.kind ?? 'none') !== 'none'
+                                          }
+                                          onClick={() => void runCommitOperation('revert', selectedCommitHash)}
+                                        >
+                                          Revert
+                                        </Button>
                                       </Group>
                                     </div>
                                     <Text className="scm-commit-files-count" size="xs" fw={650}>
@@ -7165,17 +7715,15 @@ export function App() {
                                   <Button
                                     size="compact-xs"
                                     variant="subtle"
-                                    disabled={Boolean(gitAction)}
-                                    onClick={() => void runGitAction('pull', () =>
-                                      window.desktop!.repositories.gitPull(gitRepository.localPath!),
-                                    )}
+                                    disabled={Boolean(gitAction) || gitDetails.operation.kind !== 'none'}
+                                    onClick={openPullDialog}
                                   >
                                     Pull
                                   </Button>
                                   <Button
                                     size="compact-xs"
                                     variant="subtle"
-                                    disabled={Boolean(gitAction)}
+                                    disabled={Boolean(gitAction) || gitDetails.operation.kind !== 'none'}
                                     onClick={() => void runGitAction('push', () =>
                                       window.desktop!.repositories.gitPush(gitRepository.localPath!),
                                     )}
@@ -10700,6 +11248,18 @@ export function App() {
                           {!branch.current && (
                             <Button
                               size="compact-xs"
+                              variant="subtle"
+                              leftSection={<IconGitMerge size={13} />}
+                              disabled={Boolean(branchAction) || (gitDetails?.operation?.kind ?? 'none') !== 'none'}
+                              loading={branchAction === `merge-preview:${branch.ref}`}
+                              onClick={() => void requestMerge(branch)}
+                            >
+                              Merge
+                            </Button>
+                          )}
+                          {!branch.current && (
+                            <Button
+                              size="compact-xs"
                               variant="light"
                               disabled={Boolean(branchAction) || occupiedElsewhere}
                               loading={branchAction === `checkout:${branch.ref}`}
@@ -10721,6 +11281,22 @@ export function App() {
                             <Menu.Dropdown>
                               {branch.kind === 'local' ? (
                                 <>
+                                  {!branch.current && (
+                                    <Menu.Item
+                                      leftSection={<IconGitFork size={14} />}
+                                      onClick={() => void rebaseOntoBranch(branch)}
+                                    >
+                                      Rebase current onto this branch
+                                    </Menu.Item>
+                                  )}
+                                  {!branch.current && (
+                                    <Menu.Item
+                                      leftSection={<IconGitCommit size={14} />}
+                                      onClick={() => void openInteractiveRebase(branch)}
+                                    >
+                                      Interactive rebase…
+                                    </Menu.Item>
+                                  )}
                                   <Menu.Item onClick={() => {
                                     setBranchRename(branch)
                                     setBranchRenameName(branch.name)
@@ -10745,9 +11321,24 @@ export function App() {
                                   </Menu.Item>
                                 </>
                               ) : (
-                                <Menu.Item color="red" onClick={() => void deleteRemoteBranch(branch)}>
-                                  Delete from {branch.remote}…
-                                </Menu.Item>
+                                <>
+                                  <Menu.Item
+                                    leftSection={<IconGitFork size={14} />}
+                                    onClick={() => void rebaseOntoBranch(branch)}
+                                  >
+                                    Rebase current onto this branch
+                                  </Menu.Item>
+                                  <Menu.Item
+                                    leftSection={<IconGitCommit size={14} />}
+                                    onClick={() => void openInteractiveRebase(branch)}
+                                  >
+                                    Interactive rebase…
+                                  </Menu.Item>
+                                  <Menu.Divider />
+                                  <Menu.Item color="red" onClick={() => void deleteRemoteBranch(branch)}>
+                                    Delete from {branch.remote}…
+                                  </Menu.Item>
+                                </>
                               )}
                             </Menu.Dropdown>
                           </Menu>
@@ -10759,6 +11350,437 @@ export function App() {
               )
             })}
           </div>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={Boolean(interactiveRebaseTarget)}
+        onClose={() => {
+          if (branchAction === 'interactive-rebase') return
+          setInteractiveRebaseTarget(null)
+          setInteractiveRebasePreview(null)
+          setInteractiveRebasePlan([])
+          setInteractiveRebaseError(null)
+        }}
+        title={`Interactive rebase · ${interactiveRebaseTarget?.name ?? ''}`}
+        size="lg"
+        centered
+        closeOnClickOutside={branchAction !== 'interactive-rebase'}
+        closeOnEscape={branchAction !== 'interactive-rebase'}
+      >
+        <Stack gap="md">
+          {interactiveRebaseError && (
+            <Alert color="red" icon={<IconAlertCircle size={17} />}>{interactiveRebaseError}</Alert>
+          )}
+          {!interactiveRebasePreview && !interactiveRebaseError ? (
+            <Group justify="center" p="xl"><Loader size="sm" /></Group>
+          ) : interactiveRebasePreview && (
+            <>
+              <Alert color="violet" icon={<IconGitFork size={17} />}>
+                Rewriting {interactiveRebasePlan.length} commits from {interactiveRebasePreview.currentBranch}.
+                A recovery reference is created before anything changes.
+              </Alert>
+              {interactiveRebasePreview.publishedCount > 0 && (
+                <Alert color="red" icon={<IconAlertCircle size={17} />}>
+                  {interactiveRebasePreview.publishedCount} selected {interactiveRebasePreview.publishedCount === 1
+                    ? 'commit is'
+                    : 'commits are'} already reachable from the upstream branch.
+                  Rebasing rewrites published history. MyRepos will not force-push automatically.
+                </Alert>
+              )}
+              {interactiveRebasePlan.length === 0 ? (
+                <Text size="sm" c="dimmed">There are no commits to replay onto this branch.</Text>
+              ) : (
+                <Stack gap={5} style={{ maxHeight: '55vh', overflow: 'auto' }}>
+                  {interactiveRebasePlan.map((item, index) => (
+                    <Paper key={item.hash} p="xs" radius="md" withBorder>
+                      <Group gap="xs" wrap="nowrap">
+                        <Group gap={2} wrap="nowrap">
+                          <ActionIcon size="sm" variant="subtle" disabled={index === 0 || Boolean(branchAction)}
+                            onClick={() => moveInteractiveRebaseItem(index, -1)}>
+                            <IconArrowUp size={14} />
+                          </ActionIcon>
+                          <ActionIcon size="sm" variant="subtle"
+                            disabled={index === interactiveRebasePlan.length - 1 || Boolean(branchAction)}
+                            onClick={() => moveInteractiveRebaseItem(index, 1)}>
+                            <IconArrowDown size={14} />
+                          </ActionIcon>
+                        </Group>
+                        <Select
+                          size="xs"
+                          w={125}
+                          allowDeselect={false}
+                          value={item.action}
+                          disabled={Boolean(branchAction)}
+                          data={[
+                            { value: 'pick', label: 'Pick' },
+                            { value: 'squash', label: 'Squash' },
+                            { value: 'fixup', label: 'Fixup' },
+                            { value: 'drop', label: 'Drop' },
+                          ]}
+                          onChange={(value) => setInteractiveRebasePlan((current) =>
+                            current.map((entry) => entry.hash === item.hash
+                              ? { ...entry, action: (value as RepositoryRebasePlanAction | null) ?? 'pick' }
+                              : entry))}
+                        />
+                        <Text size="xs" c="teal.4">{item.shortHash}</Text>
+                        <Text size="sm" truncate style={{ flex: 1 }}>{item.subject}</Text>
+                      </Group>
+                    </Paper>
+                  ))}
+                </Stack>
+              )}
+            </>
+          )}
+          <Group justify="flex-end">
+            <Button variant="default" disabled={Boolean(branchAction)}
+              onClick={() => setInteractiveRebaseTarget(null)}>Cancel</Button>
+            <Button
+              color="violet"
+              leftSection={<IconGitFork size={15} />}
+              loading={branchAction === 'interactive-rebase'}
+              disabled={
+                Boolean(branchAction) ||
+                !interactiveRebasePreview ||
+                interactiveRebasePlan.length === 0
+              }
+              onClick={() => void startInteractiveRebase()}
+            >
+              Start rebase
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={pullDialogOpen}
+        onClose={() => {
+          if (gitAction === 'pull') return
+          setPullDialogOpen(false)
+          setPullError(null)
+        }}
+        title={`Pull · ${gitRepository?.fullName ?? ''}`}
+        size="md"
+        centered
+        closeOnClickOutside={gitAction !== 'pull'}
+        closeOnEscape={gitAction !== 'pull'}
+      >
+        <Stack gap="md">
+          {pullError && <Alert color="red" icon={<IconAlertCircle size={17} />}>{pullError}</Alert>}
+          {gitDetails && !gitDetails.status.clean && (
+            <Alert color="orange" icon={<IconAlertCircle size={17} />}>
+              This repository has local changes. Enable auto-stash for merge or rebase pulls.
+            </Alert>
+          )}
+          <Select
+            label="Integration strategy"
+            description="This choice is remembered for this working copy."
+            value={pullStrategy}
+            allowDeselect={false}
+            disabled={gitAction === 'pull'}
+            data={[
+              { value: 'ff-only', label: 'Fast-forward only · safest' },
+              { value: 'merge', label: 'Merge remote changes' },
+              { value: 'rebase', label: 'Rebase local commits' },
+            ]}
+            onChange={(value) => setPullStrategy((value as RepositoryPullStrategy | null) ?? 'ff-only')}
+          />
+          <Switch
+            checked={pullAutoStash}
+            disabled={gitAction === 'pull' || pullStrategy === 'ff-only'}
+            label="Automatically stash and restore local changes"
+            onChange={(event) => setPullAutoStash(event.currentTarget.checked)}
+          />
+          {pullStrategy !== 'ff-only' && (
+            <Text size="xs" c="dimmed">
+              MyRepos creates a recovery reference before integrating remote history.
+            </Text>
+          )}
+          <Group justify="flex-end">
+            <Button variant="default" disabled={gitAction === 'pull'}
+              onClick={() => setPullDialogOpen(false)}>Cancel</Button>
+            <Button loading={gitAction === 'pull'} onClick={() => void executePull()}>
+              Fetch and pull
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={conflictCenterOpen}
+        onClose={() => {
+          if (conflictAction) return
+          setConflictCenterOpen(false)
+        }}
+        title={`Resolve conflicts · ${gitRepository?.fullName ?? ''}`}
+        size="95vw"
+        centered
+        closeOnClickOutside={!conflictAction}
+        closeOnEscape={!conflictAction}
+      >
+        <div style={{ display: 'grid', gridTemplateColumns: '240px minmax(0, 1fr)', gap: 14, height: '76vh' }}>
+          <Paper p="xs" radius="md" withBorder style={{ overflow: 'auto' }}>
+            <Text size="xs" fw={750} mb="xs">Conflicted files</Text>
+            <Stack gap={3}>
+              {(gitDetails?.operation?.conflictedFiles ?? []).map((file) => (
+                <Button
+                  key={file}
+                  size="compact-xs"
+                  variant={file === conflictFile ? 'light' : 'subtle'}
+                  color={file === conflictFile ? 'red' : 'gray'}
+                  justify="flex-start"
+                  disabled={Boolean(conflictAction)}
+                  onClick={() => void loadConflict(file)}
+                >
+                  <Text size="xs" truncate>{file}</Text>
+                </Button>
+              ))}
+            </Stack>
+          </Paper>
+          <Stack gap="sm" style={{ minWidth: 0, minHeight: 0 }}>
+            {conflictError && <Alert color="red" icon={<IconAlertCircle size={17} />}>{conflictError}</Alert>}
+            {!conflictVersions && !conflictError ? (
+              <Group justify="center" p="xl"><Loader size="sm" /></Group>
+            ) : conflictVersions && (
+              <>
+                <Group justify="space-between" wrap="wrap">
+                  <div>
+                    <Text fw={700}>{conflictVersions.path}</Text>
+                    <Text size="xs" c="dimmed">Git conflict state {conflictVersions.status}</Text>
+                  </div>
+                  <Group gap="xs">
+                    {conflictVersions.currentExists && (
+                      <Button size="compact-xs" variant="light"
+                        loading={conflictAction === 'resolve:current'}
+                        disabled={Boolean(conflictAction)}
+                        onClick={() => void resolveSelectedConflict('current')}>
+                        Accept current
+                      </Button>
+                    )}
+                    {conflictVersions.incomingExists && (
+                      <Button size="compact-xs" variant="light"
+                        loading={conflictAction === 'resolve:incoming'}
+                        disabled={Boolean(conflictAction)}
+                        onClick={() => void resolveSelectedConflict('incoming')}>
+                        Accept incoming
+                      </Button>
+                    )}
+                    {conflictVersions.kind === 'text' && conflictVersions.currentExists &&
+                      conflictVersions.incomingExists && (
+                      <Button size="compact-xs" variant="subtle" disabled={Boolean(conflictAction)}
+                        onClick={() => setConflictDraft(joinConflictSides(
+                          conflictVersions.current ?? '',
+                          conflictVersions.incoming ?? '',
+                        ))}>
+                        Put both in result
+                      </Button>
+                    )}
+                    <Button size="compact-xs" variant="subtle" color="red"
+                      loading={conflictAction === 'resolve:delete'}
+                      disabled={Boolean(conflictAction)}
+                      onClick={() => void resolveSelectedConflict('delete')}>
+                      Delete file
+                    </Button>
+                  </Group>
+                </Group>
+                {conflictVersions.kind !== 'text' ? (
+                  <Alert color="yellow" icon={<IconAlertCircle size={17} />}>
+                    This is a {conflictVersions.kind} conflict. Choose the current version,
+                    incoming version, or delete the file. MyRepos will preserve the Git object and file mode.
+                  </Alert>
+                ) : (
+                  <>
+                    <Tabs value={conflictVersionTab} onChange={setConflictVersionTab}>
+                      <Tabs.List>
+                        <Tabs.Tab value="base" disabled={conflictVersions.base === null}>Base</Tabs.Tab>
+                        <Tabs.Tab value="current" disabled={conflictVersions.current === null}>Current</Tabs.Tab>
+                        <Tabs.Tab value="incoming" disabled={conflictVersions.incoming === null}>Incoming</Tabs.Tab>
+                      </Tabs.List>
+                    </Tabs>
+                    <div style={{ height: '22vh', minHeight: 150 }}>
+                      <ReadOnlyMonaco
+                        path={conflictVersions.path}
+                        value={conflictVersionTab === 'base'
+                          ? conflictVersions.base ?? ''
+                          : conflictVersionTab === 'incoming'
+                            ? conflictVersions.incoming ?? ''
+                            : conflictVersions.current ?? ''}
+                      />
+                    </div>
+                    <Group justify="space-between">
+                      <Group gap="xs">
+                        <Text size="xs" fw={700}>Final result</Text>
+                        {conflictHunks.length > 0 && (
+                          <Badge size="xs" color="red">
+                            {conflictHunks.length} unresolved {conflictHunks.length === 1 ? 'hunk' : 'hunks'}
+                          </Badge>
+                        )}
+                      </Group>
+                      <Button
+                        size="compact-xs"
+                        leftSection={<IconCheck size={13} />}
+                        loading={conflictAction === 'resolve:content'}
+                        disabled={Boolean(conflictAction)}
+                        onClick={() => void resolveSelectedConflict('content')}
+                      >
+                        Save and mark resolved
+                      </Button>
+                    </Group>
+                    {conflictHunks.length > 0 && (
+                      <Paper p="xs" radius="md" withBorder>
+                        <Group justify="space-between" wrap="wrap">
+                          <Group gap={5}>
+                            <Button size="compact-xs" variant="subtle"
+                              disabled={conflictHunkIndex <= 0}
+                              onClick={() => setConflictHunkIndex((index) => Math.max(0, index - 1))}>
+                              Previous
+                            </Button>
+                            <Text size="xs" c="dimmed">
+                              Conflict {Math.min(conflictHunkIndex + 1, conflictHunks.length)} of {conflictHunks.length}
+                            </Text>
+                            <Button size="compact-xs" variant="subtle"
+                              disabled={conflictHunkIndex >= conflictHunks.length - 1}
+                              onClick={() => setConflictHunkIndex((index) =>
+                                Math.min(conflictHunks.length - 1, index + 1))}>
+                              Next
+                            </Button>
+                          </Group>
+                          <Group gap={5}>
+                            <Button size="compact-xs" variant="light"
+                              onClick={() => resolveDraftConflictHunk('current')}>
+                              Current hunk
+                            </Button>
+                            <Button size="compact-xs" variant="light"
+                              onClick={() => resolveDraftConflictHunk('incoming')}>
+                              Incoming hunk
+                            </Button>
+                            <Button size="compact-xs" variant="subtle"
+                              onClick={() => resolveDraftConflictHunk('both')}>
+                              Both
+                            </Button>
+                          </Group>
+                        </Group>
+                      </Paper>
+                    )}
+                    <div style={{ flex: 1, minHeight: 190 }}>
+                      <ReadOnlyMonaco
+                        path={conflictVersions.path}
+                        value={conflictDraft}
+                        readOnly={false}
+                        onChange={setConflictDraft}
+                        onSave={() => void resolveSelectedConflict('content')}
+                      />
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+          </Stack>
+        </div>
+      </Modal>
+
+      <Modal
+        opened={Boolean(mergeTarget)}
+        onClose={() => {
+          if (branchAction?.startsWith('merge')) return
+          setMergeTarget(null)
+          setMergePreview(null)
+          setMergeError(null)
+        }}
+        title={`Merge ${mergeTarget
+          ? mergeTarget.kind === 'remote'
+            ? `${mergeTarget.remote}/${mergeTarget.name}`
+            : mergeTarget.name
+          : 'branch'}`}
+        size="md"
+        centered
+        closeOnClickOutside={!branchAction?.startsWith('merge')}
+        closeOnEscape={!branchAction?.startsWith('merge')}
+      >
+        <Stack gap="md">
+          {mergeError && <Alert color="red" icon={<IconAlertCircle size={17} />}>{mergeError}</Alert>}
+          {gitDetails && !gitDetails.status.clean && (
+            <Alert color="orange" icon={<IconAlertCircle size={17} />}>
+              Commit, stash, or discard local changes before merging.
+            </Alert>
+          )}
+          {!mergePreview && !mergeError ? (
+            <Group justify="center" p="lg"><Loader size="sm" /></Group>
+          ) : mergePreview && (
+            <>
+              <Paper p="sm" radius="md" withBorder>
+                <Group justify="space-between" wrap="wrap">
+                  <div>
+                    <Text size="xs" c="dimmed">Merge into</Text>
+                    <Text fw={700}>{mergePreview.currentBranch}</Text>
+                  </div>
+                  <Badge color={mergePreview.outcome === 'already-merged'
+                    ? 'gray'
+                    : mergePreview.outcome === 'fast-forward' ? 'teal' : 'violet'}>
+                    {mergePreview.outcome === 'already-merged'
+                      ? 'Already merged'
+                      : mergePreview.outcome === 'fast-forward'
+                        ? 'Fast-forward'
+                        : 'Merge commit'}
+                  </Badge>
+                </Group>
+                <Group gap="lg" mt="sm">
+                  <Text size="xs"><b>{mergePreview.commitCount}</b> incoming commits</Text>
+                  <Text size="xs"><b>{mergePreview.fileCount}</b> changed files</Text>
+                </Group>
+              </Paper>
+              <Select
+                label="Merge behavior"
+                value={mergeMode}
+                allowDeselect={false}
+                disabled={Boolean(branchAction) || mergePreview.outcome === 'already-merged'}
+                data={[
+                  { value: 'auto', label: 'Fast-forward when possible' },
+                  { value: 'no-ff', label: 'Always create a merge commit' },
+                ]}
+                onChange={(value) => setMergeMode((value as RepositoryMergeMode | null) ?? 'auto')}
+              />
+              {mergePreview.files.length > 0 && (
+                <Paper p="sm" radius="md" withBorder>
+                  <Text size="xs" fw={700} mb={5}>Files affected</Text>
+                  <Stack gap={2}>
+                    {mergePreview.files.slice(0, 8).map((file) => (
+                      <Text key={file} size="xs" c="dimmed" truncate>{file}</Text>
+                    ))}
+                    {mergePreview.fileCount > 8 && (
+                      <Text size="xs" c="dimmed">+ {mergePreview.fileCount - 8} more</Text>
+                    )}
+                  </Stack>
+                </Paper>
+              )}
+            </>
+          )}
+          <Group justify="flex-end">
+            <Button
+              variant="default"
+              disabled={Boolean(branchAction)}
+              onClick={() => {
+                setMergeTarget(null)
+                setMergePreview(null)
+                setMergeError(null)
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              leftSection={<IconGitMerge size={15} />}
+              loading={branchAction?.startsWith('merge:')}
+              disabled={
+                Boolean(branchAction) ||
+                !mergePreview ||
+                mergePreview.outcome === 'already-merged' ||
+                !gitDetails?.status.clean
+              }
+              onClick={() => void executeMerge()}
+            >
+              Merge into {mergePreview?.currentBranch ?? 'current branch'}
+            </Button>
+          </Group>
         </Stack>
       </Modal>
 

@@ -943,8 +943,8 @@ export interface RepositoryGitStatus {
   changedFiles: number
   additions: number
   deletions: number
+  netLines: number
   churn: number
-  binaryFiles: number
   clean: boolean
   error: string | null
 }
@@ -959,9 +959,54 @@ export interface RepositoryChangedFile {
   conflicted: boolean
 }
 
+export type RepositoryOperationKind =
+  | 'none'
+  | 'merge'
+  | 'rebase'
+  | 'cherry-pick'
+  | 'revert'
+  | 'am'
+  | 'bisect'
+
+export interface RepositoryOperationState {
+  kind: RepositoryOperationKind
+  conflictedFiles: string[]
+  canContinue: boolean
+  canSkip: boolean
+  canAbort: boolean
+  currentStep: number | null
+  totalSteps: number | null
+  originalHead: string | null
+}
+
+export type RepositoryConflictResolution = 'current' | 'incoming' | 'both' | 'delete' | 'content'
+
+export interface RepositoryConflictVersions {
+  path: string
+  status: string
+  kind: 'text' | 'binary' | 'symlink' | 'submodule'
+  baseExists: boolean
+  currentExists: boolean
+  incomingExists: boolean
+  base: string | null
+  current: string | null
+  incoming: string | null
+  binary: boolean
+}
+
+export interface RepositoryConflictResolutionInput {
+  path: string
+  file: string
+  resolution: RepositoryConflictResolution
+  content?: string
+}
+
+export type RepositoryOperationAction = 'continue' | 'skip' | 'abort'
+
 export interface RepositoryGitDetails {
   status: RepositoryGitStatus
   files: RepositoryChangedFile[]
+  operation: RepositoryOperationState
 }
 
 export interface RepositoryCommit {
@@ -1112,6 +1157,39 @@ export interface RepositoryBranchState {
   branches: RepositoryBranch[]
 }
 
+export type RepositoryMergeMode = 'auto' | 'no-ff'
+export type RepositoryPullStrategy = 'ff-only' | 'merge' | 'rebase'
+
+export interface RepositoryPullOptions {
+  strategy: RepositoryPullStrategy
+  autoStash: boolean
+}
+
+export type RepositoryRebasePlanAction = 'pick' | 'squash' | 'fixup' | 'drop'
+
+export interface RepositoryRebasePlanItem {
+  action: RepositoryRebasePlanAction
+  hash: string
+  shortHash: string
+  subject: string
+}
+
+export interface RepositoryRebasePreview {
+  currentBranch: string
+  target: RepositoryBranch
+  items: RepositoryRebasePlanItem[]
+  publishedCount: number
+}
+
+export interface RepositoryMergePreview {
+  currentBranch: string
+  target: RepositoryBranch
+  outcome: 'already-merged' | 'fast-forward' | 'merge-commit'
+  commitCount: number
+  fileCount: number
+  files: string[]
+}
+
 export interface RepositoryCheckoutTarget {
   kind: RepositoryBranchKind | 'commit'
   ref: string
@@ -1230,6 +1308,16 @@ export interface DesktopApi {
     electron: string
     chrome: string
     node: string
+  }
+  diagnostics: {
+    reportRendererError: (details: {
+      kind: string
+      message: string
+      stack?: string
+      componentStack?: string
+      url?: string
+    }) => void
+    crashLogPath: () => Promise<string>
   }
   windowControls: {
     minimize: () => Promise<void>
@@ -1398,9 +1486,44 @@ export interface DesktopApi {
     gitUnstage: (path: string, files: string[]) => Promise<RepositoryGitDetails>
     gitCommit: (path: string, message: string) => Promise<RepositoryGitDetails>
     gitFetch: (path: string) => Promise<RepositoryGitDetails>
-    gitPull: (path: string) => Promise<RepositoryGitDetails>
+    gitPull: (path: string, options?: RepositoryPullOptions) => Promise<RepositoryGitDetails>
     gitPush: (path: string) => Promise<RepositoryGitDetails>
     gitBranches: (path: string) => Promise<RepositoryBranchState>
+    gitMergePreview: (path: string, targetRef: string) => Promise<RepositoryMergePreview>
+    gitMerge: (
+      path: string,
+      targetRef: string,
+      mode: RepositoryMergeMode,
+    ) => Promise<RepositoryGitDetails>
+    gitRebase: (
+      path: string,
+      targetRef: string,
+      autoStash: boolean,
+    ) => Promise<RepositoryGitDetails>
+    gitInteractiveRebasePreview: (
+      path: string,
+      targetRef: string,
+    ) => Promise<RepositoryRebasePreview>
+    gitInteractiveRebase: (
+      path: string,
+      targetRef: string,
+      plan: RepositoryRebasePlanItem[],
+      autoStash: boolean,
+    ) => Promise<RepositoryGitDetails>
+    gitConflictVersions: (path: string, file: string) => Promise<RepositoryConflictVersions>
+    gitResolveConflict: (
+      input: RepositoryConflictResolutionInput,
+    ) => Promise<RepositoryGitDetails>
+    gitOperationAction: (
+      path: string,
+      action: RepositoryOperationAction,
+    ) => Promise<RepositoryGitDetails>
+    gitCherryPick: (path: string, commits: string[]) => Promise<RepositoryGitDetails>
+    gitRevert: (
+      path: string,
+      commits: string[],
+      mainline?: number,
+    ) => Promise<RepositoryGitDetails>
     gitCheckout: (
       path: string,
       target: RepositoryCheckoutTarget,

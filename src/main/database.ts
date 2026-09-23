@@ -122,7 +122,8 @@ const createSchema = (db: DatabaseSync): void => {
       id INTEGER PRIMARY KEY CHECK (id = 1),
       vscode_application_name TEXT NOT NULL DEFAULT '',
       automatically_check_for_updates INTEGER NOT NULL DEFAULT 1,
-      automatically_download_updates INTEGER NOT NULL DEFAULT 1
+      automatically_download_updates INTEGER NOT NULL DEFAULT 1,
+      last_repository_directory TEXT
     );
 
     INSERT OR IGNORE INTO app_settings (id, vscode_application_name) VALUES (1, '');
@@ -326,6 +327,12 @@ const createSchema = (db: DatabaseSync): void => {
     db.exec(`
       ALTER TABLE app_settings
         ADD COLUMN automatically_download_updates INTEGER NOT NULL DEFAULT 1;
+    `)
+  }
+  if (!appSettingsColumns.some((column) => column.name === 'last_repository_directory')) {
+    db.exec(`
+      ALTER TABLE app_settings
+        ADD COLUMN last_repository_directory TEXT;
     `)
   }
   const workingCopyColumns = db.prepare('PRAGMA table_info(working_copies)').all() as unknown as
